@@ -1,0 +1,5 @@
+Flask==3.0.0
+portalocker==2.10.0
+Werkzeug==3.0.1
+geoip2>=4.7.0
+maxminddb>=2.3.0

@@ -1,0 +1,17 @@
+[Unit]
+Description=ThreatGate Expired IOC Cleanup
+After=network.target
+
+[Service]
+Type=oneshot
+User=threatgate
+Group=threatgate
+WorkingDirectory=/opt/threatgate
+ExecStart=/opt/threatgate/venv/bin/python /opt/threatgate/cleaner.py
+Environment="PATH=/opt/threatgate/venv/bin:/usr/bin:/bin"
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/threatgate/data
+ProtectHome=true

@@ -1,0 +1,1039 @@
+/* Typography - Cyber War Room Look */
+/* UI Text: Inter (cross-platform, professional) */
+body, input, select, textarea, button, label, .tab-button {
+    font-family: 'Inter', 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+}
+
+/* Data/IOCs: JetBrains Mono (designed for code readability) */
+.font-mono, .badge, .action-button, code, pre, .ioc-value, .ioc-display {
+    font-family: 'JetBrains Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+/* Remove any serif fonts */
+* {
+    font-family: inherit;
+}
+
+/* Badge colors for hash types */
+.badge-md5 {
+    background-color: #800080;
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.badge-sha256 {
+    background-color: #0000FF;
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.badge-hash {
+    background-color: #6c757d;
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+/* Sticky Live Stats Dashboard */
+.stats-sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background-color: var(--bg-primary);
+    padding-bottom: 1rem;
+    margin-bottom: 1rem;
+    border-bottom: 2px solid var(--border-color);
+}
+
+.stats-scrollable-table {
+    max-height: calc(100vh - 300px);
+    overflow-y: auto;
+}
+
+/* IOC Type Icons */
+.ioc-type-icon {
+    display: inline-block;
+    margin-right: 4px;
+    font-size: 1.2em;
+}
+
+/* Country Leaderboard Styles - Compact/High-Density Mode */
+.country-leaderboard {
+    min-height: 150px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.country-leaderboard-row {
+    transition: transform 0.2s ease, opacity 0.2s ease;
+    font-size: 0.875rem; /* text-sm base size */
+}
+
+.country-leaderboard-row:hover {
+    transform: translateX(2px);
+    opacity: 0.9;
+}
+
+.country-bar {
+    position: relative;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.country-bar-fill {
+    box-shadow: 0 0 4px rgba(0, 255, 65, 0.4);
+    position: relative;
+}
+
+.country-bar-fill::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+    animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+}
+
+.country-flag {
+    width: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.country-count {
+    min-width: 40px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+/* High Contrast Cyber Theme - Commander Edition */
+/* CSS Variables - Light Mode Defaults */
+:root {
+    --bg-primary: #f5f5f5;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #ffffff;
+    --text-primary: #1e293b;
+    --text-secondary: #64748b;
+    --border-color: #d1d5db;
+    --accent-green: #00a832;
+    --accent-blue: #0066cc;
+    
+    /* Glassmorphism Variables - Light Mode */
+    --glass-bg: rgba(255, 255, 255, 0.85);
+    --glass-border: 1px solid rgba(0, 0, 0, 0.1);
+    --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    --input-bg: #ffffff;
+    --input-border: rgba(0, 0, 0, 0.1);
+}
+
+/* Dark Mode (Commander Edition) */
+[data-theme="dark"] {
+    --bg-primary: #020617;
+    --bg-secondary: #000000;
+    --bg-tertiary: #1e293b;
+    --text-primary: #FFFFFF;
+    --text-secondary: #94a3b8;
+    --border-color: #00ff41;
+    --accent-green: #00ff41;
+    --accent-blue: #00d4ff;
+    
+    /* Glassmorphism Variables - Dark Mode */
+    --glass-bg: rgba(30, 41, 59, 0.4);
+    --glass-border: 1px solid rgba(255, 255, 255, 0.05);
+    --card-shadow: none;
+    --input-bg: rgba(255, 255, 255, 0.05);
+    --input-border: transparent;
+}
+
+/* Theme-aware styles using CSS variables */
+body {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+/* Glassmorphism Cards - Floating Effect */
+.card, .bg-tertiary, .bg-secondary {
+    background: var(--glass-bg);
+    border: var(--glass-border);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-radius: 12px;
+    box-shadow: var(--card-shadow);
+    transition: all 0.3s ease;
+    color: var(--text-primary);
+}
+
+/* Light mode - High contrast, sharp shadows */
+[data-theme="light"] .card,
+[data-theme="light"] .bg-tertiary,
+[data-theme="light"] .bg-secondary {
+    background: var(--glass-bg);
+    border: var(--glass-border);
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+}
+
+/* Dark mode - Neon glow effect */
+[data-theme="dark"] .card,
+[data-theme="dark"] .bg-tertiary,
+[data-theme="dark"] .bg-secondary {
+    background: var(--glass-bg);
+    border: var(--glass-border);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    box-shadow: var(--card-shadow);
+}
+
+/* Hover effect on interactive cards only (not all bg-tertiary) */
+.card-interactive:hover {
+    transform: translateY(-2px);
+}
+
+[data-theme="light"] .card-interactive:hover {
+    box-shadow: 0 8px 12px -2px rgba(0, 0, 0, 0.15), 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    border-color: rgba(0, 0, 0, 0.15);
+}
+
+[data-theme="dark"] .card-interactive:hover {
+    border-color: rgba(0, 255, 65, 0.3);
+    box-shadow: 0 12px 40px rgba(0, 255, 65, 0.15);
+}
+
+/* Campaign list items - theme-aware hover */
+[data-theme="light"] .campaign-list-item:hover {
+    background: rgba(0, 0, 0, 0.05);
+    border-color: rgba(0, 0, 0, 0.15);
+}
+[data-theme="dark"] .campaign-list-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(0, 255, 65, 0.3);
+}
+
+/* Modern Input Fields - Glassmorphism Style */
+input, select, textarea {
+    background: var(--input-bg);
+    color: var(--text-primary);
+    border: var(--input-border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    transition: all 0.3s ease;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+/* Light mode input - Distinct white background */
+[data-theme="light"] input,
+[data-theme="light"] select,
+[data-theme="light"] textarea {
+    background: #ffffff;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    color: var(--text-primary);
+}
+
+/* Dark mode input - Semi-transparent glass */
+[data-theme="dark"] input,
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+    background: var(--input-bg);
+    border: var(--input-border);
+    color: var(--text-primary);
+}
+
+/* Fix invisible dropdown options in Dark Mode */
+select option {
+    background-color: #1e293b !important;
+    color: #ffffff !important;
+    padding: 0.5rem;
+}
+
+[data-theme="light"] select option {
+    background-color: #ffffff !important;
+    color: #1e293b !important;
+}
+
+[data-theme="dark"] select option {
+    background-color: #1e293b !important;
+    color: #ffffff !important;
+}
+
+/* Ensure options are visible when dropdown opens */
+select:focus option:checked,
+select option:checked {
+    background-color: #00ff41 !important;
+    color: #000000 !important;
+}
+
+[data-theme="light"] select:focus option:checked,
+[data-theme="light"] select option:checked {
+    background-color: #00a832 !important;
+    color: #ffffff !important;
+}
+
+/* Focus state - Neon Green glow ONLY on focus */
+input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent-green);
+    box-shadow: 0 0 0 2px rgba(0, 255, 65, 0.2),
+                0 0 15px rgba(0, 255, 65, 0.3);
+}
+
+[data-theme="light"] input:focus,
+[data-theme="light"] select:focus,
+[data-theme="light"] textarea:focus {
+    background: #ffffff;
+    border-color: var(--accent-green);
+    box-shadow: 0 0 0 2px rgba(0, 168, 50, 0.2),
+                0 0 8px rgba(0, 168, 50, 0.15);
+}
+
+[data-theme="dark"] input:focus,
+[data-theme="dark"] select:focus,
+[data-theme="dark"] textarea:focus {
+    background-color: rgba(255, 255, 255, 0.08);
+    border-color: var(--accent-green);
+    box-shadow: 0 0 0 2px rgba(0, 255, 65, 0.2),
+                0 0 15px rgba(0, 255, 65, 0.3);
+}
+
+/* Pulsing indicator animation */
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.pulse-dot {
+    animation: pulse 2s ease-in-out infinite;
+}
+
+/* Neon Header Glow */
+.neon-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background-color: var(--bg-secondary);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+/* Ensure header background is solid/blurry */
+header.neon-header {
+    background-color: rgba(30, 41, 59, 0.95);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+[data-theme="light"] header.neon-header {
+    background-color: rgba(255, 255, 255, 0.95);
+}
+
+[data-theme="dark"] .neon-header::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, 
+        transparent, 
+        rgba(0, 255, 65, 0.5), 
+        rgba(0, 255, 65, 0.8), 
+        rgba(0, 255, 65, 0.5), 
+        transparent);
+    box-shadow: 0 0 10px rgba(0, 255, 65, 0.5);
+    animation: glow-pulse 2s ease-in-out infinite;
+}
+
+@keyframes glow-pulse {
+    0%, 100% {
+        opacity: 0.6;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+/* Aggressive Brand Typography */
+header h1, .brand-title {
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    font-size: 1.75rem;
+}
+
+[data-theme="dark"] h1,
+[data-theme="dark"] .brand-title {
+    color: #FFFFFF;
+}
+
+/* Section Headers with Neon Accent */
+[data-theme="dark"] h2,
+[data-theme="dark"] h3,
+[data-theme="dark"] h4 {
+    color: #FFFFFF;
+}
+
+[data-theme="light"] .accent-blue {
+    color: var(--accent-blue);
+}
+
+[data-theme="light"] .accent-green {
+    color: var(--accent-green);
+}
+
+[data-theme="dark"] .accent-blue {
+    color: #00d4ff;
+    text-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
+}
+
+[data-theme="dark"] .accent-green {
+    color: #00ff41;
+    text-shadow: 0 0 8px rgba(0, 255, 65, 0.5);
+}
+
+/* Modern Tab Styles - Clean Floating Tabs */
+.tab-button {
+    padding: 14px 24px 16px 24px;
+    border: none !important;
+    background: transparent !important;
+    color: rgba(255, 255, 255, 0.7);
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    font-weight: 500;
+    margin-bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.7;
+}
+
+/* Remove ANY borders from inactive tabs */
+.tab-button,
+.tab-button::before {
+    border: none !important;
+    border-bottom: none !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+}
+
+.tab-button:hover {
+    opacity: 0.9;
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.02) !important;
+}
+
+.tab-button.active {
+    opacity: 1.0 !important;
+    color: #FFFFFF !important;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.05) !important;
+    text-shadow: 0 0 8px rgba(0, 255, 65, 0.5);
+}
+
+/* Ensure span inside tab-button doesn't have borders */
+.tab-button span,
+.tab-button > span {
+    border: none !important;
+    display: inline-block;
+    position: relative;
+    z-index: 1;
+}
+
+/* Prevent any overlapping text or visual artifacts */
+div:has(.tab-button) {
+    position: relative;
+    overflow: visible;
+    z-index: 10;
+}
+
+/* Ensure tooltips don't interfere with tab layout */
+.tab-button.tooltip {
+    position: relative;
+    z-index: 1;
+}
+
+/* Tooltip positioning - ensure proper z-index for visibility */
+.tab-button.tooltip:hover::after {
+    z-index: 9999 !important;
+}
+
+.tab-button.tooltip:hover::before {
+    z-index: 10000 !important;
+}
+
+/* Make absolutely sure no border line appears */
+div.bg-secondary.flex.items-center.backdrop-blur-sm,
+nav.flex.items-center,
+nav:has(.tab-button) {
+    border: none !important;
+    border-bottom: none !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+    box-shadow: none !important;
+    outline: none !important;
+    margin: 0 !important;
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+}
+
+/* Header layout - ensure proper flexbox */
+header.neon-header > div {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    gap: 1rem;
+}
+
+/* Navigation in header - ensure it doesn't wrap awkwardly */
+header nav {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+/* Responsive: if nav is too wide, allow scrolling */
+@media (max-width: 1400px) {
+    header nav {
+        overflow-x: auto;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+    
+    header nav::-webkit-scrollbar {
+        display: none;
+    }
+}
+
+/* Glowing underline ONLY for active tab */
+.tab-button.active::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #00ff41 !important;
+    border: none !important;
+    box-shadow: 0 0 10px rgba(0, 255, 65, 0.8),
+                0 0 20px rgba(0, 255, 65, 0.4);
+    animation: tab-glow 2s ease-in-out infinite;
+}
+
+@keyframes tab-glow {
+    0%, 100% {
+        opacity: 0.8;
+        box-shadow: 0 0 10px rgba(0, 255, 65, 0.8),
+                    0 0 20px rgba(0, 255, 65, 0.4);
+    }
+    50% {
+        opacity: 1;
+        box-shadow: 0 0 15px rgba(0, 255, 65, 1),
+                    0 0 30px rgba(0, 255, 65, 0.6);
+    }
+}
+
+/* Light mode tab styling */
+[data-theme="light"] .tab-button {
+    color: rgba(0, 0, 0, 0.7);
+}
+
+[data-theme="light"] .tab-button:hover {
+    color: rgba(0, 0, 0, 0.9);
+    background: rgba(0, 0, 0, 0.02);
+}
+
+[data-theme="light"] .tab-button.active {
+    /* Light Mode active tab: clean corporate, no neon */
+    color: var(--text-primary) !important;
+    background: rgba(0, 0, 0, 0.05) !important;
+    text-shadow: none !important;
+    box-shadow: none !important;
+    font-weight: 700;
+}
+
+[data-theme="light"] .tab-button.active::after {
+    /* Light Mode underline: solid, readable (no glow) */
+    background: #2563eb !important; /* corporate blue */
+    box-shadow: none !important;
+    opacity: 1 !important;
+}
+
+/* Tab container - ABSOLUTELY NO borders */
+.tab-container,
+.tab-nav,
+nav[role="tablist"],
+nav.flex:has(.tab-button),
+div.bg-secondary.flex:has(.tab-button),
+div.flex:has(.tab-button),
+div[class*="bg-secondary"]:has(.tab-button) {
+    border: none !important;
+    border-bottom: none !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+}
+
+/* Ensure tab container has proper spacing and alignment */
+div:has(.tab-button),
+div.bg-secondary.flex:has(.tab-button) {
+    padding-bottom: 0.25rem;
+    margin-bottom: 0;
+    display: flex;
+    align-items: center;
+    border: none !important;
+    border-bottom: none !important;
+}
+
+/* Force remove any Tailwind border classes - AGGRESSIVE */
+.bg-secondary.flex:has(.tab-button),
+div[class*="border"]:has(.tab-button),
+div.bg-secondary:has(.tab-button),
+div.flex:has(.tab-button),
+nav:has(.tab-button),
+nav.flex:has(.tab-button) {
+    border: none !important;
+    border-bottom: none !important;
+    border-top: none !important;
+    border-left: none !important;
+    border-right: none !important;
+    outline: none !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    padding-top: 0 !important;
+    margin-top: 0 !important;
+}
+
+/* Remove any pseudo-element borders or lines */
+div:has(.tab-button)::before,
+div:has(.tab-button)::after,
+div.bg-secondary.flex::before,
+div.bg-secondary.flex::after {
+    display: none !important;
+    content: none !important;
+}
+
+/* Ensure no border appears on hover or focus */
+div:has(.tab-button):hover,
+div:has(.tab-button):focus,
+div:has(.tab-button):active {
+    border: none !important;
+    border-bottom: none !important;
+}
+
+/* Custom Scrollbar - Modern Thin Style */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    transition: background 0.3s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* Dark mode scrollbar */
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+    background: rgba(0, 255, 65, 0.3);
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 255, 65, 0.5);
+}
+
+/* Light mode scrollbar */
+[data-theme="light"] ::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+}
+
+[data-theme="light"] ::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+/* Firefox scrollbar */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+[data-theme="dark"] * {
+    scrollbar-color: rgba(0, 255, 65, 0.3) transparent;
+}
+
+[data-theme="light"] * {
+    scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+/* Commander Mode Button System - Standardized Geometry */
+.btn-cmd-primary,
+.btn-cmd-danger,
+.btn-cmd-neutral {
+    padding: 0.5rem 1rem; /* px-4 py-2 */
+    font-weight: 700; /* font-bold */
+    text-transform: uppercase;
+    letter-spacing: 0.05em; /* tracking-wider */
+    font-size: 0.75rem; /* text-xs */
+    border-radius: 0.375rem; /* rounded */
+    cursor: pointer;
+    transition: all 0.3s ease;
+    border: none;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); /* shadow-md */
+}
+
+/* Primary Button - Blue to Cyan Gradient (Positive Actions) */
+.btn-cmd-primary {
+    background: linear-gradient(135deg, #2563eb 0%, #06b6d4 100%);
+    color: #ffffff;
+}
+
+.btn-cmd-primary:hover {
+    background: linear-gradient(135deg, #3b82f6 0%, #22d3ee 100%);
+}
+
+[data-theme="dark"] .btn-cmd-primary {
+    background: linear-gradient(135deg, #2563eb 0%, #06b6d4 100%);
+    box-shadow: 0 4px 15px rgba(37, 99, 235, 0.4),
+                0 0 20px rgba(6, 182, 212, 0.3);
+}
+
+[data-theme="dark"] .btn-cmd-primary:hover {
+    background: linear-gradient(135deg, #3b82f6 0%, #22d3ee 100%);
+    box-shadow: 0 6px 20px rgba(37, 99, 235, 0.5),
+                0 0 25px rgba(6, 182, 212, 0.4);
+}
+
+/* Danger Button - Red to Orange Gradient (Delete/Remove Actions) */
+.btn-cmd-danger {
+    background: linear-gradient(135deg, #dc2626 0%, #ea580c 100%);
+    color: #ffffff;
+}
+
+.btn-cmd-danger:hover {
+    background: linear-gradient(135deg, #ef4444 0%, #f97316 100%);
+}
+
+[data-theme="dark"] .btn-cmd-danger {
+    background: linear-gradient(135deg, #dc2626 0%, #ea580c 100%);
+    box-shadow: 0 4px 15px rgba(220, 38, 38, 0.4),
+                0 0 20px rgba(234, 88, 12, 0.3);
+}
+
+[data-theme="dark"] .btn-cmd-danger:hover {
+    background: linear-gradient(135deg, #ef4444 0%, #f97316 100%);
+    box-shadow: 0 6px 20px rgba(220, 38, 38, 0.5),
+                0 0 25px rgba(234, 88, 12, 0.4);
+}
+
+/* Neutral Button - Transparent Border (Cancel/Clear) */
+.btn-cmd-neutral {
+    background-color: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2); /* border border-white/20 */
+    color: var(--text-secondary);
+}
+
+.btn-cmd-neutral:hover {
+    background-color: rgba(255, 255, 255, 0.05); /* hover:bg-white/5 */
+}
+
+[data-theme="light"] .btn-cmd-neutral {
+    border-color: rgba(0, 0, 0, 0.2);
+    color: var(--text-secondary);
+}
+
+[data-theme="light"] .btn-cmd-neutral:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+/* Compact button variant for table rows */
+.btn-cmd-sm {
+    padding: 0.25rem 0.625rem !important; /* py-1 px-2.5 */
+    font-size: 0.6875rem !important; /* ~11px */
+    letter-spacing: 0.04em;
+    line-height: 1.25;
+}
+
+/* Glassmorphism Sidebar */
+.sidebar-glass {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    background: var(--glass-bg);
+    border-left: var(--glass-border);
+}
+
+[data-theme="light"] .sidebar-glass {
+    background: var(--glass-bg);
+    border-left: var(--glass-border);
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="dark"] .sidebar-glass {
+    background: var(--glass-bg);
+    border-left: var(--glass-border);
+}
+
+/* Remove heavy borders from form elements */
+.form-group, .form-input, .form-select, .form-textarea {
+    border: none !important;
+}
+
+/* Table borders - subtle */
+table {
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+table th, table td {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+[data-theme="light"] table th,
+[data-theme="light"] table td {
+    border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Table row hover states */
+tbody tr {
+    transition: background-color 0.15s ease;
+}
+tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.05);
+}
+[data-theme="light"] tbody tr:hover {
+    background-color: rgba(0, 0, 0, 0.03);
+}
+
+/* Bulk Upload Info Card - Light Mode Fix */
+[data-theme="light"] #bulkUploadInfoCard {
+    background: rgba(37, 99, 235, 0.08);
+    border-color: rgba(37, 99, 235, 0.25);
+    color: #1e40af;
+}
+[data-theme="light"] #bulkUploadInfoCard h4 {
+    color: #1e3a8a;
+}
+[data-theme="light"] #bulkUploadInfoCard p {
+    color: #1e40af;
+}
+[data-theme="light"] #bulkUploadInfoCard code {
+    color: #1d4ed8;
+    background: rgba(37, 99, 235, 0.1);
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+/* Toast Notifications - Glassmorphism */
+.toast {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 14px 20px 14px 16px;
+    border-radius: 12px;
+    z-index: 1000;
+    animation: toastSlideIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    font-size: 0.875rem;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    max-width: 420px;
+}
+.toast.removing {
+    animation: toastSlideOut 0.3s ease forwards;
+}
+@keyframes toastSlideIn {
+    from { transform: translateX(120%); opacity: 0; }
+    to   { transform: translateX(0);    opacity: 1; }
+}
+@keyframes toastSlideOut {
+    from { transform: translateX(0);    opacity: 1; }
+    to   { transform: translateX(120%); opacity: 0; }
+}
+.toast.success {
+    background: rgba(0, 180, 60, 0.85);
+    color: #fff;
+    border-color: rgba(0, 255, 65, 0.3);
+}
+.toast.error {
+    background: rgba(220, 38, 38, 0.85);
+    color: #fff;
+    border-color: rgba(255, 68, 68, 0.3);
+}
+.toast.warning {
+    background: rgba(200, 140, 0, 0.85);
+    color: #fff;
+    border-color: rgba(255, 170, 0, 0.3);
+}
+.toast-icon {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+}
+.toast-progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    border-radius: 0 0 12px 12px;
+    background: rgba(255, 255, 255, 0.4);
+    animation: toastProgress 3s linear forwards;
+}
+@keyframes toastProgress {
+    from { width: 100%; }
+    to   { width: 0%; }
+}
+
+/* Neon Text Effect */
+.neon-text {
+    color: #FFFFFF;
+    text-shadow:
+        0 0 5px rgba(0, 255, 65, 0.5),
+        0 0 10px rgba(0, 255, 65, 0.5),
+        0 0 15px rgba(0, 255, 65, 0.8),
+        0 0 20px rgba(0, 255, 65, 0.6);
+}
+.neon-badge {
+    text-shadow:
+        0 0 5px rgba(0, 255, 65, 0.8),
+        0 0 10px rgba(0, 255, 65, 0.6);
+    box-shadow:
+        0 0 5px rgba(0, 255, 65, 0.3),
+        0 0 10px rgba(0, 255, 65, 0.2),
+        inset 0 0 5px rgba(0, 255, 65, 0.1);
+}
+.glow-green { text-shadow: 0 0 10px var(--accent-green); }
+.glow-blue  { text-shadow: 0 0 10px var(--accent-blue); }
+
+/* Header Neon Glow */
+header {
+    border-bottom: 2px solid var(--border-color);
+    box-shadow: 0 2px 10px rgba(0, 255, 65, 0.15);
+}
+[data-theme="dark"] header {
+    box-shadow: 0 2px 15px rgba(0, 255, 65, 0.25);
+}
+
+/* Badges */
+.badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+.badge-permanent { background-color: #ff4444; color: #fff; }
+.badge-expires   { background-color: #ffaa00; color: #000; }
+.badge-expired   { background-color: #00ff41; color: #000; }
+
+/* Drag & Drop Zone */
+.drag-drop-zone {
+    border: 2px dashed var(--border-color);
+    transition: all 0.3s ease;
+}
+.drag-drop-zone.dragover {
+    border-color: var(--accent-green);
+    background-color: rgba(0, 255, 65, 0.1);
+}
+
+/* Skeleton Loading */
+.skeleton {
+    background: linear-gradient(90deg,
+        rgba(255, 255, 255, 0.06) 25%,
+        rgba(255, 255, 255, 0.12) 50%,
+        rgba(255, 255, 255, 0.06) 75%);
+    background-size: 200% 100%;
+    animation: skeletonShimmer 1.5s ease-in-out infinite;
+    border-radius: 6px;
+}
+[data-theme="light"] .skeleton {
+    background: linear-gradient(90deg,
+        rgba(0, 0, 0, 0.06) 25%,
+        rgba(0, 0, 0, 0.10) 50%,
+        rgba(0, 0, 0, 0.06) 75%);
+    background-size: 200% 100%;
+}
+@keyframes skeletonShimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+.skeleton-line {
+    height: 14px;
+    margin-bottom: 8px;
+    width: 100%;
+}
+.skeleton-line:last-child { width: 60%; }
+.skeleton-circle {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+}
+.skeleton-card {
+    height: 80px;
+    width: 100%;
+}
+
+/* Focus-visible for keyboard navigation */
+.btn-cmd-primary:focus-visible,
+.btn-cmd-danger:focus-visible,
+.btn-cmd-neutral:focus-visible,
+.btn-action:focus-visible,
+button:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.5);
+}
+[data-theme="light"] .btn-cmd-primary:focus-visible,
+[data-theme="light"] .btn-cmd-danger:focus-visible,
+[data-theme="light"] .btn-cmd-neutral:focus-visible,
+[data-theme="light"] button:focus-visible {
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.4);
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+    .country-bar-fill::after { animation: none; }
+    .pulse-dot { animation: none; }
+}

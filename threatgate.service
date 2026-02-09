@@ -1,0 +1,22 @@
+[Unit]
+Description=ThreatGate IOC Manager
+After=network.target
+
+[Service]
+Type=simple
+User=threatgate
+Group=threatgate
+WorkingDirectory=/opt/threatgate
+ExecStart=/opt/threatgate/venv/bin/gunicorn --workers 3 --bind 0.0.0.0:8000 --access-logfile - --error-logfile - app:app
+Restart=always
+RestartSec=5
+Environment="PATH=/opt/threatgate/venv/bin:/usr/bin:/bin"
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/threatgate/data
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

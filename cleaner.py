@@ -1,118 +1,67 @@
 #!/usr/bin/env python3
 """
-TTL Cleaner Script for ThreatGate IOC Submission Portal
-Removes expired IOCs from text files based on EXP: date tags.
-Run this script via cron to clean expired entries nightly.
+ThreatGate – Expired IOC Cleanup Script
+========================================
+Deletes IOC rows whose expiration_date has passed from the SQLite database,
+then runs VACUUM to reclaim disk space.
+
+Designed to be triggered by systemd timer (threatgate-cleaner.timer).
+All output goes to stdout/stderr so systemd captures it in the journal.
 """
 
 import os
-import re
+import sqlite3
 from datetime import datetime
-import portalocker
-
-# Directory path
-DATA_MAIN = os.path.join(os.path.dirname(__file__), 'data', 'Main')
-
-# Pattern to extract expiration date from line
-EXP_PATTERN = re.compile(r'EXP:(\d{4}-\d{2}-\d{2}|NEVER)')
 
 
-def parse_expiration_date(exp_str):
-    """Parse expiration date string to datetime object or None for NEVER."""
-    if exp_str == 'NEVER':
-        return None
+def get_db_path():
+    """Resolve the path to threatgate.db relative to this script's location."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, "data", "threatgate.db")
+
+
+def clean_expired_iocs(db_path):
+    """
+    Delete IOC rows where expiration_date is non-NULL and in the past.
+    Returns the number of rows removed.
+    """
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    conn = sqlite3.connect(db_path)
     try:
-        return datetime.strptime(exp_str, '%Y-%m-%d')
-    except ValueError:
-        return None
+        cursor = conn.execute(
+            "DELETE FROM iocs WHERE expiration_date IS NOT NULL AND expiration_date < ?",
+            (now,),
+        )
+        deleted = cursor.rowcount
+        conn.commit()
 
-
-def clean_file(filepath):
-    """Remove expired lines from a single file."""
-    if not os.path.exists(filepath):
-        return 0
-    
-    deleted_count = 0
-    today = datetime.now()
-    valid_lines = []
-    
-    try:
-        # Read all lines
-        with open(filepath, 'r', encoding='utf-8') as f:
-            portalocker.lock(f, portalocker.LOCK_EX)
-            lines = f.readlines()
-            portalocker.unlock(f)
-        
-        # Process each line
-        for line in lines:
-            line = line.rstrip('\n\r')
-            if not line.strip():
-                valid_lines.append(line + '\n')
-                continue
-            
-            # Extract expiration date
-            match = EXP_PATTERN.search(line)
-            if match:
-                exp_str = match.group(1)
-                exp_date = parse_expiration_date(exp_str)
-                
-                # Keep if NEVER or expiration date is in the future
-                if exp_date is None:  # NEVER
-                    valid_lines.append(line + '\n')
-                elif exp_date >= today:
-                    valid_lines.append(line + '\n')
-                else:
-                    # Expired - skip this line
-                    deleted_count += 1
-            else:
-                # No EXP tag found - keep the line (might be legacy format)
-                valid_lines.append(line + '\n')
-        
-        # Write back only valid lines
-        if deleted_count > 0:
-            with open(filepath, 'w', encoding='utf-8') as f:
-                portalocker.lock(f, portalocker.LOCK_EX)
-                f.writelines(valid_lines)
-                portalocker.unlock(f)
-        
-        return deleted_count
-        
-    except Exception as e:
-        print(f"Error processing {filepath}: {e}")
-        return 0
+        # Reclaim disk space
+        conn.execute("VACUUM")
+        return deleted
+    finally:
+        conn.close()
 
 
 def main():
-    """Main cleaning function."""
-    if not os.path.exists(DATA_MAIN):
-        print(f"Error: Data directory not found: {DATA_MAIN}")
+    db_path = get_db_path()
+
+    print(f"[cleaner] Starting cleanup at {datetime.now().isoformat()}")
+    print(f"[cleaner] Database: {db_path}")
+
+    if not os.path.exists(db_path):
+        print(f"[cleaner] ERROR: Database not found at {db_path}")
         return
-    
-    # List of IOC files to clean
-    ioc_files = ['ip.txt', 'domain.txt', 'hash.txt', 'email.txt', 'url.txt']
-    
-    total_deleted = 0
-    file_stats = {}
-    
-    print(f"Starting TTL cleanup at {datetime.now().isoformat()}")
-    print(f"Processing files in: {DATA_MAIN}")
-    print("-" * 60)
-    
-    for filename in ioc_files:
-        filepath = os.path.join(DATA_MAIN, filename)
-        deleted = clean_file(filepath)
-        file_stats[filename] = deleted
-        total_deleted += deleted
-        
-        if deleted > 0:
-            print(f"{filename}: Removed {deleted} expired entry/entries")
-        else:
-            print(f"{filename}: No expired entries found")
-    
-    print("-" * 60)
-    print(f"Cleanup complete. Total entries removed: {total_deleted}")
-    print(f"Finished at {datetime.now().isoformat()}")
+
+    deleted = clean_expired_iocs(db_path)
+
+    if deleted:
+        print(f"[cleaner] Removed {deleted} expired IOC(s).")
+    else:
+        print("[cleaner] No expired IOCs found. Nothing to do.")
+
+    print(f"[cleaner] Finished at {datetime.now().isoformat()}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

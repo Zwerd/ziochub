@@ -1,1108 +1,268 @@
-# ThreatGate v4.0 — Commander Edition
+# ThreatGate v5.0
 
-ThreatGate is a **modern IOC & YARA Management Platform** built for SOC operations with SQLite backend. Analysts submit indicators, ThreatGate stores them in a database, and security devices ingest **plain-text feeds** (IOC-only) for enforcement.
-
-This release is the **v4.0 Commander Edition**: a modern **cyber-glass** workstation with a clean separation between **Threat Intelligence** and **Analyst Performance**.
+ThreatGate is a **modern IOC & YARA Management Platform** built for SOC operations. Analysts submit indicators, ThreatGate stores them in a SQLite database, and security devices ingest **plain-text feeds** for enforcement. Designed for **air-gapped / offline** environments.
 
 ---
 
 ## Features
 
-- **Modern Glass UI (Glassmorphism)**: translucent cards, subtle blur, neon accents
-- **Light/Dark Mode**: Dark mode with neon commander styling, Light mode with clean corporate styling
-- **SQLite Backend**: Fast, reliable database storage with automatic migration from legacy file-based system
-- **Campaign Management**: Visual graph representation of campaigns and their associated IOCs
-- **YARA Rule Management**: Upload, view, edit, and manage YARA rules
-- **Multi-language Support**: English and Hebrew (עברית)
-- **Feed Generation**: Multiple feed formats for different firewall vendors (Palo Alto, Checkpoint, Standard)
-- **RESTful API**: Full API support for automated IOC management
+- **Authentication & User Management**: Local accounts, optional LDAP/AD integration, admin roles
+- **MISP Integration**: Automatic IOC pull from a local MISP instance with configurable intervals
+- **Champs Analysis 5.0**: Analyst leaderboard, streak scoring, team goals, rank tracking, spotlight
+- **Feed Pulse**: Real-time incoming/outgoing IOC monitoring with anomaly detection and exclusions
+- **Campaign Management**: Visual graph (vis.js) of campaigns and associated IOCs
+- **YARA Rule Management**: Upload, approval workflow, quality scoring, campaign linking
+- **Multi-vendor Feeds**: Standard, Palo Alto (EDL), Checkpoint (CSV) feed formats
+- **SSL/TLS & HTTPS**: Certificate upload via Admin UI, automatic HTTP-to-HTTPS redirect
+- **IOC History**: Full lifecycle tracking per IOC (created, edited, deleted, expired, excluded)
+- **Allowlist / Safety Net**: Prevent blocking of critical infrastructure
+- **Sanity Checks**: Automatic anomaly detection (local IPs, short domains, critical infra)
+- **GeoIP Intelligence**: Country, TLD, and email domain analytics from active IOCs
+- **Multi-language**: English and Hebrew (i18n)
+- **100% Offline**: No external network calls. All assets served locally
 
 ---
 
 ## Table of Contents
 
 - [Installation](#installation)
-  - [Option 1: Online Installation (Linux with Internet)](#option-1-online-installation-linux-with-internet)
-  - [Option 2: Offline Installation (Linux Air-Gapped)](#option-2-offline-installation-linux-air-gapped)
+- [Ports & Network](#ports--network)
+- [Systemd Services](#systemd-services)
 - [UI Screens Overview](#ui-screens-overview)
 - [Feed Endpoints](#feed-endpoints)
 - [API Endpoints](#api-endpoints)
+- [MISP Integration](#misp-integration)
 - [Data Model](#data-model)
 - [Configuration](#configuration)
 - [Maintenance](#maintenance)
-- [Security Considerations](#security-considerations)
-- [Migration from Legacy File-Based System](#migration-from-legacy-file-based-system)
-- [Offline / Air-Gapped Deployment](#offline--air-gapped-deployment)
+- [Admin Scripts](#admin-scripts)
+- [Security](#security)
+- [Project Architecture](#project-architecture)
+- [Offline Deployment](#offline-deployment)
 - [Troubleshooting](#troubleshooting)
-- [What's New in v4.0](#whats-new-in-v40)
-- [Version](#version)
 
 ---
 
 ## Installation
 
-ThreatGate supports **two installation methods** for Linux production environments:
-
-1. **Online Installation** - When the Linux server has internet connectivity
-2. **Offline Installation** - For air-gapped environments using a pre-packaged ZIP file
-
-Both methods use the same installation script (`setup.sh`) but with different modes.
-
----
-
-### Option 1: Online Installation (Linux with Internet)
-
-This method requires internet connectivity to download Python packages from PyPI.
-
-#### Prerequisites
-
-- Linux server with internet connectivity
-- Python 3.8+ installed
-- Root/sudo access
-- Git (optional, if cloning from repository)
-
-#### Installation Steps
-
-1. **Clone or copy the ThreatGate repository to the server:**
-   ```bash
-   git clone <repository-url>
-   cd ThreatGate
-   ```
-   
-   Or copy the ThreatGate directory to the server via SCP/SFTP.
-
-2. **Run the installation script:**
-   ```bash
-   sudo ./setup.sh
-   ```
-
-3. **The script will:**
-   - Create system user `threatgate`
-   - Set up directory structure at `/opt/threatgate`
-   - Copy application files
-   - Create Python virtual environment
-   - Install dependencies from PyPI (online)
-   - Install and start systemd services
-   - Enable automatic startup
-
-4. **Verify installation:**
-   ```bash
-   systemctl status threatgate
-   ```
-
-5. **Access the web UI:**
-   ```
-   http://<server-ip>:8000
-   ```
-
-#### Post-Installation
-
-- **View logs:** `journalctl -u threatgate -f`
-- **Restart service:** `sudo systemctl restart threatgate`
-- **Check cleaner timer:** `systemctl status threatgate-cleaner.timer`
-
----
-
-### Option 2: Offline Installation (Linux Air-Gapped)
-
-This method is for servers without internet connectivity. You need to prepare an offline package on a machine with internet access, then transfer it to the target server.
-
-#### Step 1: Prepare Offline Package (On Machine with Internet)
-
-1. **Clone or download ThreatGate repository:**
-   ```bash
-   git clone <repository-url>
-   cd ThreatGate
-   ```
-
-2. **Run the offline package builder:**
-   ```bash
-   ./package_offline.sh
-   ```
-
-3. **This script will:**
-   - Download all Python package wheels (dependencies)
-   - Copy all application files
-   - Create `threatgate_installer.zip` in the project root
-
-4. **Transfer the ZIP file to the target server:**
-   ```bash
-   # Using SCP
-   scp threatgate_installer.zip user@target-server:/tmp/
-   
-   # Or using USB drive, network share, etc.
-   ```
-
-#### Step 2: Install on Target Server (Air-Gapped)
-
-1. **Extract the ZIP file:**
-   ```bash
-   cd /tmp
-   unzip threatgate_installer.zip -d threatgate_install
-   cd threatgate_install
-   ```
-
-2. **Run the installation script in offline mode:**
-   ```bash
-   sudo ./setup.sh --offline
-   ```
-
-3. **The script will:**
-   - Create system user `threatgate`
-   - Set up directory structure at `/opt/threatgate`
-   - Copy application files
-   - Create Python virtual environment
-   - Install dependencies from local wheels (offline)
-   - Install and start systemd services
-   - Enable automatic startup
-
-4. **Verify installation:**
-   ```bash
-   systemctl status threatgate
-   ```
-
-5. **Access the web UI:**
-   ```
-   http://<server-ip>:8000
-   ```
-
-#### Important Notes for Offline Installation
-
-- The `packages/` directory must be present in the extracted ZIP (contains Python wheels)
-- Ensure all required system packages are installed on the target server (Python 3.8+, SQLite3)
-- The offline package includes all dependencies, so no internet connection is needed
-
----
-
-### Local Development Installation
-
-For development purposes on your local machine:
+### Option 1: Online (Linux with Internet)
 
 ```bash
-# Clone repository
-git clone <repository-url>
-cd ThreatGate
+# Copy project to server
+scp -r ThreatGate/ user@server:/tmp/
 
-# Create virtual environment
+# Install
+cd /tmp/ThreatGate
+sudo ./setup.sh
+```
+
+### Option 2: Offline (Air-Gapped)
+
+```bash
+# On dev machine (with internet):
+./package_offline.sh
+# Transfer threatgate_installer.zip to server
+
+# On target server:
+unzip threatgate_installer.zip -d threatgate_install
+cd threatgate_install
+sudo ./setup.sh --offline
+```
+
+### Option 3: Upgrade Existing
+
+```bash
+sudo ./setup.sh --upgrade
+# or
+sudo ./setup.sh --upgrade --offline
+```
+
+### Local Development
+
+```bash
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+source venv/bin/activate
 pip install -r requirements.txt
-
-# Run application
 python app.py
+# Open http://127.0.0.1:5000
 ```
 
-Open `http://127.0.0.1:5000` in your browser.
+Default credentials: `admin` / `admin`
 
 ---
 
-### Windows Installation
+## Ports & Network
 
-For Windows servers, use Waitress:
+| Port | Protocol | Service | Description |
+|------|----------|---------|-------------|
+| **8443** | HTTPS | ThreatGate | Main application (gunicorn + SSL) |
+| **8080** | HTTP | Redirect | 301 redirect to HTTPS on 8443 |
+| **5000** | HTTP | Dev only | Flask development server (`python app.py`) |
+
+- If SSL certificates are configured (Admin > Certificate), port 8443 serves HTTPS automatically
+- If no certificates exist, port 8443 serves plain HTTP
+- The HTTP redirect server on port 8080 runs alongside the main service
+
+---
+
+## Systemd Services
+
+| Unit | Type | Description |
+|------|------|-------------|
+| `threatgate.service` | Main | Gunicorn application server (port 8443) |
+| `threatgate-redirect.service` | Main | HTTP-to-HTTPS redirect (port 8080) |
+| `threatgate-cleaner.timer` | Timer | Expired IOC cleanup (daily) |
+| `threatgate-backup.timer` | Timer | Database + SSL + YARA backup (daily) |
+| `threatgate-misp-sync.timer` | Timer | MISP IOC pull (interval set by admin) |
 
 ```bash
-# Install Waitress
-pip install waitress
-
-# Run application
-waitress-serve --host=0.0.0.0 --port=5000 app:app
+# Common commands
+sudo systemctl status threatgate
+sudo systemctl restart threatgate
+sudo journalctl -u threatgate -f
 ```
-
-**Note:** Production deployment on Windows is not officially supported. Linux with systemd is recommended.
 
 ---
 
 ## UI Screens Overview
 
-### 1. Live Stats (Threat Intelligence Dashboard)
+### Live Stats
+Real-time dashboard with IOC counts, Top Countries / TLDs / Email Domains leaderboards, and live IOC feed.
 
-![Live Stats — 3-Column Intelligence View](docs/images/live_stats_intel_3col.png)
+### Search & Investigate
+Full-text search across IOCs with filters (value, type, ticket, user, date, expiration status). Edit, delete, view history.
 
-> **Screenshot Placeholder:** Capture the **Live Stats** tab showing:
-> - Sticky summary cards (Active IPs / Domains / Hashes / Emails / URLs)
-> - **3-column intelligence view**:
->   - **Top Countries** leaderboard (flag + country code + progress bars)
->   - **Top TLDs** leaderboard (globe + `.tld` labels + progress bars)
->   - **Top Email Domains** leaderboard (envelope + `domain.tld` labels + progress bars)
-> - "Live Updating…" indicator (when active)
-> - Recent IOCs feed sidebar
+### Submit IOC
+Single IOC submission with auto-type detection, input cleaning (refanger), TTL, campaign assignment, allowlist validation.
 
-**Functionality:**
-- Real-time statistics for all IOC types
-- Top 10 countries by IP count (with flag icons)
-- Top 10 TLDs by domain count
-- Top 10 email domains
-- Live feed of last 50 IOCs
-- Auto-refresh every 10 seconds
+### Bulk Upload
+CSV and TXT file import with preview/staging, auto-detection, metadata extraction, and conflict handling.
 
----
+### Feed Pulse
+Real-time feed health monitoring: incoming IOCs, outgoing (expired), deleted, sanity anomalies with exclude/un-exclude.
 
-### 2. Search & Investigate
+### YARA Manager
+Upload, preview, edit, approve/reject YARA rules. Quality scoring, campaign linking, syntax highlighting.
 
-![Search & Investigate](docs/images/search_investigate.png)
+### Champs Analysis
+Analyst leaderboard with weighted scoring, streak bonuses, rank trends, team goals, activity spotlight, news ticker.
 
-> **Screenshot Placeholder:** Capture the **Search & Investigate** tab showing:
-> - Search field + filter dropdown (`All`, `IOC Value`, `Ticket ID`, `User`, `Date`)
-> - Results table with Expiration badges + Actions (Edit/Delete)
-> - Search results with country flags for IPs
+### Campaign Graph
+Interactive vis.js graph of campaigns linked to IOCs and YARA rules. Create, link, export to CSV.
 
-**Functionality:**
-- Search across all IOC types and metadata
-- Filter by: IOC Value, Ticket ID, User, Date, or All fields
-- View expiration status (Active/Expired/Permanent)
-- Edit IOC metadata (comment, expiration, ticket ID, campaign)
-- Delete/Revoke IOCs
-- View country information for IP addresses
+### Hunter's Playbook
+Customizable quick-links panel for external investigation tools.
 
----
-
-### 3. Single Submission
-
-![Single Submission](docs/images/single_submission.png)
-
-> **Screenshot Placeholder:** Capture the **Single Submission** tab showing:
-> - IOC Value, Type dropdown, Comment, Analyst, Ticket ID, TTL selector
-> - Campaign assignment dropdown
-> - A success toast notification
-
-**Functionality:**
-- Submit individual IOCs (IP, Domain, Hash, Email, URL)
-- Auto-detection of IOC type
-- Input cleaning (refanger) for obfuscated IOCs
-- TTL selection (1 Week, 1 Month, 3 Months, 1 Year, Permanent)
-- Campaign assignment
-- Allowlist validation (prevents blocking critical assets)
-- Duplicate detection
-
----
-
-### 4. Bulk Upload
-
-![Bulk Upload](docs/images/bulk_upload.png)
-
-> **Screenshot Placeholder:** Capture the **Bulk Upload** tab showing:
-> - CSV/TXT mode toggle
-> - File upload area
-> - Preview table with staging functionality
-> - Bulk submission options
-
-**Functionality:**
-
-**CSV Mode:**
-- Upload CSV files with IOC data
-- Auto-detect IOCs in any column
-- Extract ticket IDs from columns (ReportID, Ticket_ID, Ref, Reference)
-- Preview before submission
-- Bulk import with conflict handling
-
-**TXT Mode:**
-- Upload text files with IOC entries
-- Parse metadata from comments (Date, User, Ref, Comment, EXP)
-- Smart metadata extraction
-- Preview with existing IOC detection
-
----
-
-### 5. YARA Manager
-
-![YARA Manager](docs/images/yara_manager.png)
-
-> **Screenshot Placeholder:** Capture the **YARA Manager** tab showing:
-> - YARA rules list with metadata
-> - Upload form
-> - Rule preview modal
-> - Edit/Delete actions
-
-**Functionality:**
-- Upload `.yar` files
-- View all YARA rules with metadata
-- Preview rule content
-- Edit rule metadata (ticket ID, comment, campaign)
-- Delete rules
-- YARA syntax validation
-- Campaign assignment
-
----
-
-### 6. Champs Analysis (Team Performance)
-
-![Champs Analysis — Team Performance](docs/images/champs_analysis_team_performance.png)
-
-> **Screenshot Placeholder:** Capture the **Champs Analysis** tab showing:
-> - **Threat Velocity** (line chart showing IOCs per day)
-> - **Analyst Activity** (pie/doughnut chart)
-> - Analyst leaderboard with 🥇🥈🥉 for top 3
-> - Historical IOCs table
-
-**Functionality:**
-- Threat velocity chart (IOCs submitted per day)
-- Analyst activity distribution (pie chart)
-- Analyst leaderboard with weighted scores
-- YARA uploads count as 5x points
-- Historical IOC statistics
-
----
-
-### 7. Campaign Graph
-
-![Campaign Graph](docs/images/campaign_graph.png)
-
-> **Screenshot Placeholder:** Capture the **Campaign Graph** tab showing:
-> - Left sidebar: Active Campaigns list
-> - Center: Visual graph with campaign node and IOC columns
-> - Right sidebar: Create Campaign form, Link IOC form, Export button
-> - Graph showing campaign connected to IOCs organized by type
-
-**Functionality:**
-- Visual representation of campaigns and their IOCs
-- Create new campaigns
-- Link IOCs to campaigns
-- Export campaign data to CSV
-- Interactive graph visualization (zoom, pan, drag)
-- Color-coded IOC types (IP, Domain, URL, Email, Hash, YARA)
-- Country flags for IP addresses
+### Admin Panel
+- **Users**: Create, edit, deactivate users. Avatar management. System users marked separately
+- **Settings**: Auth mode (local/LDAP), MISP integration configuration
+- **Certificate**: SSL/TLS certificate upload for HTTPS
+- **Champs Config**: Scoring method, team goals, ticker messages
 
 ---
 
 ## Feed Endpoints
 
-ThreatGate provides multiple feed formats for different security devices and firewall vendors.
-
 ### Standard Feeds
 
-Plain text feeds with one IOC per line:
+| Endpoint | Content |
+|----------|---------|
+| `/feed/ip` | IP addresses |
+| `/feed/domain` | Domains |
+| `/feed/url` | URLs (with protocol) |
+| `/feed/hash` | All hashes |
+| `/feed/md5` | MD5 only |
+| `/feed/sha1` | SHA1 only |
+| `/feed/sha256` | SHA256 only |
 
-| Endpoint | Description | Example Output |
-|----------|-------------|----------------|
-| `/feed/ip` | IP addresses | `192.168.1.1`<br>`10.0.0.1` |
-| `/feed/domain` | Domains | `malicious.com`<br>`evil.tld` |
-| `/feed/url` | URLs (with protocol) | `https://bad.com/path`<br>`http://evil.com/api` |
-| `/feed/hash` | All hash types (MD5, SHA1, SHA256) | `abc123...`<br>`def456...` |
-| `/feed/md5` | MD5 hashes only (32 chars) | `5d41402abc4b2a76b9719d911017c592` |
-| `/feed/sha1` | SHA1 hashes only (40 chars) | `aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d` |
-| `/feed/sha256` | SHA256 hashes only (64 chars) | `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` |
+### Palo Alto (EDL)
 
-**Content-Type:** `text/plain`
+| Endpoint | Note |
+|----------|------|
+| `/feed/pa/ip` | Standard |
+| `/feed/pa/domain` | Standard |
+| `/feed/pa/url` | **URLs without protocol** |
+| `/feed/pa/md5`, `/sha1`, `/sha256` | Standard |
 
-**Example:**
-```bash
-curl https://threatgate.example.com/feed/ip
-```
+### Checkpoint (CSV)
 
----
-
-### Palo Alto Feeds
-
-Palo Alto firewalls require URLs without protocol prefix:
-
-| Endpoint | Description | Format |
-|----------|-------------|--------|
-| `/feed/pa/ip` | IP addresses | Standard format |
-| `/feed/pa/domain` | Domains | Standard format |
-| `/feed/pa/url` | URLs **without** http/https | `bad.com/path`<br>`evil.com/api` |
-| `/feed/pa/md5` | MD5 hashes | Standard format |
-| `/feed/pa/sha1` | SHA1 hashes | Standard format |
-| `/feed/pa/sha256` | SHA256 hashes | Standard format |
-
-**Example:**
-```bash
-# URL feed for Palo Alto (protocol stripped)
-curl https://threatgate.example.com/feed/pa/url
-# Output: zxcvb.pw/api/bot/getSettings.php
-```
-
-**Palo Alto EDL Setup:**
-- **Type**: IP Address List / Domain List / URL List (per endpoint)
-- **Source**: `https://<threatgate-host>/feed/pa/ip`
-- **Refresh**: 5 minutes (recommended)
-
----
-
-### Checkpoint Feeds
-
-Checkpoint firewalls require CSV format with specific structure:
-
-| Endpoint | Description | Format |
-|----------|-------------|--------|
-| `/feed/cp/ip` | IP addresses | CSV with observe numbers |
-| `/feed/cp/domain` | Domains | CSV with observe numbers |
-| `/feed/cp/url` | URLs (with protocol) | CSV with observe numbers |
-| `/feed/cp/hash` | All hash types | CSV with observe numbers |
-| `/feed/cp/md5` | MD5 hashes only | CSV with observe numbers |
-| `/feed/cp/sha1` | SHA1 hashes only | CSV with observe numbers |
-| `/feed/cp/sha256` | SHA256 hashes only | CSV with observe numbers |
-
-**CSV Format:**
-```csv
-#Uniq-Name,#Value,#Type,#Confidence,#Severity,#Product,#Comment
-observe1,98.160.48.170,ip,high,high,AV,"""Malicious IP"""
-observe2,98.172.212.35,ip,high,high,AV,"""Malicious IP"""
-observe3,https://zxcvb.pw,url,high,high,AV,"""Malicious URL"""
-observe4,http://zxcvb.pw/api/bot/getSettings.php,url,high,high,AV,"""Malicious URL"""
-observe5,00faa625e3d1c41d5eceff54a473a408,md5,high,high,AV,"""Malicious Hash"""
-```
-
-**Example:**
-```bash
-curl https://threatgate.example.com/feed/cp/ip
-```
-
-**Checkpoint Setup:**
-- Import feed as CSV threat intelligence feed
-- Configure automatic updates (recommended: 5 minutes)
-- Feed includes all active (non-expired) IOCs
-
----
+| Endpoint | Format |
+|----------|--------|
+| `/feed/cp/ip`, `/domain`, `/url`, `/hash`, `/md5`, `/sha1`, `/sha256` | CSV with observe numbers |
 
 ### YARA Feeds
 
-| Endpoint | Description | Format |
-|----------|-------------|--------|
-| `/feed/yara-list` | List of all YARA rule filenames | One filename per line |
-| `/feed/yara-content/<filename>` | Raw content of a specific YARA rule | Plain text YARA rule content |
+| Endpoint | Description |
+|----------|-------------|
+| `/feed/yara-list` | List of approved YARA filenames |
+| `/feed/yara-content/<filename>` | Raw YARA rule content |
 
-**Example:**
-```bash
-# Get list of YARA rules
-curl https://threatgate.example.com/feed/yara-list
-
-# Get specific YARA rule content
-curl https://threatgate.example.com/feed/yara-content/rule.yar
-```
+All feeds return only **active (non-expired) IOCs**. Content-Type: `text/plain`.
 
 ---
 
-### Feed Behavior
-
-- **Active IOCs Only**: All IOC feeds return only non-expired IOCs
-- **Real-time Updates**: Feeds reflect current database state
-- **No Authentication**: Feeds are public endpoints (consider firewall rules)
-- **Case Insensitive**: IOC matching is case-insensitive
-- **Legacy Support**: `/feed/<ioc_type>` endpoint still supported for backward compatibility
-
----
-
-## API Endpoints
-
-ThreatGate provides a comprehensive REST API for automated IOC management.
-
-### Base URL
-
-All API endpoints are prefixed with `/api/`:
-
-```
-https://threatgate.example.com/api/<endpoint>
-```
-
----
-
-### 1. Create IOC
-
-**Endpoint:** `/api/v1/ioc`  
-**Method:** `POST`  
-**Content-Type:** `application/json`
-
-**Request Body:**
-```json
-{
-  "type": "IP",
-  "value": "192.168.1.100",
-  "username": "automation",
-  "comment": "Auto-detected threat",
-  "expiration": "2025-12-31",
-  "ticket_id": "INC-12345"
-}
-```
-
-**Parameters:**
-- `type` (required) - IOC type: `IP`, `Domain`, `Hash`, `Email`, `URL`
-- `value` (required) - IOC value
-- `username` (required) - Analyst username
-- `comment` (optional) - Comment/description
-- `expiration` (optional, default: `"Permanent"`) - Expiration date in `YYYY-MM-DD` format or `"Permanent"`
-- `ticket_id` (optional) - Ticket/incident ID
-
-**Response (Success):**
-```json
-{
-  "success": true,
-  "message": "IP IOC ingested successfully",
-  "ioc": "192.168.1.100",
-  "type": "IP"
-}
-```
-
-**Response (Error):**
-```json
-{
-  "success": false,
-  "message": "IOC already exists"
-}
-```
-
-**Status Codes:**
-- `201` - IOC created successfully
-- `400` - Invalid input or missing required fields
-- `403` - IOC blocked by allowlist (critical asset)
-- `409` - IOC already exists
-
-**Example (cURL):**
-```bash
-curl -X POST https://threatgate.example.com/api/v1/ioc \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "IP",
-    "value": "10.0.0.1",
-    "username": "automation",
-    "comment": "Malicious IP detected",
-    "expiration": "2025-12-31",
-    "ticket_id": "INC-12345"
-  }'
-```
-
----
-
-### 2. Update IOC
-
-**Endpoint:** `/api/edit`  
-**Method:** `POST`  
-**Content-Type:** `application/json`
-
-**Request Body:**
-```json
-{
-  "type": "IP",
-  "value": "192.168.1.100",
-  "comment": "Updated comment",
-  "expiration": "2025-12-31",
-  "ticket_id": "INC-12345",
-  "campaign_name": "Malware Campaign"
-}
-```
-
-**Parameters:**
-- `type` (required) - IOC type
-- `value` (required) - IOC value (case-insensitive match)
-- `comment` (optional) - New comment
-- `expiration` (required) - Expiration date: `YYYY-MM-DD` or `"Permanent"`
-- `ticket_id` (optional) - Ticket ID
-- `campaign_name` (optional) - Campaign name to assign, or `"None"` to unassign
-
-**Response (Success):**
-```json
-{
-  "success": true,
-  "message": "IP IOC updated successfully"
-}
-```
-
-**Response (Error):**
-```json
-{
-  "success": false,
-  "message": "IOC not found"
-}
-```
-
-**Status Codes:**
-- `200` - IOC updated successfully
-- `400` - Invalid input or IOC not found
-- `404` - IOC not found
-- `500` - Server error
-
-**Example (cURL):**
-```bash
-curl -X POST https://threatgate.example.com/api/edit \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "IP",
-    "value": "192.168.1.100",
-    "comment": "Updated threat intelligence",
-    "expiration": "Permanent",
-    "ticket_id": "INC-67890",
-    "campaign_name": "APT Campaign"
-  }'
-```
-
----
-
-### 3. Delete IOC
-
-**Endpoint:** `/api/revoke`  
-**Method:** `POST`  
-**Content-Type:** `application/json`
-
-**Request Body:**
-```json
-{
-  "type": "IP",
-  "value": "192.168.1.100"
-}
-```
-
-**Parameters:**
-- `type` (required) - IOC type
-- `value` (required) - IOC value
-
-**Response (Success):**
-```json
-{
-  "success": true,
-  "message": "IP IOC revoked successfully"
-}
-```
-
-**Response (Error):**
-```json
-{
-  "success": false,
-  "message": "IOC not found"
-}
-```
-
-**Status Codes:**
-- `200` - IOC deleted successfully
-- `400` - Invalid input
-- `404` - IOC not found
-
-**Example (cURL):**
-```bash
-curl -X POST https://threatgate.example.com/api/revoke \
-  -H "Content-Type: application/json" \
-  -d '{
-    "type": "IP",
-    "value": "192.168.1.100"
-  }'
-```
-
----
-
-### 4. Search IOCs
-
-**Endpoint:** `/api/search`  
-**Method:** `GET`
-
-**Query Parameters:**
-- `q` (required) - Search query
-- `filter` (optional) - Filter type: `all`, `ioc_value`, `ticket_id`, `user`, `date` (default: `all`)
-
-**Example:**
-```bash
-curl "https://threatgate.example.com/api/search?q=192.168&filter=ioc_value"
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "query": "192.168",
-  "filter": "ioc_value",
-  "results": [
-    {
-      "ioc": "192.168.1.1",
-      "type": "IP",
-      "date": "2025-01-15T10:30:00",
-      "user": "analyst1",
-      "ref": "INC-12345",
-      "comment": "Malicious IP",
-      "expiration": "2025-12-31",
-      "expiration_status": "Expires on 2025-12-31",
-      "is_expired": false,
-      "status": "Active",
-      "country_code": "us"
-    }
-  ],
-  "count": 1
-}
-```
-
----
-
-### 5. Get Statistics
-
-**Endpoint:** `/api/stats`  
-**Method:** `GET`
-
-**Response:**
-```json
-{
-  "success": true,
-  "stats": {
-    "IP": 1250,
-    "Domain": 850,
-    "Hash": 3200,
-    "Email": 45,
-    "URL": 680
-  },
-  "yara_count": 15,
-  "weighted_total": 10225,
-  "campaign_stats": {
-    "APT Campaign": 150,
-    "Malware Campaign": 200
-  }
-}
-```
-
----
-
-### 6. Get Recent IOCs
-
-**Endpoint:** `/api/recent`  
-**Method:** `GET`
-
-**Query Parameters:**
-- `limit` (optional) - Number of results (default: 50)
-
-**Response:**
-```json
-{
-  "success": true,
-  "recent": [
-    {
-      "type": "IP",
-      "value": "192.168.1.1",
-      "analyst": "analyst1",
-      "date": "2025-01-15T10:30:00",
-      "expiration": "2025-12-31",
-      "is_expired": false
-    }
-  ],
-  "count": 50
-}
-```
-
----
-
-### 7. Campaign Management
-
-#### List Campaigns
-
-**Endpoint:** `/api/campaigns`  
-**Method:** `GET`
-
-**Response:**
-```json
-{
-  "success": true,
-  "campaigns": [
-    {
-      "id": 1,
-      "name": "APT Campaign",
-      "description": "Advanced Persistent Threat",
-      "created_at": "2025-01-01T00:00:00"
-    }
-  ],
-  "count": 1
-}
-```
-
-#### Create Campaign
-
-**Endpoint:** `/api/campaigns`  
-**Method:** `POST`  
-**Content-Type:** `application/json`
-
-**Request Body:**
-```json
-{
-  "name": "New Campaign",
-  "description": "Campaign description"
-}
-```
-
-#### Update Campaign
-
-**Endpoint:** `/api/campaigns/<campaign_id>`  
-**Method:** `PUT`  
-**Content-Type:** `application/json`
-
-**Request Body:**
-```json
-{
-  "name": "Updated Campaign Name",
-  "description": "Updated description"
-}
-```
-
-#### Delete Campaign
-
-**Endpoint:** `/api/campaigns/<campaign_id>`  
-**Method:** `DELETE`
-
-Unlinks all IOCs and YARA rules from the campaign before deletion.
-
-#### Link IOC to Campaign
-
-**Endpoint:** `/api/campaigns/link`  
-**Method:** `POST`  
-**Content-Type:** `application/json`
-
-**Request Body:**
-```json
-{
-  "ioc_value": "192.168.1.100",
-  "campaign_id": 1
-}
-```
-
-#### Export Campaign
-
-**Endpoint:** `/api/campaigns/<campaign_id>/export`  
-**Method:** `GET`
-
-Returns CSV file with all IOCs and YARA rules for the campaign.
-
-#### Get Campaign Graph Data
-
-**Endpoint:** `/api/campaign-graph/<campaign_id>`  
-**Method:** `GET`
-
-Returns JSON data for visual graph representation (nodes and edges).
-
----
-
-### 8. YARA Rule Management
-
-#### Upload YARA Rule
-
-**Endpoint:** `/api/upload-yara`  
-**Method:** `POST`  
-**Content-Type:** `multipart/form-data`
-
-**Form Data:**
-- `file` (required) - YARA rule file (`.yar` extension)
-- `username` (required) - Analyst username
-- `ticket_id` (optional) - Ticket ID
-- `comment` (optional) - Comment
-- `campaign_name` (optional) - Campaign name
-
-#### List YARA Rules
-
-**Endpoint:** `/api/list-yara`  
-**Method:** `GET`
-
-**Response:**
-```json
-{
-  "success": true,
-  "files": [
-    {
-      "filename": "rule.yar",
-      "size_kb": 2.5,
-      "upload_date": "2025-01-15 10:30",
-      "user": "analyst1",
-      "ticket_id": "INC-12345",
-      "comment": "Malware detection rule"
-    }
-  ]
-}
-```
-
-#### View YARA Rule Content
-
-**Endpoint:** `/api/view-yara/<filename>`  
-**Method:** `GET`
-
-Returns the raw content of a YARA rule file.
-
-#### Update YARA Rule Content
-
-**Endpoint:** `/api/update-yara`  
-**Method:** `POST`  
-**Content-Type:** `application/json`
-
-**Request Body:**
-```json
-{
-  "filename": "rule.yar",
-  "content": "rule Example { ... }"
-}
-```
-
-#### Edit YARA Rule Metadata
-
-**Endpoint:** `/api/edit-yara-meta`  
-**Method:** `POST`  
-**Content-Type:** `application/json`
-
-**Request Body:**
-```json
-{
-  "filename": "rule.yar",
-  "ticket_id": "INC-12345",
-  "comment": "Updated comment",
-  "campaign_name": "Campaign Name"
-}
-```
-
-#### Delete YARA Rule
-
-**Endpoint:** `/api/delete-yara`  
-**Method:** `DELETE`  
-**Content-Type:** `application/json`
-
-**Request Body:**
-```json
-{
-  "filename": "rule.yar"
-}
-```
-
----
-
-### 9. Bulk Operations
-
-#### Submit Single IOC (Web UI)
-
-**Endpoint:** `/api/submit-ioc`  
-**Method:** `POST`  
-**Content-Type:** `application/json`
-
-Similar to `/api/v1/ioc` but designed for web UI submissions.
-
-#### Bulk CSV Upload
-
-**Endpoint:** `/api/bulk-csv`  
-**Method:** `POST`  
-**Content-Type:** `multipart/form-data`
-
-**Form Data:**
-- `file` (required) - CSV file
-- `username` (required) - Analyst username
-- `comment` (optional) - Global comment
-- `ttl` (optional) - TTL selection
-- `campaign_name` (optional) - Campaign name
-
-#### Preview CSV
-
-**Endpoint:** `/api/preview-csv`  
-**Method:** `POST`  
-**Content-Type:** `multipart/form-data`
-
-Returns preview of IOCs that will be imported (no database write).
-
-#### Upload TXT File
-
-**Endpoint:** `/api/upload-txt`  
-**Method:** `POST`  
-**Content-Type:** `multipart/form-data`
-
-**Form Data:**
-- `file` (required) - TXT file
-- `username` (required) - Analyst username
-- `ticket_id` (optional) - Default ticket ID
-- `ttl` (optional) - TTL selection
-- `campaign_name` (optional) - Campaign name
-
-#### Preview TXT File
-
-**Endpoint:** `/api/preview-txt`  
-**Method:** `POST`  
-**Content-Type:** `multipart/form-data`
-
-Returns preview of IOCs that will be imported (no database write).
-
-#### Submit Staging
-
-**Endpoint:** `/api/submit-staging`  
-**Method:** `POST`  
-**Content-Type:** `application/json`
-
-Submit staged/previewed IOCs to database.
-
-**Request Body:**
-```json
-{
-  "items": [
-    {
-      "ioc": "192.168.1.1",
-      "type": "IP",
-      "analyst": "analyst1",
-      "ticket_id": "INC-12345",
-      "comment": "Comment",
-      "expiration": "2025-12-31"
-    }
-  ],
-  "ttl": "Permanent",
-  "campaign_name": "Campaign Name"
-}
-```
-
----
-
-### 10. Additional Endpoints
-
-#### Get All IOCs
-
-**Endpoint:** `/api/all-iocs`  
-**Method:** `GET`
-
-**Query Parameters:**
-- `limit` (optional) - Number of results (default: 500)
-
-Returns all IOCs for historical table view.
-
-#### Get Analyst Statistics
-
-**Endpoint:** `/api/analyst-stats`  
-**Method:** `GET`
-
-Returns analyst leaderboard with weighted scores (YARA uploads count as 5x points).
-
-**Response:**
-```json
-{
-  "success": true,
-  "analysts": [
-    {
-      "user": "analyst1",
-      "total_iocs": 150,
-      "yara_count": 5,
-      "weighted_score": 175,
-      "last_activity": "2025-01-15",
-      "rank": 1
-    }
-  ],
-  "count": 10
-}
-```
+## MISP Integration
+
+ThreatGate can pull IOC attributes from a local MISP instance automatically.
+
+### Configuration (Admin > Settings > MISP Integration)
+
+| Setting | Description |
+|---------|-------------|
+| MISP Sync Enabled | Enable/disable automatic sync |
+| MISP URL | URL of the MISP instance |
+| API Key | MISP API authentication key |
+| Verify SSL | Verify MISP server certificate |
+| Lookback (days) | How far back to fetch attributes |
+| Auto-sync interval (min) | Pull frequency (minimum 5 minutes) |
+| Filter by Tags | Comma-separated MISP tags to filter |
+| Filter Attribute Types | Comma-separated MISP types (e.g. `ip-src, domain, sha256`) |
+| Published Events Only | Only fetch from published MISP events |
+| Default TTL | Expiration for imported IOCs (days, or `permanent`) |
+| Sync Analyst Username | Username recorded as analyst (default: `misp_sync`) |
+| Exclude from Champs | Hide MISP sync user from Champs leaderboard |
+
+### Supported MISP Attribute Types
+
+| MISP Type | ThreatGate Type |
+|-----------|-----------------|
+| `ip-src`, `ip-dst`, `ip-src\|port`, `ip-dst\|port` | IP |
+| `domain`, `hostname` | Domain |
+| `url`, `uri`, `link` | URL |
+| `md5`, `sha1`, `sha256`, `sha512`, `ssdeep`, `imphash` | Hash |
+| `email-src`, `email-dst`, `email` | Email |
+
+### How It Works
+
+1. Systemd timer triggers `misp_sync_job.py` every 5 minutes
+2. The job checks admin-configured interval and skips if not enough time has passed
+3. Fetches attributes from MISP via `pymisp`
+4. Validates each IOC (same regex validation as manual submission)
+5. Inserts new IOCs with deduplication, logs to `ioc_history`
+6. A DB-based lock prevents concurrent syncs (auto-expires after 10 minutes)
+
+The `misp_sync` user is created as `source='system'` and cannot log in.
 
 ---
 
 ## Data Model
 
-ThreatGate uses **SQLite** database for storage:
+SQLite database: `data/threatgate.db`
 
-### IOC Table
-
-- `id` - Primary key
-- `type` - IOC type (IP, Domain, Hash, Email, URL)
-- `value` - IOC value (unique per type)
-- `analyst` - Username who created the IOC
-- `ticket_id` - Ticket/incident ID
-- `comment` - Comment/description
-- `expiration_date` - Expiration date (NULL = Permanent)
-- `created_at` - Creation timestamp
-- `campaign_id` - Foreign key to campaigns table
-
-### Campaign Table
-
-- `id` - Primary key
-- `name` - Campaign name (unique)
-- `description` - Campaign description
-- `created_at` - Creation timestamp
-
-### YaraRule Table
-
-- `id` - Primary key
-- `filename` - YARA rule filename (unique)
-- `analyst` - Username who uploaded
-- `ticket_id` - Ticket/incident ID
-- `comment` - Comment/description
-- `uploaded_at` - Upload timestamp
-- `campaign_id` - Foreign key to campaigns table
+| Table | Description |
+|-------|-------------|
+| `users` | User accounts (username, password_hash, source, is_admin, is_active) |
+| `user_profiles` | Display name, avatar |
+| `user_sessions` | Login/logout tracking |
+| `iocs` | IOC records (type, value, analyst, ticket_id, comment, expiration, campaign, tags, geo fields) |
+| `ioc_history` | Lifecycle events per IOC (created, edited, deleted, expired, excluded, unexcluded) |
+| `campaigns` | Campaign metadata |
+| `yara_rules` | YARA rule metadata + quality score |
+| `sanity_exclusions` | Analyst-excluded Feed Pulse anomalies |
+| `system_settings` | Key-value store (auth, LDAP, MISP, Champs config) |
+| `activity_events` | Champs activity log (IOC submissions, deletions, rank changes) |
+| `team_goals` | Champs team goals |
+| `champ_rank_snapshots` | Daily rank snapshots for trend tracking |
 
 ---
 
@@ -1110,145 +270,266 @@ ThreatGate uses **SQLite** database for storage:
 
 ### Environment Variables
 
-- `FLASK_DEBUG` - Enable debug mode (default: `false`)
-- `FLASK_PORT` - Port number (default: `5000`)
-- `SECRET_KEY` - Flask secret key (auto-generated if not set)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `FLASK_PORT` | `5000` | Dev server port |
+| `FLASK_DEBUG` | `false` | Debug mode |
+| `SECRET_KEY` | random | Flask secret key (set in production) |
+| `THREATGATE_DATA_DIR` | `<app>/data` | Data directory override |
+| `THREATGATE_MAX_CONTENT_MB` | `16` | Max upload size |
+| `ADMIN_DEFAULT_PASSWORD` | `admin` | Initial admin password |
+| `THREATGATE_PORT` | `8443` | Production gunicorn port |
+| `THREATGATE_WORKERS` | `3` | Gunicorn worker count |
+| `REDIRECT_HTTP_PORT` | `8080` | HTTP redirect listen port |
+| `REDIRECT_HTTPS_PORT` | `8443` | HTTPS redirect target port |
 
-### Database Location
+### Admin Settings (Web UI)
 
-Database file: `data/threatgate.db`
-
-### Allowlist
-
-Edit `data/allowlist.txt` to add critical assets that should never be blocked:
-- One entry per line
-- Supports CIDR notation for IP ranges
-- Domain substring matching
+- **Auth Mode**: `local_only`, `ldap_only`, `ldap_with_local_fallback`
+- **LDAP**: URL, Base DN, Bind DN, User Filter
+- **MISP**: URL, API key, filters, sync interval, TTL, Champs exclusion
+- **Champs**: Scoring method, ticker messages, team goals
 
 ---
 
 ## Maintenance
 
-### Database Backup
+### Backup
 
+Automated via `threatgate-backup.timer` (daily). Backs up:
+- `threatgate.db` (database)
+- `data/ssl/*.pem` (SSL certificates)
+- `data/YARA/*.yar` (YARA rules)
+- `data/allowlist.txt`
+
+Retention: 30 days. Manual run:
 ```bash
-# Backup database
-cp data/threatgate.db data/threatgate.db.backup.$(date +%Y%m%d)
-
-# Restore database
-cp data/threatgate.db.backup.20250115 data/threatgate.db
+sudo -u threatgate /opt/threatgate/backup_threatgate.sh
 ```
 
-### Cleanup Expired IOCs
+### Expired IOC Cleanup
 
-Expired IOCs are automatically filtered from feeds. To manually remove expired IOCs from the database, use the cleanup script:
+Automated via `threatgate-cleaner.timer`. Removes expired IOCs and logs each deletion to `ioc_history` with `event_type='expired'`.
+
+### Data Reset
 
 ```bash
-python cleaner.py
+cd /opt/threatgate
+sudo systemctl stop threatgate
+
+# Interactive (asks per category)
+python reset_data.py
+
+# Full wipe (IOCs, YARA, campaigns, history, champs, sessions, MISP settings, users)
+python reset_data.py --all --yes
+
+# Selective
+python reset_data.py --iocs --yara --history --yes
+python reset_data.py --settings   # Reset MISP settings only
+
+sudo systemctl start threatgate
 ```
 
-Or set up a cron job (daily at 03:00):
+### Lab User Setup
+
 ```bash
-0 3 * * * /usr/bin/python3 /path/to/threatgate/cleaner.py >> /var/log/threatgate-cleaner.log 2>&1
+python create_lab_users.py
+# Prompts for a common password, creates predefined analyst accounts
 ```
 
 ---
 
-## Security Considerations
+## Admin Scripts
 
-1. **Feed Endpoints**: Consider firewall rules to restrict feed access
-2. **API Authentication**: Currently no authentication (consider adding API keys)
-3. **Allowlist**: Use `data/allowlist.txt` to prevent blocking critical assets
-4. **Input Validation**: All inputs are validated and sanitized
-5. **SQL Injection**: Uses SQLAlchemy ORM (parameterized queries)
-
----
-
-## Migration from Legacy File-Based System
-
-ThreatGate automatically migrates from legacy file-based storage on first run:
-
-1. Checks if database is empty
-2. Imports IOCs from `data/Main/*.txt` files
-3. Imports YARA metadata from `data/Main/yara.txt`
-4. Preserves all metadata (dates, users, comments, expiration)
-
-**Important:** Backup your `data/` directory before first run!
+| Script | Description |
+|--------|-------------|
+| `setup.sh` | Production installer (online/offline/upgrade) |
+| `uninstall.sh` | Full removal (services, files, user) |
+| `package_offline.sh` | Build offline installer ZIP |
+| `backup_threatgate.sh` | Manual backup (DB, SSL, YARA, allowlist) |
+| `reset_data.py` | Wipe operational data (granular or full) |
+| `create_lab_users.py` | Create lab analyst accounts |
+| `cleaner.py` | Remove expired IOCs (runs via systemd timer) |
+| `misp_sync_job.py` | MISP sync job (runs via systemd timer) |
+| `http_redirect.py` | HTTP-to-HTTPS redirect server |
+| `start.sh` | Gunicorn launcher with auto SSL detection |
 
 ---
 
-## Offline / Air-Gapped Deployment
+## Security
+
+- **Authentication**: All pages and API endpoints require login (Flask-Login)
+- **Passwords**: Scrypt hashing via werkzeug
+- **LDAP**: Optional AD/LDAP authentication with local fallback
+- **SSL/TLS**: Certificate upload via admin UI, gunicorn serves HTTPS directly
+- **HTTP Redirect**: Automatic 301 redirect from HTTP to HTTPS
+- **System Users**: MISP sync user has `source='system'`, `password_hash=None` (cannot log in)
+- **Input Validation**: Regex validation on all IOC types, refanger for obfuscated input
+- **SQL Injection**: SQLAlchemy ORM with parameterized queries
+- **Allowlist**: Prevents blocking critical infrastructure assets
+- **Audit Log**: All admin and IOC actions logged to `data/audit.log`
+- **Feed Endpoints**: Public (no auth). Restrict access via firewall rules
+- **Offline**: No external network calls. All assets local
+
+---
+
+## Project Architecture
+
+### Backend
+
+```
+app.py              Main Flask application
+models.py           SQLAlchemy models
+extensions.py       Flask extensions (db)
+constants.py        Application constants
+config.py           Configuration (optional)
+
+routes/
+  admin.py          Admin API (users, settings, certificate, MISP)
+  champs.py         Champs leaderboard, team goals, ticker
+  yara.py           YARA rule management API
+  campaigns.py      Campaign CRUD and graph API
+  feeds.py          Feed generation (standard, PA, CP, YARA)
+
+utils/
+  validation.py     IOC regex validation and type detection
+  refanger.py       Input cleaning (defang reversal)
+  allowlist.py      Allowlist loading and checking
+  feed_helpers.py   Feed formatting helpers
+  yara_utils.py     YARA file path utilities
+  validation_warnings.py   IOC submission warnings
+  validation_messages.py   Error message constants
+  sanity_checks.py  Feed Pulse anomaly detection
+  auth.py           Password hashing (scrypt)
+  decorators.py     @login_required, @admin_required
+  ldap_auth.py      LDAP/AD authentication
+  champs.py         Analyst scoring, ranking, badges, XP
+  misp_sync.py      MISP fetch, validate, import, lock
+  ioc_decode.py     Text extraction for bulk IOC parsing
+```
+
+### Frontend
+
+Single-Page Application in `templates/index.html` with lazy-loaded JS modules:
+
+| Module | Purpose |
+|--------|---------|
+| `static/js/api.js` | Centralized API client |
+| `static/js/utils.js` | HTML escaping, clipboard |
+| `static/js/live-stats.js` | Dashboard, charts, intelligence |
+| `static/js/search.js` | Search, edit, delete, history |
+| `static/js/champs.js` | Leaderboard, spotlight, ticker |
+| `static/js/feed-pulse.js` | Feed health, anomalies, exclusions |
+| `static/js/yara.js` | YARA management |
+| `static/js/campaigns.js` | Campaign graph (vis.js) |
+| `static/js/playbook-edit.js` | Playbook site management |
+
+Vendor libraries (all local, no CDN): Tailwind, Chart.js, vis.js, marked, turndown, Prism.
+
+### Templates
+
+```
+templates/
+  index.html          Main SPA
+  login.html          Login page
+  admin/
+    base.html         Admin layout
+    users.html        User management
+    settings.html     System settings (Auth, LDAP, MISP)
+    certificate.html  SSL/TLS certificate
+    champs.html       Champs admin
+```
+
+---
+
+## Offline Deployment
 
 ThreatGate is designed for air-gapped environments:
 
-- **Flags**: Local `flag-icons` (offline SVG)
-- **Charts**: Local Chart.js library
-- **GeoIP**: Optional (system works without it)
-- **No CDN**: All assets are local
+- All CSS, JS, fonts, icons served locally (no CDN)
+- GeoIP database stored locally (`data/GeoLite2-City.mmdb`)
+- LDAP is optional; works with `local_only` auth mode
+- MISP integration connects only to a local MISP instance on the same server
+- No telemetry, analytics, or external API calls
+
+### Building an Offline Package
+
+```bash
+# On a machine with internet:
+./package_offline.sh
+
+# Output: threatgate_installer.zip
+# Contains: all code, templates, static assets, Python wheels, systemd units
+```
+
+### Installing on Air-Gapped Server
+
+```bash
+unzip threatgate_installer.zip -d threatgate_install
+cd threatgate_install
+sudo ./setup.sh --offline
+```
+
+Prerequisites on target server:
+- Python 3.8+ with `python3-venv` package
+- SQLite3
+- systemd
 
 ---
 
 ## Troubleshooting
 
-### Database Locked
+### Service won't start
 
-If you see "database is locked" errors:
+```bash
+journalctl -u threatgate -n 50 --no-pager
+```
+
+### Database locked
+
 - Ensure only one instance is running
-- Check for stale lock files
-- Restart the application
+- Restart: `sudo systemctl restart threatgate`
+- The app retries commits automatically (3 attempts with backoff)
 
-### Feeds Not Updating
+### MISP sync not running
 
-- Check database connection
-- Verify IOCs are not expired
-- Check feed endpoint URLs
+```bash
+systemctl status threatgate-misp-sync.timer
+journalctl -u threatgate-misp-sync -n 20 --no-pager
+```
 
-### Campaign Graph Not Loading
+Check Admin > Settings > MISP: ensure Enabled = Yes, URL and API key configured.
 
-- Ensure vis.js library is loaded
-- Check browser console for errors
-- Verify campaign has associated IOCs
+### HTTP redirect not working
 
----
+```bash
+systemctl status threatgate-redirect
+```
 
-## What's New in v4.0
+Ensure SSL certificates are uploaded via Admin > Certificate, then restart:
+```bash
+sudo systemctl restart threatgate threatgate-redirect
+```
 
-### Enhanced Feed System
-- **Standard Feeds**: `/feed/ip`, `/feed/domain`, `/feed/url`, `/feed/hash`, `/feed/md5`, `/feed/sha1`, `/feed/sha256`
-- **Palo Alto Feeds**: `/feed/pa/*` - URLs without protocol prefix for Palo Alto firewalls
-- **Checkpoint Feeds**: `/feed/cp/*` - CSV format with observe numbers for Checkpoint firewalls
-- **Hash Type Filtering**: Separate endpoints for MD5, SHA1, and SHA256 hashes
+### Reset all data
 
-### Campaign Management
-- **Visual Campaign Graph**: Interactive graph visualization of campaigns and their IOCs
-- **Campaign Export**: Export campaign data to CSV
-- **Campaign Linking**: Link IOCs and YARA rules to campaigns
+```bash
+sudo systemctl stop threatgate
+cd /opt/threatgate
+python reset_data.py --all --yes
+sudo systemctl start threatgate
+```
 
-### API Enhancements
-- **RESTful API**: Complete API for automated IOC management
-- **IOC Update API**: Update IOC metadata (comment, expiration, ticket ID, campaign)
-- **Campaign API**: Full CRUD operations for campaigns
+### Full reinstall
 
-### Database Migration
-- **Automatic Migration**: Seamless migration from legacy file-based system
-- **SQLite Backend**: Fast, reliable database storage
-- **Metadata Preservation**: All metadata preserved during migration
+```bash
+sudo ./uninstall.sh --backup   # Saves data to /opt/threatgate_backup_*
+sudo ./setup.sh --offline      # Fresh install
+```
 
 ---
 
 ## Version
 
-**ThreatGate v4.0 — Commander Edition**  
+**ThreatGate v5.0**
 Last updated: **February 2026**
-
----
-
-## License
-
-[Add your license information here]
-
----
-
-## Support
-
-For issues, questions, or contributions, please contact the development team.

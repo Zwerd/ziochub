@@ -1,0 +1,15 @@
+[Unit]
+Description=ThreatGate database backup (local, offline)
+After=threatgate.service
+
+[Service]
+Type=oneshot
+User=threatgate
+Group=threatgate
+# Use same data dir as main app (set by environment or default in script)
+Environment=THREATGATE_DATA_DIR=/opt/threatgate/data
+ExecStart=/opt/threatgate/backup_threatgate.sh
+ReadWritePaths=/opt/threatgate/data/backups
+
+[Install]
+WantedBy=multi-user.target

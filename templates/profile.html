@@ -1,0 +1,118 @@
+{% extends "base_app.html" %}
+{% block title %}Profile{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <h2 class="text-2xl font-bold accent-blue mb-1">Profile</h2>
+    <p class="text-secondary text-sm mb-6">Edit your display name, role, and avatar.</p>
+
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 mb-6">
+        <div class="flex flex-wrap items-center gap-6 mb-6">
+            <div id="avatarContainer" class="flex-shrink-0">
+                {% if profile and profile.avatar_path %}
+                <img id="avatarImg" class="w-24 h-24 rounded-full object-cover border-2 border-cyan-400/50" src="{{ url_for('static', filename=profile.avatar_path) }}" alt="Avatar">
+                <div id="avatarPlaceholder" class="w-24 h-24 rounded-full bg-slate-600/50 flex items-center justify-center text-4xl border-2 border-cyan-400/50" style="display:none">👤</div>
+                {% else %}
+                <div id="avatarPlaceholder" class="w-24 h-24 rounded-full bg-slate-600/50 flex items-center justify-center text-4xl border-2 border-cyan-400/50">👤</div>
+                <img id="avatarImg" class="w-24 h-24 rounded-full object-cover border-2 border-cyan-400/50 hidden" alt="Avatar">
+                {% endif %}
+            </div>
+            <div>
+                <p class="font-semibold text-lg text-primary">{{ user.username }}</p>
+                <p class="text-secondary text-sm">{{ user.source }}</p>
+            </div>
+        </div>
+
+        <form id="profileForm" class="space-y-4">
+            <div>
+                <label for="display_name" class="block text-sm font-semibold text-secondary mb-1">Display Name</label>
+                <input type="text" id="display_name" name="display_name" value="{{ (profile and profile.display_name) or user.username }}" maxlength="255"
+                       class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green focus:ring-1 focus:ring-accent-green">
+            </div>
+            <div>
+                <label for="role_description" class="block text-sm font-semibold text-secondary mb-1">Role Description</label>
+                <textarea id="role_description" name="role_description" maxlength="500" rows="3"
+                          class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green focus:ring-1 focus:ring-accent-green resize-y">{{ (profile and profile.role_description) or '' }}</textarea>
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 border border-cyan-400/40 text-white transition btn-cmd-primary">
+                Save Profile
+            </button>
+        </form>
+        <div id="profileMessage" class="mt-4 hidden text-sm"></div>
+
+        <div class="mt-6 pt-6 border-t border-white/10">
+            <label class="block text-sm font-semibold text-secondary mb-2">Avatar (jpg, png, gif, webp)</label>
+            <div class="flex flex-wrap items-center gap-3">
+                <input type="file" id="avatarFile" accept=".jpg,.jpeg,.png,.gif,.webp" class="text-sm text-primary">
+                <button type="button" id="avatarUploadBtn" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">
+                    Upload Avatar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <p class="text-secondary text-sm">
+        <a href="{{ url_for('index') }}" class="text-cyan-400 hover:underline">← Back to App</a>
+    </p>
+</div>
+
+<script>
+document.getElementById('profileForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('profileMessage');
+    msgEl.classList.add('hidden');
+    try {
+        var res = await fetch('/api/profile', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                display_name: document.getElementById('display_name').value.trim(),
+                role_description: document.getElementById('role_description').value.trim()
+            })
+        });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        if (data.success) {
+            msgEl.classList.add('text-green-400');
+            msgEl.classList.remove('text-red-400');
+            msgEl.textContent = 'Profile saved.';
+        } else {
+            msgEl.classList.add('text-red-400');
+            msgEl.classList.remove('text-green-400');
+            msgEl.textContent = data.message || 'Failed.';
+        }
+    } catch (err) {
+        msgEl.classList.remove('hidden', 'text-green-400');
+        msgEl.classList.add('text-red-400');
+        msgEl.textContent = 'Network error.';
+    }
+});
+
+document.getElementById('avatarUploadBtn').addEventListener('click', async function() {
+    var fileInput = document.getElementById('avatarFile');
+    if (!fileInput.files || fileInput.files.length === 0) {
+        appAlert({ title: 'Avatar', message: 'Select a file first.' });
+        return;
+    }
+    var fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    try {
+        var res = await fetch('/api/profile/avatar', { method: 'POST', body: fd });
+        var data = await res.json();
+        if (data.success && data.avatar_url) {
+            var placeholder = document.getElementById('avatarPlaceholder');
+            var img = document.getElementById('avatarImg');
+            if (placeholder) { placeholder.style.display = 'none'; }
+            img.src = data.avatar_url + '?t=' + Date.now();
+            img.classList.remove('hidden');
+            img.style.display = 'block';
+            fileInput.value = '';
+        } else {
+            appAlert({ title: 'Upload Failed', message: data.message || 'Upload failed.' });
+        }
+    } catch (err) {
+        appAlert({ title: 'Error', message: 'Network error.' });
+    }
+});
+</script>
+{% endblock %}

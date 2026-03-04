@@ -1,0 +1,8 @@
+{
+  "supported": ["en", "he"],
+  "default": "en",
+  "labels": {
+    "en": "English",
+    "he": "עברית"
+  }
+}

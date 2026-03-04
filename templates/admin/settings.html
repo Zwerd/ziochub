@@ -1,0 +1,355 @@
+{% extends "admin/base.html" %}
+{% block title %}Settings{% endblock %}
+
+{% block admin_content %}
+<!-- ===== Authentication / LDAP ===== -->
+<div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl mb-8">
+    <h3 class="text-lg font-semibold accent-blue mb-4">Authentication Settings</h3>
+    <p class="text-secondary text-sm mb-6">Auth configuration (LDAP/AD). When LDAP is unreachable and DEV_MODE=1, use <code class="px-1 py-0.5 rounded bg-white/10 text-xs">ldaptest</code> / <code class="px-1 py-0.5 rounded bg-white/10 text-xs">ldaptest</code> to test.</p>
+
+    <form id="settingsForm" class="space-y-4">
+        <div>
+            <label for="auth_mode" class="block text-sm font-semibold text-secondary mb-1">Auth Mode</label>
+            <select id="auth_mode" name="auth_mode" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <option value="local_only" {% if settings.auth_mode == 'local_only' %}selected{% endif %}>Local Only</option>
+                <option value="ldap" {% if settings.auth_mode == 'ldap' %}selected{% endif %}>LDAP</option>
+                <option value="ldap_with_local_fallback" {% if settings.auth_mode == 'ldap_with_local_fallback' %}selected{% endif %}>LDAP with Local Fallback</option>
+            </select>
+        </div>
+        <div>
+            <label for="ldap_enabled" class="block text-sm font-semibold text-secondary mb-1">LDAP Enabled</label>
+            <select id="ldap_enabled" name="ldap_enabled" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <option value="false" {% if settings.ldap_enabled == 'false' %}selected{% endif %}>No</option>
+                <option value="true" {% if settings.ldap_enabled == 'true' %}selected{% endif %}>Yes</option>
+            </select>
+        </div>
+        <div>
+            <label for="ldap_url" class="block text-sm font-semibold text-secondary mb-1">LDAP URL</label>
+            <input type="text" id="ldap_url" name="ldap_url" placeholder="ldap://dc.example.com" value="{{ settings.ldap_url }}"
+                   class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+        </div>
+        <div>
+            <label for="ldap_base_dn" class="block text-sm font-semibold text-secondary mb-1">LDAP Base DN</label>
+            <input type="text" id="ldap_base_dn" name="ldap_base_dn" placeholder="DC=example,DC=com" value="{{ settings.ldap_base_dn }}"
+                   class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+        </div>
+        <div>
+            <label for="ldap_bind_dn" class="block text-sm font-semibold text-secondary mb-1">LDAP Bind DN (service account)</label>
+            <input type="text" id="ldap_bind_dn" name="ldap_bind_dn" placeholder="CN=svc_ldap,OU=ServiceAccounts,..." value="{{ settings.ldap_bind_dn }}"
+                   class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+        </div>
+        <div>
+            <label for="ldap_bind_password" class="block text-sm font-semibold text-secondary mb-1">LDAP Bind Password</label>
+            <input type="password" id="ldap_bind_password" name="ldap_bind_password" placeholder="***" value="{{ settings.ldap_bind_password }}" autocomplete="new-password"
+                   class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+        </div>
+        <div>
+            <label for="ldap_user_filter" class="block text-sm font-semibold text-secondary mb-1">LDAP User Filter (%(user)s = username)</label>
+            <input type="text" id="ldap_user_filter" name="ldap_user_filter" placeholder="(sAMAccountName=%(user)s)" value="{{ settings.ldap_user_filter }}"
+                   class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+        </div>
+        <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Settings</button>
+    </form>
+    <div id="settingsMessage" class="mt-4 hidden text-sm"></div>
+</div>
+
+<!-- ===== Syslog / CEF Forwarding ===== -->
+<div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl mb-8">
+    <h3 class="text-lg font-semibold accent-blue mb-4">Syslog / CEF Forwarding</h3>
+    <p class="text-secondary text-sm mb-6">Forward audit logs in CEF format via UDP to a SIEM or syslog server. Logs are always stored locally (48h rotation).</p>
+
+    <form id="syslogForm" class="space-y-4">
+        <div>
+            <label for="syslog_udp_enabled" class="block text-sm font-semibold text-secondary mb-1">Enable UDP Syslog Forwarding</label>
+            <select id="syslog_udp_enabled" name="syslog_udp_enabled" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <option value="false" {% if settings.syslog_udp_enabled == 'false' %}selected{% endif %}>No</option>
+                <option value="true" {% if settings.syslog_udp_enabled == 'true' %}selected{% endif %}>Yes</option>
+            </select>
+        </div>
+        <div>
+            <label for="syslog_udp_host" class="block text-sm font-semibold text-secondary mb-1">Syslog Host (IP or hostname)</label>
+            <input type="text" id="syslog_udp_host" name="syslog_udp_host" placeholder="192.168.1.100 or siem.example.com" value="{{ settings.syslog_udp_host }}"
+                   class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+        </div>
+        <div>
+            <label for="syslog_udp_port" class="block text-sm font-semibold text-secondary mb-1">UDP Port</label>
+            <input type="number" id="syslog_udp_port" name="syslog_udp_port" min="1" max="65535" value="{{ settings.syslog_udp_port }}" placeholder="514"
+                   class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+        </div>
+        <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Syslog Settings</button>
+    </form>
+    <div id="syslogMessage" class="mt-4 hidden text-sm"></div>
+</div>
+
+<!-- ===== MISP Integration ===== -->
+<div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
+    <h3 class="text-lg font-semibold accent-blue mb-4">MISP Integration</h3>
+    <p class="text-secondary text-sm mb-6">Pull threat indicators from a local MISP instance into ThreatGate automatically.</p>
+
+    <form id="mispForm" class="space-y-4">
+        <!-- Enable / disable -->
+        <div>
+            <label for="misp_enabled" class="block text-sm font-semibold text-secondary mb-1">MISP Sync Enabled</label>
+            <select id="misp_enabled" name="misp_enabled" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <option value="false" {% if settings.misp_enabled == 'false' %}selected{% endif %}>No</option>
+                <option value="true" {% if settings.misp_enabled == 'true' %}selected{% endif %}>Yes</option>
+            </select>
+        </div>
+
+        <!-- Connection -->
+        <div>
+            <label for="misp_url" class="block text-sm font-semibold text-secondary mb-1">MISP URL</label>
+            <input type="text" id="misp_url" name="misp_url" placeholder="https://127.0.0.1:8443 or https://misp.local" value="{{ settings.misp_url }}"
+                   class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            <p class="text-secondary text-xs mt-1">Include the port if not 443 (e.g. https://127.0.0.1:8443).</p>
+        </div>
+        <div>
+            <label for="misp_api_key" class="block text-sm font-semibold text-secondary mb-1">MISP API Key (Authkey)</label>
+            <input type="password" id="misp_api_key" name="misp_api_key" placeholder="***" value="{{ settings.misp_api_key }}" autocomplete="off"
+                   class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+        </div>
+        <div>
+            <label for="misp_verify_ssl" class="block text-sm font-semibold text-secondary mb-1">Verify SSL</label>
+            <select id="misp_verify_ssl" name="misp_verify_ssl" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <option value="false" {% if settings.misp_verify_ssl == 'false' %}selected{% endif %}>No</option>
+                <option value="true" {% if settings.misp_verify_ssl == 'true' %}selected{% endif %}>Yes</option>
+            </select>
+        </div>
+
+        <!-- Fetch parameters -->
+        <div class="border-t border-white/5 pt-4 mt-4">
+            <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Fetch Parameters</p>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label for="misp_last_days" class="block text-sm font-semibold text-secondary mb-1">Lookback (days)</label>
+                <input type="number" id="misp_last_days" name="misp_last_days" min="1" max="365" value="{{ settings.misp_last_days }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <div>
+                <label for="misp_pull_interval" class="block text-sm font-semibold text-secondary mb-1">Auto-sync interval (min)</label>
+                <input type="number" id="misp_pull_interval" name="misp_pull_interval" min="5" max="1440" value="{{ settings.misp_pull_interval }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+        </div>
+        <div>
+            <label for="misp_filter_tags" class="block text-sm font-semibold text-secondary mb-1">Filter by Tags (comma-separated, empty = all)</label>
+            <input type="text" id="misp_filter_tags" name="misp_filter_tags" placeholder="tlp:white, apt" value="{{ settings.misp_filter_tags }}"
+                   class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+        </div>
+        <div>
+            <label for="misp_filter_types" class="block text-sm font-semibold text-secondary mb-1">Filter MISP Attribute Types (comma-separated, empty = all supported)</label>
+            <input type="text" id="misp_filter_types" name="misp_filter_types" placeholder="ip-src, ip-dst, domain, url, md5, sha256" value="{{ settings.misp_filter_types }}"
+                   class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+        </div>
+        <div>
+            <label for="misp_published_only" class="block text-sm font-semibold text-secondary mb-1">Published Events Only</label>
+            <select id="misp_published_only" name="misp_published_only" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <option value="true" {% if settings.misp_published_only != 'false' %}selected{% endif %}>Yes</option>
+                <option value="false" {% if settings.misp_published_only == 'false' %}selected{% endif %}>No</option>
+            </select>
+        </div>
+
+        <!-- Import settings -->
+        <div class="border-t border-white/5 pt-4 mt-4">
+            <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Import Settings</p>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+            <div>
+                <label for="misp_default_ttl" class="block text-sm font-semibold text-secondary mb-1">Default TTL (days, 0 = permanent)</label>
+                <input type="text" id="misp_default_ttl" name="misp_default_ttl" placeholder="permanent" value="{{ settings.misp_default_ttl }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <div>
+                <label for="misp_sync_user" class="block text-sm font-semibold text-secondary mb-1">Sync Analyst Username</label>
+                <input type="text" id="misp_sync_user" name="misp_sync_user" value="{{ settings.misp_sync_user }}" placeholder="misp_sync"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+        </div>
+        <div>
+            <label for="misp_exclude_from_champs" class="block text-sm font-semibold text-secondary mb-1">Exclude from Champs Leaderboard</label>
+            <select id="misp_exclude_from_champs" name="misp_exclude_from_champs" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <option value="true" {% if settings.misp_exclude_from_champs != 'false' %}selected{% endif %}>Yes - MISP sync user will not appear in Champs</option>
+                <option value="false" {% if settings.misp_exclude_from_champs == 'false' %}selected{% endif %}>No - MISP sync user scores like any analyst</option>
+            </select>
+        </div>
+
+        <!-- Action buttons -->
+        <div class="flex items-center gap-3 pt-2">
+            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save MISP Settings</button>
+            <button type="button" id="mispTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test Connection</button>
+            <button type="button" id="mispSyncBtn" class="px-4 py-2 rounded-lg font-semibold bg-green-600 hover:bg-green-500 text-white transition">Sync Now</button>
+        </div>
+    </form>
+
+    <div id="mispMessage" class="mt-4 hidden text-sm"></div>
+
+    <!-- Last sync info -->
+    {% if settings.misp_last_sync %}
+    <div class="mt-4 text-xs text-secondary border-t border-white/5 pt-3">
+        <span class="font-semibold">Last sync:</span> {{ settings.misp_last_sync }}
+        {% if settings.misp_last_sync_result %}
+        <span class="ml-2">{{ settings.misp_last_sync_result }}</span>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+
+<script>
+/* ---------- Auth / LDAP save ---------- */
+document.getElementById('settingsForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('settingsMessage');
+    msgEl.classList.add('hidden');
+    try {
+        var res = await fetch('/api/admin/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                auth_mode: document.getElementById('auth_mode').value,
+                ldap_enabled: document.getElementById('ldap_enabled').value,
+                ldap_url: document.getElementById('ldap_url').value,
+                ldap_base_dn: document.getElementById('ldap_base_dn').value,
+                ldap_bind_dn: document.getElementById('ldap_bind_dn').value,
+                ldap_bind_password: document.getElementById('ldap_bind_password').value,
+                ldap_user_filter: document.getElementById('ldap_user_filter').value
+            })
+        });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        if (data.success) {
+            msgEl.classList.add('text-green-400');
+            msgEl.classList.remove('text-red-400');
+            msgEl.textContent = 'Settings saved.';
+        } else {
+            msgEl.classList.add('text-red-400');
+            msgEl.classList.remove('text-green-400');
+            msgEl.textContent = data.message || 'Failed to save.';
+        }
+    } catch (err) {
+        msgEl.classList.remove('hidden');
+        msgEl.classList.add('text-red-400');
+        msgEl.textContent = 'Network error.';
+    }
+});
+
+/* ---------- Syslog save ---------- */
+document.getElementById('syslogForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('syslogMessage');
+    msgEl.classList.add('hidden');
+    try {
+        var res = await fetch('/api/admin/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                syslog_udp_enabled: document.getElementById('syslog_udp_enabled').value,
+                syslog_udp_host: document.getElementById('syslog_udp_host').value.trim(),
+                syslog_udp_port: document.getElementById('syslog_udp_port').value || '514'
+            })
+        });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        if (data.success) {
+            msgEl.classList.add('text-green-400');
+            msgEl.classList.remove('text-red-400');
+            msgEl.textContent = 'Syslog settings saved.';
+        } else {
+            msgEl.classList.add('text-red-400');
+            msgEl.classList.remove('text-green-400');
+            msgEl.textContent = data.message || 'Failed to save.';
+        }
+    } catch (err) {
+        msgEl.classList.remove('hidden');
+        msgEl.classList.add('text-red-400');
+        msgEl.textContent = 'Network error.';
+    }
+});
+
+/* ---------- MISP helpers ---------- */
+function mispPayload() {
+    return {
+        misp_enabled: document.getElementById('misp_enabled').value,
+        misp_url: document.getElementById('misp_url').value,
+        misp_api_key: document.getElementById('misp_api_key').value,
+        misp_verify_ssl: document.getElementById('misp_verify_ssl').value,
+        misp_last_days: document.getElementById('misp_last_days').value,
+        misp_filter_tags: document.getElementById('misp_filter_tags').value,
+        misp_filter_types: document.getElementById('misp_filter_types').value,
+        misp_published_only: document.getElementById('misp_published_only').value,
+        misp_default_ttl: document.getElementById('misp_default_ttl').value,
+        misp_sync_user: document.getElementById('misp_sync_user').value,
+        misp_pull_interval: document.getElementById('misp_pull_interval').value,
+        misp_exclude_from_champs: document.getElementById('misp_exclude_from_champs').value,
+    };
+}
+
+function showMispMsg(text, ok) {
+    var el = document.getElementById('mispMessage');
+    el.classList.remove('hidden', 'text-green-400', 'text-red-400', 'text-yellow-400');
+    el.classList.add(ok ? 'text-green-400' : 'text-red-400');
+    el.textContent = text;
+}
+
+/* ---------- MISP save ---------- */
+document.getElementById('mispForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    try {
+        var res = await fetch('/api/admin/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(mispPayload())
+        });
+        var data = await res.json();
+        showMispMsg(data.success ? 'MISP settings saved.' : (data.message || 'Failed to save.'), data.success);
+    } catch (err) {
+        showMispMsg('Network error.', false);
+    }
+});
+
+/* ---------- MISP test connection ---------- */
+document.getElementById('mispTestBtn').addEventListener('click', async function() {
+    showMispMsg('Testing connection...', true);
+    document.getElementById('mispMessage').classList.remove('text-green-400');
+    document.getElementById('mispMessage').classList.add('text-yellow-400');
+    try {
+        var res = await fetch('/api/admin/misp/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                misp_url: document.getElementById('misp_url').value,
+                misp_api_key: document.getElementById('misp_api_key').value,
+                misp_verify_ssl: document.getElementById('misp_verify_ssl').value,
+            })
+        });
+        var data = await res.json();
+        showMispMsg(data.message || (data.success ? 'Connected!' : 'Failed'), data.success);
+    } catch (err) {
+        showMispMsg('Network error.', false);
+    }
+});
+
+/* ---------- MISP sync now ---------- */
+document.getElementById('mispSyncBtn').addEventListener('click', async function() {
+    var ok = await appConfirm({ title: 'MISP Sync', message: 'Run MISP sync now? New IOCs will be imported.', okText: 'Run Sync' });
+    if (!ok) return;
+    showMispMsg('Syncing...', true);
+    document.getElementById('mispMessage').classList.remove('text-green-400');
+    document.getElementById('mispMessage').classList.add('text-yellow-400');
+    try {
+        var res = await fetch('/api/admin/misp/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        var data = await res.json();
+        var msg = data.message || (data.success ? 'Sync complete.' : 'Sync failed.');
+        if (data.data && data.data.added !== undefined) {
+            msg += ' (added: ' + data.data.added + ', skipped: ' + data.data.skipped + ', errors: ' + data.data.errors + ')';
+        }
+        showMispMsg(msg, data.success);
+    } catch (err) {
+        showMispMsg('Network error.', false);
+    }
+});
+</script>
+{% endblock %}

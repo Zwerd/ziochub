@@ -7,16 +7,16 @@ Type=simple
 User=threatgate
 Group=threatgate
 WorkingDirectory=/opt/threatgate
-ExecStart=/opt/threatgate/venv/bin/gunicorn --workers 3 --bind 0.0.0.0:8000 --access-logfile - --error-logfile - app:app
+ExecStart=/bin/bash /opt/threatgate/start.sh
 Restart=always
 RestartSec=5
 Environment="PATH=/opt/threatgate/venv/bin:/usr/bin:/bin"
 
-# Hardening
+# Hardening (service runs as threatgate; data dir writable)
 NoNewPrivileges=true
-ProtectSystem=strict
 ReadWritePaths=/opt/threatgate/data
-ProtectHome=true
+ProtectHome=read-only
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target

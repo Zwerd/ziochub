@@ -1,0 +1,115 @@
+{% extends "admin/base.html" %}
+{% block title %}Allowlist{% endblock %}
+
+{% block admin_content %}
+<div class="bg-tertiary rounded-xl border border-white/10 p-6">
+    <h3 class="text-lg font-semibold accent-blue mb-2">Allowlist (Known‑Good / Critical Assets)</h3>
+    <p class="text-secondary text-sm mb-4">
+        Indicators in this allowlist are <strong>blocked from submission</strong> across all import methods (manual, bulk, JIRA, CSV, API).
+        Existing IOCs that match will appear as <strong>anomalies</strong> in Feed Pulse.
+        Use this to prevent accidental submissions like <code class="px-1 py-0.5 rounded bg-white/10 text-xs">google.com</code>.
+    </p>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+        <div class="bg-black/20 border border-white/10 rounded-lg p-4">
+            <h4 class="font-semibold mb-2">Supported formats</h4>
+            <ul class="text-secondary text-sm list-disc pl-5 space-y-1">
+                <li><code class="px-1 py-0.5 rounded bg-white/10 text-xs">google.com</code> — suffix match (google.com + all subdomains)</li>
+                <li><code class="px-1 py-0.5 rounded bg-white/10 text-xs">suffix:google.com</code> — explicit suffix match</li>
+                <li><code class="px-1 py-0.5 rounded bg-white/10 text-xs">domain:example.com</code> — exact domain only (no subdomains)</li>
+                <li><code class="px-1 py-0.5 rounded bg-white/10 text-xs">tld:gov</code> — all domains under .gov TLD</li>
+                <li><code class="px-1 py-0.5 rounded bg-white/10 text-xs">8.8.8.8</code> — exact IP address</li>
+                <li><code class="px-1 py-0.5 rounded bg-white/10 text-xs">ip:8.8.8.8</code> — explicit exact IP</li>
+                <li><code class="px-1 py-0.5 rounded bg-white/10 text-xs">10.0.0.0/8</code> — CIDR range (all IPs in subnet)</li>
+                <li><code class="px-1 py-0.5 rounded bg-white/10 text-xs">cidr:10.0.0.0/8</code> — explicit CIDR range</li>
+                <li>Lines starting with <code class="px-1 py-0.5 rounded bg-white/10 text-xs">#</code> are comments.</li>
+            </ul>
+        </div>
+        <div class="bg-black/20 border border-white/10 rounded-lg p-4">
+            <h4 class="font-semibold mb-2">Behavior</h4>
+            <ul class="text-secondary text-sm list-disc pl-5 space-y-1">
+                <li><strong>Submission:</strong> Any IOC matching this list is blocked — no exceptions.</li>
+                <li><strong>Feed Pulse:</strong> Existing Domain/URL IOCs matching this list appear as anomalies.</li>
+                <li><strong>Anomalies:</strong> Separate from allowlist — private IPs, short domains, etc. are always flagged independently.</li>
+                <li>After saving, the server cache is refreshed automatically.</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="flex flex-wrap gap-2 mb-3">
+        <button type="button" id="allowlistReloadBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-accent-green transition">Reload</button>
+        <button type="button" id="allowlistSaveBtn" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save</button>
+        <span id="allowlistStatus" class="text-sm text-secondary ml-auto"></span>
+    </div>
+
+    <textarea id="allowlistTextarea" rows="18" class="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 font-mono text-sm focus:border-cyan-400"
+              placeholder="# Example&#10;suffix:google.com&#10;tld:gov&#10;10.0.0.0/8"></textarea>
+</div>
+
+<script>
+(function() {
+    const ta = document.getElementById('allowlistTextarea');
+    const statusEl = document.getElementById('allowlistStatus');
+    const reloadBtn = document.getElementById('allowlistReloadBtn');
+    const saveBtn = document.getElementById('allowlistSaveBtn');
+    function setStatus(msg, ok) {
+        if (!statusEl) return;
+        statusEl.textContent = msg || '';
+        statusEl.classList.toggle('text-green-400', !!ok);
+        statusEl.classList.toggle('text-red-400', ok === false);
+        statusEl.classList.toggle('text-secondary', ok == null);
+    }
+    async function loadAllowlist() {
+        setStatus('Loading...', null);
+        try {
+            const res = await fetch('/api/admin/allowlist');
+            const data = await res.json();
+            if (data.success) {
+                if (ta) ta.value = (data.raw || '');
+                setStatus('Loaded.', true);
+            } else {
+                setStatus(data.message || 'Failed to load.', false);
+            }
+        } catch (e) {
+            setStatus('Network error.', false);
+        }
+    }
+    async function reloadAllowlist() {
+        setStatus('Reloading...', null);
+        try {
+            const res = await fetch('/api/admin/allowlist/reload', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+            const data = await res.json();
+            if (data.success) {
+                setStatus('Reloaded.', true);
+                await loadAllowlist();
+            } else setStatus(data.message || 'Failed to reload.', false);
+        } catch (e) {
+            setStatus('Network error.', false);
+        }
+    }
+    async function saveAllowlist() {
+        if (!ta) return;
+        setStatus('Saving...', null);
+        try {
+            const res = await fetch('/api/admin/allowlist', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ raw: ta.value })
+            });
+            const data = await res.json();
+            if (data.success) {
+                setStatus('Saved.', true);
+            } else {
+                setStatus(data.message || 'Failed to save.', false);
+            }
+        } catch (e) {
+            setStatus('Network error.', false);
+        }
+    }
+    if (reloadBtn) reloadBtn.addEventListener('click', reloadAllowlist);
+    if (saveBtn) saveBtn.addEventListener('click', saveAllowlist);
+    loadAllowlist();
+})();
+</script>
+{% endblock %}
+

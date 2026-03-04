@@ -1,0 +1,104 @@
+{% extends "admin/base.html" %}
+{% block title %}Certificate (SSL/TLS){% endblock %}
+
+{% block admin_content %}
+<div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+    <h3 class="text-lg font-semibold accent-blue mb-2">SSL / TLS Certificate</h3>
+    <p class="text-secondary text-sm mb-4">Use a certificate signed by your local CA so users can browse over HTTPS and avoid MITM. Paste or upload the server certificate and private key (PEM). Optional: CA certificate for chain.</p>
+
+    <div id="certStatus" class="mb-6 p-4 rounded-lg border border-white/10 bg-black/20 text-sm">
+        <span class="font-semibold text-secondary">Current status:</span>
+        {% if cert_status.cert_present and cert_status.key_present %}
+        <span class="text-green-400">Certificate and key are configured.</span>
+        {% if cert_status.expiry_message %}
+        <span class="text-secondary">Expires: {{ cert_status.expiry_message }}</span>
+        {% endif %}
+        {% if cert_status.ca_present %}
+        <span class="text-secondary">CA bundle present.</span>
+        {% endif %}
+        {% elif cert_status.error %}
+        <span class="text-amber-400">Certificate present; could not read expiry ({{ cert_status.error }}).</span>
+        {% else %}
+        <span class="text-amber-400">No certificate configured. Add one below to enable HTTPS.</span>
+        {% endif %}
+    </div>
+
+    <form id="certForm" class="space-y-4">
+        <div>
+            <label for="cert_pem" class="block text-sm font-semibold text-secondary mb-1">Server certificate (PEM)</label>
+            <textarea id="cert_pem" name="cert_pem" rows="8" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
+                      class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green"></textarea>
+            <p class="text-xs text-secondary mt-1">Paste the certificate issued by your local CA (e.g. after signing a CSR with your CA).</p>
+        </div>
+        <div>
+            <label for="key_pem" class="block text-sm font-semibold text-secondary mb-1">Private key (PEM)</label>
+            <textarea id="key_pem" name="key_pem" rows="6" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"
+                      class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green"></textarea>
+            <p class="text-xs text-secondary mt-1">The private key that matches the certificate. Stored with restricted permissions.</p>
+        </div>
+        <div>
+            <label for="ca_pem" class="block text-sm font-semibold text-secondary mb-1">CA certificate (PEM) — optional</label>
+            <textarea id="ca_pem" name="ca_pem" rows="4" placeholder="-----BEGIN CERTIFICATE-----&#10;... (optional) &#10;-----END CERTIFICATE-----"
+                      class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green"></textarea>
+            <p class="text-xs text-secondary mt-1">Optional: your local CA certificate or chain for clients that do not trust it yet.</p>
+        </div>
+        <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Certificate</button>
+    </form>
+    <div id="certMessage" class="mt-4 hidden text-sm"></div>
+
+    <div class="mt-6 p-4 rounded-lg border border-white/10 bg-black/20 text-sm text-secondary">
+        <p class="font-semibold text-primary mb-2">After saving</p>
+        <ul class="list-disc list-inside space-y-1">
+            <li>Restart the application so it (or your reverse proxy) uses the certificate for HTTPS.</li>
+            <li>If using a reverse proxy (e.g. nginx), point its <code class="px-1 rounded bg-white/10">ssl_certificate</code> and <code class="px-1 rounded bg-white/10">ssl_certificate_key</code> to <code class="px-1 rounded bg-white/10">data/ssl/cert.pem</code> and <code class="px-1 rounded bg-white/10">data/ssl/key.pem</code>.</li>
+            <li>Distribute your CA certificate to clients (or add it to the system trust store) so browsers do not show certificate warnings.</li>
+        </ul>
+    </div>
+</div>
+<script>
+(function() {
+    var form = document.getElementById('certForm');
+    var msgEl = document.getElementById('certMessage');
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        msgEl.classList.add('hidden');
+        var cert = document.getElementById('cert_pem').value.trim();
+        var key = document.getElementById('key_pem').value.trim();
+        var ca = document.getElementById('ca_pem').value.trim();
+        if (!cert || !key) {
+            msgEl.classList.remove('hidden');
+            msgEl.classList.add('text-red-400');
+            msgEl.textContent = 'Certificate and private key are required.';
+            return;
+        }
+        try {
+            var res = await fetch('/api/admin/certificate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cert_pem: cert, key_pem: key, ca_pem: ca || '' })
+            });
+            var data = await res.json();
+            msgEl.classList.remove('hidden');
+            if (data.success) {
+                msgEl.classList.add('text-green-400');
+                msgEl.classList.remove('text-red-400');
+                msgEl.textContent = data.message || 'Certificate saved.';
+                var statusEl = document.getElementById('certStatus');
+                if (data.certificate && data.certificate.cert_present && data.certificate.key_present) {
+                    statusEl.innerHTML = '<span class="font-semibold text-secondary">Current status:</span> <span class="text-green-400">Certificate and key are configured.</span>' +
+                        (data.certificate.expiry_message ? ' <span class="text-secondary">Expires: ' + data.certificate.expiry_message + '</span>' : '');
+                }
+            } else {
+                msgEl.classList.add('text-red-400');
+                msgEl.classList.remove('text-green-400');
+                msgEl.textContent = data.message || 'Failed to save.';
+            }
+        } catch (err) {
+            msgEl.classList.remove('hidden');
+            msgEl.classList.add('text-red-400');
+            msgEl.textContent = 'Network error.';
+        }
+    });
+})();
+</script>
+{% endblock %}

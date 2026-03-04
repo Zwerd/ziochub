@@ -5,19 +5,28 @@ MIGRATION: Before first run with SQLite, manually backup your data/ folder:
     - Copy the entire data/ directory (e.g. data/ -> data_backup_YYYYMMDD/)
     - Migration runs once on startup when the DB is empty and imports from data/Main/*.txt and data/Main/yara.txt
 """
+import json
 import os
-import re
-import csv
-import io
-import base64
-import ipaddress
+
 import logging
+import logging.handlers
+import time
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from flask import Flask, render_template, request, jsonify, Response
+from urllib.parse import urlparse
+from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask_login import LoginManager, current_user
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func, UniqueConstraint, text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import joinedload
+from sqlalchemy import func, text
+from sqlalchemy.exc import IntegrityError, OperationalError
+
+from constants import DEFAULT_IOC_LIMIT, DEFAULT_PAGE_SIZE, IOC_FILES, VERSION
+from extensions import db
+
+try:
+    import config as _config
+except ImportError:
+    _config = None
 
 # Try to import geoip2, but don't fail if not available
 try:
@@ -29,7 +38,7 @@ except ImportError:
 
 # Directory paths — must be defined before app (data/ is SMB share, holds DB and IOC data)
 _base_dir = os.path.dirname(os.path.abspath(__file__))
-_data_dir = os.path.join(_base_dir, 'data')
+_data_dir = (_config and _config.DATA_DIR) or os.path.join(_base_dir, 'data')
 # Resolve data/Main so it works on case-sensitive FS (e.g. "Main" vs "main")
 _main_candidate = os.path.join(_data_dir, 'Main')
 if os.path.isdir(_main_candidate):
@@ -42,36 +51,216 @@ else:
     else:
         DATA_MAIN = _main_candidate  # use default and create below
 DATA_YARA = os.path.join(_data_dir, 'YARA')
+DATA_YARA_PENDING = os.path.join(_data_dir, 'YARA_pending')
 ALLOWLIST_FILE = os.path.join(_data_dir, 'allowlist.txt')
+PLAYBOOK_CUSTOM_FILE = os.path.join(_data_dir, 'playbook_custom.json')
+SSL_DIR = os.path.join(_data_dir, 'ssl')
+SSL_CERT_FILE = os.path.join(SSL_DIR, 'cert.pem')
+SSL_KEY_FILE = os.path.join(SSL_DIR, 'key.pem')
+SSL_CA_FILE = os.path.join(SSL_DIR, 'ca.pem')
 GEOIP_DB_PATH = os.path.join(_data_dir, 'GeoLite2-City.mmdb')
 os.makedirs(DATA_MAIN, exist_ok=True)
 os.makedirs(DATA_YARA, exist_ok=True)
+os.makedirs(DATA_YARA_PENDING, exist_ok=True)
+os.makedirs(SSL_DIR, exist_ok=True)
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', os.urandom(32).hex())
-app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
-# SQLite database under data/ (SMB share)
-_db_path = os.path.join(_data_dir, 'threatgate.db')
+
+
+def _get_secret_key():
+    """Return a stable SECRET_KEY shared across all Gunicorn workers.
+
+    Priority: config.py → SECRET_KEY env var → persistent file on disk.
+    A random key is generated once and saved so every worker (and every
+    restart) uses the same value.
+    """
+    key = (_config and _config.SECRET_KEY) or os.environ.get('SECRET_KEY')
+    if key:
+        return key
+    key_file = os.path.join(_data_dir, '.secret_key')
+    try:
+        with open(key_file, 'r') as f:
+            stored = f.read().strip()
+        if stored:
+            return stored
+    except FileNotFoundError:
+        pass
+    new_key = os.urandom(32).hex()
+    os.makedirs(_data_dir, exist_ok=True)
+    with open(key_file, 'w') as f:
+        f.write(new_key)
+    try:
+        os.chmod(key_file, 0o600)
+    except OSError:
+        pass
+    return new_key
+
+
+app.config['SECRET_KEY'] = _get_secret_key()
+app.config['MAX_CONTENT_LENGTH'] = (_config and getattr(_config, 'MAX_CONTENT_LENGTH', None)) or 16 * 1024 * 1024
+_db_path = (_config and getattr(_config, 'DB_PATH', None)) or os.path.join(_data_dir, 'threatgate.db')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + _db_path
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
+app.config['DATA_YARA'] = DATA_YARA
+app.config['DATA_YARA_PENDING'] = DATA_YARA_PENDING
+db.init_app(app)
 
-# --- Audit Logger ---
-_audit_logger = logging.getLogger('threatgate.audit')
-_audit_handler = logging.FileHandler(os.path.join(_data_dir, 'audit.log'))
-_audit_handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
-_audit_logger.addHandler(_audit_handler)
-_audit_logger.setLevel(logging.INFO)
+# --- Blueprints ---
+from routes.feeds import bp as feeds_bp
+from routes.admin import bp as admin_bp, pages_bp as admin_pages_bp
+from routes.yara import bp as yara_bp
+from routes.campaigns import bp as campaigns_bp
+from routes.champs import bp as champs_bp
+from routes.auth import bp as auth_bp
+from routes.search import bp as search_bp
+from routes.stats import stats_bp
+from routes.ioc import bp as ioc_bp
+from routes.reports import reports_bp
+app.register_blueprint(feeds_bp)
+app.register_blueprint(admin_bp)
+app.register_blueprint(admin_pages_bp)
+app.register_blueprint(yara_bp)
+app.register_blueprint(campaigns_bp)
+app.register_blueprint(champs_bp)
+app.register_blueprint(auth_bp)
+app.register_blueprint(search_bp)
+app.register_blueprint(stats_bp)
+app.register_blueprint(ioc_bp)
+app.register_blueprint(reports_bp)
+
+# --- Flask-Login ---
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'auth.login'
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return db.session.get(User, int(user_id)) if user_id else None
+
+
+@app.context_processor
+def _inject_auth_context():
+    """Inject profile, display_name, avatar_url, version into all templates (for base_app, admin, etc.)."""
+    ctx = {'version': VERSION}
+    if not current_user.is_authenticated:
+        ctx.update({'profile': None, 'display_name': None, 'avatar_url': None})
+    else:
+        profile = UserProfile.query.filter_by(user_id=current_user.id).first()
+        display_name = (profile and profile.display_name) or current_user.username
+        avatar_url = url_for('static', filename=profile.avatar_path) if profile and profile.avatar_path else None
+        ctx.update({'profile': profile, 'display_name': display_name, 'avatar_url': avatar_url})
+    return ctx
+
+
+_CHANGE_PW_ALLOWED = frozenset(('/change-password', '/logout', '/static'))
+
+@app.before_request
+def _enforce_password_change():
+    """Block all navigation for users that must change their password."""
+    if (current_user.is_authenticated
+            and getattr(current_user, 'must_change_password', False)
+            and not any(request.path.startswith(p) for p in _CHANGE_PW_ALLOWED)):
+        # API calls expect JSON; redirect would cause "Unexpected token '<'" when parsing response
+        if request.path.startswith('/api/'):
+            return jsonify({'success': False, 'message': 'Password change required', 'require_password_change': True}), 403
+        return redirect(url_for('auth.change_password'))
+
+
+# --- Audit Logger: CEF format, local 48h rotation, optional UDP syslog ---
+# Initialized lazily in audit_log (needs _get_setting)
+_cef_logger_inited = False
+
+
+def _api_error(message: str, status: int = 500):
+    """Return a consistent JSON error response. Use for API endpoints."""
+    return jsonify({'success': False, 'message': message}), status
+
+
+def _api_ok(data=None, message=None):
+    """Return a consistent JSON success response (status 200). Use for API endpoints."""
+    body = {'success': True}
+    if message is not None:
+        body['message'] = message
+    if data is not None and isinstance(data, dict):
+        body.update(data)
+    return jsonify(body), 200
+
+
+def _commit_with_retry(max_attempts=3):
+    """Commit the current session; retry on SQLite 'database is locked' (offline-safe)."""
+    for attempt in range(max_attempts):
+        try:
+            db.session.commit()
+            return
+        except OperationalError as e:
+            err = str(e).lower()
+            if 'locked' not in err and 'busy' not in err:
+                raise
+            db.session.rollback()
+            if attempt + 1 == max_attempts:
+                raise
+            time.sleep(0.05 * (attempt + 1))
 
 def audit_log(action: str, detail: str = ''):
-    """Write a structured line to the audit log file."""
+    """Write CEF-formatted audit log (local 48h rotation + optional UDP syslog)."""
+    global _cef_logger_inited
     client_ip = request.remote_addr if request else '-'
-    _audit_logger.info(f'{action} | ip={client_ip} | {detail}')
+    user_id = None
+    username = None
+    try:
+        if current_user.is_authenticated:
+            user_id = current_user.id
+            username = current_user.username
+    except Exception:
+        pass
+    try:
+        if not _cef_logger_inited:
+            from utils.cef_logger import init_cef_logger
+            udp_enabled = _get_setting('syslog_udp_enabled', 'false').lower() == 'true'
+            udp_host = _get_setting('syslog_udp_host', '').strip() if udp_enabled else ''
+            udp_port = int(_get_setting('syslog_udp_port', '514') or '514')
+            init_cef_logger(
+                os.path.join(_data_dir, 'audit_cef.log'),
+                udp_host,
+                udp_port,
+            )
+            _cef_logger_inited = True
+        from utils.cef_logger import cef_log
+        cef_log(action=action, detail=detail, client_ip=client_ip, user_id=user_id, username=username)
+    except Exception:
+        logging.exception('audit_log failed')
 
 
-def _utcnow():
-    """Return current UTC time as a naive datetime (drop tzinfo for SQLite compat)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+def _log_champs_event(event_type, user_id=None, payload=None):
+    """Log activity event for Champs ticker and scoring."""
+    try:
+        ev = ActivityEvent(
+            event_type=event_type,
+            user_id=user_id,
+            payload=json.dumps(payload) if payload is not None else None,
+        )
+        db.session.add(ev)
+        _commit_with_retry()
+    except Exception:
+        db.session.rollback()
+
+
+def _log_ioc_history(ioc_type: str, ioc_value: str, event_type: str, username: str = None, payload: dict = None):
+    """Append one event to ioc_history (created/deleted). Caller must commit after."""
+    try:
+        uname = (username or '').strip() or None
+        payload_json = json.dumps(payload) if payload else None
+        db.session.add(IocHistory(
+            ioc_type=ioc_type,
+            ioc_value=ioc_value.strip(),
+            event_type=event_type,
+            username=uname,
+            payload=payload_json,
+        ))
+    except Exception:
+        logging.exception('_log_ioc_history failed')
+
 
 # Load GeoIP database if available
 geoip_reader = None
@@ -81,51 +270,35 @@ if GEOIP_AVAILABLE and os.path.exists(GEOIP_DB_PATH):
     except Exception:
         geoip_reader = None
 
-# File mapping for IOC types (YARA log lives in Main for Live Feed visibility).
-# All IOC data is stored under DATA_MAIN (data/Main/): hash.txt, email.txt, url.txt, etc.
+# IOC_FILES from constants; FILE_YARA for legacy
 FILE_YARA = os.path.join(DATA_MAIN, 'yara.txt')
-IOC_FILES = {
-    'IP': 'ip.txt',
-    'Domain': 'domain.txt',
-    'Hash': 'hash.txt',   # data/Main/hash.txt
-    'Email': 'email.txt', # data/Main/email.txt
-    'URL': 'url.txt',     # data/Main/url.txt
-    'YARA': 'yara.txt'
-}
-
-# --- SQLAlchemy models ---
-class Campaign(db.Model):
-    __tablename__ = 'campaigns'
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(255), unique=True, nullable=False)
-    description = db.Column(db.Text, nullable=True)
-    created_at = db.Column(db.DateTime, default=_utcnow)
-    iocs = db.relationship('IOC', backref='campaign', lazy=True, foreign_keys='IOC.campaign_id')
 
 
-class IOC(db.Model):
-    __tablename__ = 'iocs'
-    id = db.Column(db.Integer, primary_key=True)
-    type = db.Column(db.String(50), nullable=False)
-    value = db.Column(db.String(1024), nullable=False)
-    analyst = db.Column(db.String(255), nullable=False)
-    ticket_id = db.Column(db.String(255), nullable=True)
-    comment = db.Column(db.Text, nullable=True)
-    expiration_date = db.Column(db.DateTime, nullable=True)  # NULL = Permanent
-    created_at = db.Column(db.DateTime, default=_utcnow)
-    campaign_id = db.Column(db.Integer, db.ForeignKey('campaigns.id'), nullable=True)
-    __table_args__ = (UniqueConstraint('type', 'value', name='u_type_value'),)
+def _resolve_analyst_to_user(analyst_or_id):
+    """Resolve analyst (username str or user_id int) to (user_id, username). Returns None if not found or inactive."""
+    if analyst_or_id is None:
+        return None
+    if isinstance(analyst_or_id, str):
+        s = analyst_or_id.strip()
+        if not s:
+            return None
+        if s.isdigit():
+            u = db.session.get(User, int(s))
+            return (u.id, u.username.lower()) if u and getattr(u, 'is_active', True) else None
+        u = User.query.filter(func.lower(User.username) == s.lower()).first()
+        return (u.id, u.username.lower()) if u and getattr(u, 'is_active', True) else None
+    if isinstance(analyst_or_id, int):
+        u = db.session.get(User, analyst_or_id)
+        return (u.id, u.username.lower()) if u and getattr(u, 'is_active', True) else None
+    return None
 
 
-class YaraRule(db.Model):
-    __tablename__ = 'yara_rules'
-    id = db.Column(db.Integer, primary_key=True)
-    filename = db.Column(db.String(255), unique=True, nullable=False)
-    analyst = db.Column(db.String(255), nullable=False)
-    ticket_id = db.Column(db.String(255), nullable=True)
-    comment = db.Column(db.Text, nullable=True)
-    uploaded_at = db.Column(db.DateTime, default=_utcnow)
-    campaign_id = db.Column(db.Integer, db.ForeignKey('campaigns.id'), nullable=True)
+from models import (
+    Campaign, IOC, IocHistory, IocNote, YaraRule, SanityExclusion,
+    User, UserProfile, UserSession, SystemSetting,
+    TeamGoal, ActivityEvent, ChampRankSnapshot,
+    _utcnow,
+)
 
 
 def get_ioc_filepath(ioc_type):
@@ -135,124 +308,191 @@ def get_ioc_filepath(ioc_type):
         return None
     return os.path.join(DATA_MAIN, filename)
 
-# Strict regex patterns for validation
-REGEX_PATTERNS = {
-    'IP': r'^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$',
-    'Domain': r'^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$',
-    'Hash': r'^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$',  # MD5, SHA1, SHA256
-    'Email': r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
-    'URL': r'^https?://(?:[-\w.])+(?:\:[0-9]+)?(?:/(?:[\w/_.])*(?:\?(?:[\w&=%.])*)?(?:\#(?:[\w.])*)?)?$'
+from utils.validation import (
+    AUTO_DETECT_PATTERNS,
+    PRIORITY_ORDER,
+    REGEX_PATTERNS,
+    validate_ioc,
+    detect_ioc_type,
+)
+from utils.refanger import refanger, sanitize_comment
+from utils.ioc_decode import prepare_text_for_ioc_extraction
+from utils.allowlist import load_allowlist, check_allowlist as _check_allowlist
+from utils.yara_utils import yara_safe_path
+from utils.validation_warnings import get_ioc_warnings
+from utils.validation_messages import (
+    MSG_MISSING_FIELDS,
+    MSG_MISSING_FIELDS_TYPE_VALUE,
+    MSG_INVALID_IOC_TYPE,
+    MSG_IOC_EXISTS,
+    MSG_INVALID_FILENAME,
+    MSG_FILENAME_REQUIRED,
+    MSG_FILE_NOT_FOUND,
+)
+from utils.sanity_checks import (
+    check_critical as check_sanity_critical,
+    get_sanity_warnings,
+    get_feed_pulse_anomalies,
+)
+from utils.auth import hash_password, verify_password
+from utils.decorators import login_required, admin_required
+from utils.ldap_auth import try_ldap_bind, try_ldap_mock_dev, check_ldap_reachable, is_dev_mode
+from utils.champs import (
+    compute_analyst_scores,
+    compute_yara_quality_points,
+    compute_ioc_points,
+    get_rank_trend,
+    get_rank_change_events,
+    save_daily_rank_snapshots,
+    compute_team_goal_current,
+    compute_team_goal_for_week,
+    get_analyst_detail,
+    _week_start,
+    _get_badges,
+    _get_level_and_xp,
+    _to_date,
+    YARA_DEFAULT, YARA_MIN, YARA_MAX, DELETION,
+)
+
+
+BADGE_META = {
+    'on_fire':         {'emoji': '🔥', 'label': 'On Fire',         'description': '5-day submission streak'},
+    'warm_streak':     {'emoji': '🌡️', 'label': 'Warm Streak',     'description': '3-4 day streak'},
+    'night_owl':       {'emoji': '🦉', 'label': 'Night Owl',       'description': 'Activity between 22:00-04:00'},
+    'early_bird':      {'emoji': '🌞', 'label': 'Early Bird',      'description': 'Activity between 05:00-07:00'},
+    'weekend_warrior': {'emoji': '🗓️', 'label': 'Weekend Warrior', 'description': 'Activity on Friday or Saturday'},
+    'rare_find':       {'emoji': '💎', 'label': 'Rare Find',       'description': 'First-ever in system: new country, TLD, or email domain'},
+    'dedicated':       {'emoji': '💪', 'label': 'Dedicated',       'description': '30+ IOCs total'},
+    'veteran':         {'emoji': '🎖️', 'label': 'Veteran',         'description': '80+ IOCs total'},
+    'clean_slate':     {'emoji': '✨', 'label': 'Clean Slate',     'description': 'Removed at least one expired IOC'},
+    'janitor':         {'emoji': '🧹', 'label': 'Janitor',         'description': '5+ expired IOCs removed'},
+    'cleanup_crew':    {'emoji': '🧼', 'label': 'Cleanup Crew',    'description': '15+ expired IOCs removed'},
+    'team_player':     {'emoji': '🤝', 'label': 'Team Player',     'description': 'At least one IOC linked to a campaign'},
+    'campaign_master': {'emoji': '🎯', 'label': 'Campaign Master', 'description': '10+ IOCs linked to campaigns'},
+    'yara_rookie':     {'emoji': '📜', 'label': 'YARA Rookie',     'description': 'Uploaded at least one YARA rule'},
+    'yara_master':     {'emoji': '👑', 'label': 'YARA Master',     'description': '3+ YARA rules'},
+    'yara_legend':     {'emoji': '🏆', 'label': 'YARA Legend',     'description': '8+ YARA rules'},
+    'hash_hunter':     {'emoji': '🔐', 'label': 'Hash Hunter',     'description': '10+ hashes'},
+    'domain_scout':    {'emoji': '🌐', 'label': 'Domain Scout',    'description': '15+ domains'},
+    'ip_tracker':      {'emoji': '📍', 'label': 'IP Tracker',      'description': '25+ IPs'},
+    'url_surfer':      {'emoji': '🏄', 'label': 'URL Surfer',      'description': '10+ URLs'},
+    'phish_buster':    {'emoji': '🎣', 'label': 'Phish Buster',    'description': '5+ emails'},
+    'triple_threat':   {'emoji': '🎪', 'label': 'Triple Threat',   'description': 'Submitted at least 3 IOC types'},
+    'all_rounder':     {'emoji': '🌟', 'label': 'All-Rounder',     'description': 'Submitted all 5 IOC types'},
+    'consistent':      {'emoji': '📅', 'label': 'Consistent',      'description': 'Activity on 7+ different days'},
+    'ever_present':    {'emoji': '⚡', 'label': 'Ever Present',    'description': 'Activity on 15+ different days'},
 }
 
-# Auto-detection patterns (more lenient for CSV parsing)
-# Domain uses (?<!@) so e.g. user@example.com is not matched as Domain (only as Email)
-AUTO_DETECT_PATTERNS = {
-    'IP': r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b',
-    'Domain': r'(?<!@)\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}\b',
-    'Hash': r'\b[a-fA-F0-9]{32}\b|\b[a-fA-F0-9]{40}\b|\b[a-fA-F0-9]{64}\b',
-    'Email': r'\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b',
-    'URL': r'https?://(?:[-\w.])+(?:\:[0-9]+)?(?:/(?:[\w/_.])*(?:\?(?:[\w&=%.])*)?(?:\#(?:[\w.])*)?)?'
-}
 
-# Detection priority: check more specific types first so e.g. user@example.com is Email, not Domain
-PRIORITY_ORDER = ['URL', 'Email', 'IP', 'Hash', 'Domain']
-
-
-def refanger(value):
-    """
-    Advanced input cleaning (Refanger) - cleans common IOC obfuscation patterns.
-    Returns: (cleaned_value, was_changed)
-    """
-    if not value:
-        return value, False
-    
-    original = value
-    cleaned = value
-    
-    # Replace obfuscated protocols
-    cleaned = re.sub(r'hxxp[s]?', lambda m: 'http' + ('s' if 's' in m.group(0) else ''), cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r'h\*\*p[s]?', lambda m: 'http' + ('s' if 's' in m.group(0) else ''), cleaned, flags=re.IGNORECASE)
-    
-    # Replace obfuscated dots
-    cleaned = re.sub(r'\[\.\]', '.', cleaned)
-    cleaned = re.sub(r'\(\.\)', '.', cleaned)
-    cleaned = re.sub(r'\[dot\]', '.', cleaned, flags=re.IGNORECASE)
-    
-    # Remove whitespace inside IPs (e.g., "1. 1. 1. 1" -> "1.1.1.1")
-    ip_pattern = r'(\d+)\s*\.\s*(\d+)\s*\.\s*(\d+)\s*\.\s*(\d+)'
-    cleaned = re.sub(ip_pattern, r'\1.\2.\3.\4', cleaned)
-    
-    # Strip common prefixes like "ip: " or "IP: "
-    cleaned = re.sub(r'^(ip|IP|Ip):\s*', '', cleaned)
-    
-    was_changed = cleaned != original
-    return cleaned.strip(), was_changed
+def _compute_user_badges(user_id, username, scoring_method=None):
+    """Compute current badge keys for a user. Lightweight wrapper around _get_badges."""
+    if scoring_method is None:
+        scoring_method = _get_setting('champs_scoring_method', '1')
+    analyst_lower = (username or '').lower()
+    analyst_daily = defaultdict(int)
+    ioc_rows = db.session.query(IOC.created_at, IOC.type, IOC.campaign_id).filter(
+        func.lower(IOC.analyst) == analyst_lower
+    ).all()
+    for created_at, ioc_type, campaign_id in ioc_rows:
+        d = _to_date(created_at)
+        if d:
+            analyst_daily[d] = analyst_daily.get(d, 0) + compute_ioc_points(ioc_type, campaign_id)
+    yara_rows = db.session.query(YaraRule.uploaded_at, YaraRule.quality_points).filter(
+        func.lower(YaraRule.analyst) == analyst_lower
+    ).all()
+    for (uploaded_at, qp) in yara_rows:
+        d = _to_date(uploaded_at)
+        if d:
+            pts = max(YARA_MIN, min(YARA_MAX, qp if qp is not None else YARA_DEFAULT))
+            analyst_daily[d] = analyst_daily.get(d, 0) + pts
+    analyst_deletions = {analyst_lower: 0}
+    if user_id:
+        del_rows = db.session.query(ActivityEvent.payload).filter(
+            ActivityEvent.event_type == 'ioc_deletion', ActivityEvent.user_id == user_id
+        ).all()
+        for (payload,) in del_rows:
+            try:
+                if json.loads(payload or '{}').get('was_expired'):
+                    analyst_deletions[analyst_lower] += 1
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return set(_get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id,
+                           {analyst_lower: dict(analyst_daily)}, analyst_deletions,
+                           scoring_method=scoring_method))
 
 
-def sanitize_comment(comment):
-    """Remove newlines and excessive whitespace from comments."""
-    if not comment:
-        return ''
-    # Replace newlines and carriage returns with spaces
-    sanitized = re.sub(r'[\r\n]+', ' ', comment)
-    # Collapse multiple spaces
-    sanitized = re.sub(r'\s+', ' ', sanitized)
-    return sanitized.strip()
+def _detect_new_badges(old_badges, new_badges):
+    """Return list of badge detail dicts for newly earned badges."""
+    earned = new_badges - old_badges
+    if not earned:
+        return []
+    return [{'key': k, **BADGE_META.get(k, {'emoji': '🏅', 'label': k, 'description': ''})} for k in earned]
 
 
-def load_allowlist():
-    """Load allowlist entries from file."""
-    allowlist = []
-    if os.path.exists(ALLOWLIST_FILE):
-        try:
-            with open(ALLOWLIST_FILE, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        allowlist.append(line)
-        except Exception as e:
-            print(f"Error loading allowlist: {e}")
-    return allowlist
+def _capture_champs_before(user_id, username):
+    """Snapshot badges, level, and rank before IOC submission."""
+    scoring_method = _get_setting('champs_scoring_method', '1')
+    badges = _compute_user_badges(user_id, username, scoring_method)
+    rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=scoring_method)
+    analyst_lower = (username or '').lower()
+    score, rank = 0, 0
+    for r in rows:
+        if r.get('user_id') == user_id or r['analyst'] == analyst_lower:
+            score = r['score']
+            rank = r['rank']
+            break
+    level = _get_level_and_xp(score)[0]
+    return {'badges': badges, 'level': level, 'rank': rank, 'score': score, 'scoring_method': scoring_method}
+
+
+def _detect_champs_changes(before, user_id, username):
+    """Compare champs state after IOC submission and return dict with achievement fields."""
+    sm = before['scoring_method']
+    after_badges = _compute_user_badges(user_id, username, sm)
+    rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=sm)
+    analyst_lower = (username or '').lower()
+    score, rank = 0, 0
+    for r in rows:
+        if r.get('user_id') == user_id or r['analyst'] == analyst_lower:
+            score = r['score']
+            rank = r['rank']
+            break
+    level = _get_level_and_xp(score)[0]
+    result = {}
+    new_badges = _detect_new_badges(before['badges'], after_badges)
+    if new_badges:
+        result['new_badges'] = new_badges
+    if level > before['level']:
+        result['level_up'] = {'old_level': before['level'], 'new_level': level}
+    if 0 < rank < before['rank']:
+        result['rank_up'] = {'old_rank': before['rank'], 'new_rank': rank}
+    return result
+
+
+def _auto_ticket_id(user_id):
+    """Generate ticket ID in format XY-YYYYMMDD-HHMM from user's display name initials + current timestamp."""
+    initials = 'XX'
+    if user_id:
+        profile = UserProfile.query.filter_by(user_id=user_id).first()
+        name = (profile.display_name if profile and profile.display_name else None)
+        if not name:
+            user = User.query.get(user_id)
+            name = user.username if user else None
+        if name:
+            parts = name.strip().split()
+            if len(parts) >= 2:
+                initials = (parts[0][0] + parts[1][0]).upper()
+            elif len(parts) == 1 and len(parts[0]) >= 2:
+                initials = parts[0][:2].upper()
+            elif len(parts) == 1:
+                initials = (parts[0][0] * 2).upper()
+    now = datetime.now()
+    return f"{initials}-{now.strftime('%Y%m%d')}-{now.strftime('%H%M')}"
 
 
 def check_allowlist(value, ioc_type):
-    """
-    Check if an IOC is in the allowlist (Safety Net).
-    Returns: (is_blocked, reason)
-    """
-    if ioc_type not in ['IP', 'Domain']:
-        return False, None
-    
-    allowlist = load_allowlist()
-    
-    for entry in allowlist:
-        entry = entry.strip()
-        if not entry:
-            continue
-        
-        # Check CIDR ranges
-        if '/' in entry:
-            try:
-                network = ipaddress.ip_network(entry, strict=False)
-                if ioc_type == 'IP':
-                    try:
-                        ip = ipaddress.ip_address(value)
-                        if ip in network:
-                            return True, f"Matches allowlist CIDR: {entry}"
-                    except ValueError:
-                        pass
-            except ValueError:
-                pass
-        else:
-            # Direct match
-            if value.lower() == entry.lower():
-                return True, f"Matches allowlist entry: {entry}"
-            
-            # Domain substring match (for domains)
-            if ioc_type == 'Domain' and entry in value:
-                return True, f"Contains allowlist domain: {entry}"
-    
-    return False, None
+    """Check allowlist using ALLOWLIST_FILE."""
+    return _check_allowlist(value, ioc_type, ALLOWLIST_FILE)
 
 
 def get_country_code(ip_address):
@@ -288,759 +528,307 @@ def calculate_expiration_date(ttl):
     return None
 
 
-def validate_ioc(value, ioc_type):
-    """Validate IOC value against strict regex pattern."""
-    pattern = REGEX_PATTERNS.get(ioc_type)
-    if not pattern:
-        return False
-    return bool(re.match(pattern, value.strip()))
-
-
 def check_ioc_exists(ioc_type, value):
     """Check if an IOC already exists in DB (case-insensitive)."""
     return IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.strip().lower()).first() is not None
 
 
-def detect_ioc_type(value):
-    """Auto-detect IOC type from value. Uses PRIORITY_ORDER so Email is chosen over Domain."""
-    value = value.strip()
-    for ioc_type in PRIORITY_ORDER:
-        pattern = REGEX_PATTERNS.get(ioc_type)
-        if pattern and re.match(pattern, value):
-            return ioc_type
-    return None
+def _compute_rare_find_fields(ioc_type, value):
+    """
+    Compute country_code, tld, email_domain and rare_find_type for Rare Find badge.
+    Returns dict: country_code, tld, email_domain, rare_find_type (one of 'country'|'tld'|'email_domain' or None).
+    """
+    out = {'country_code': None, 'tld': None, 'email_domain': None, 'rare_find_type': None}
+    val = (value or '').strip()
+    if not val:
+        return out
+    if ioc_type == 'IP':
+        cc = get_country_code(val)
+        if cc:
+            out['country_code'] = cc
+            if IOC.query.filter(IOC.country_code == cc).count() == 0:
+                out['rare_find_type'] = 'country'
+    elif ioc_type == 'Domain':
+        if '.' in val:
+            tld = val.split('.')[-1].lower()
+            if tld and len(tld) <= 30:
+                out['tld'] = tld
+                if IOC.query.filter(IOC.tld == tld).count() == 0:
+                    out['rare_find_type'] = 'tld'
+    elif ioc_type == 'URL':
+        try:
+            host = urlparse(val).hostname
+            if host and '.' in host:
+                tld = host.split('.')[-1].lower()
+                if tld and len(tld) <= 30:
+                    out['tld'] = tld
+                    if IOC.query.filter(IOC.tld == tld).count() == 0:
+                        out['rare_find_type'] = 'tld'
+        except Exception:
+            pass
+    elif ioc_type == 'Email':
+        if '@' in val:
+            domain = val.split('@')[-1].lower()
+            if domain and len(domain) <= 250:
+                out['email_domain'] = domain
+                if IOC.query.filter(IOC.email_domain == domain).count() == 0:
+                    out['rare_find_type'] = 'email_domain'
+    return out
+
+
+def _create_ioc(ioc_type, value, analyst, submission_method='single', *,
+                 ticket_id=None, comment=None, expiration_date=None,
+                 campaign_id=None, user_id=None, tags=None, created_at=None,
+                 rare=None):
+    """
+    Build an IOC model instance with all standard fields.
+    `rare` should be a dict from _compute_rare_find_fields or None.
+    """
+    r = rare or {}
+    kwargs = dict(
+        type=ioc_type,
+        value=value.strip() if value else value,
+        analyst=analyst,
+        ticket_id=ticket_id or None,
+        comment=comment or None,
+        expiration_date=expiration_date,
+        campaign_id=campaign_id,
+        user_id=user_id,
+        submission_method=submission_method,
+        country_code=r.get('country_code'),
+        tld=r.get('tld'),
+        email_domain=r.get('email_domain'),
+        rare_find_type=r.get('rare_find_type'),
+    )
+    if tags is not None:
+        kwargs['tags'] = tags
+    if created_at is not None:
+        kwargs['created_at'] = created_at
+    return IOC(**kwargs)
+
+
+def _get_setting(key: str, default: str = '') -> str:
+    """Get system setting by key. Returns default if table missing or DB error."""
+    try:
+        s = SystemSetting.query.filter_by(key=key).first()
+        return (s.value or default) if s else default
+    except OperationalError:
+        try:
+            _ensure_system_settings_table()
+            s = SystemSetting.query.filter_by(key=key).first()
+            return (s.value or default) if s else default
+        except Exception:
+            return default
+
+
+def _set_setting(key: str, value: str) -> None:
+    """Set system setting. No-op if table missing or DB error."""
+    try:
+        s = SystemSetting.query.filter_by(key=key).first()
+        if s:
+            s.value = value
+        else:
+            db.session.add(SystemSetting(key=key, value=value))
+        _commit_with_retry()
+    except OperationalError:
+        try:
+            _ensure_system_settings_table()
+            s = SystemSetting.query.filter_by(key=key).first()
+            if s:
+                s.value = value
+            else:
+                db.session.add(SystemSetting(key=key, value=value))
+            _commit_with_retry()
+        except Exception:
+            pass
+
+
+def _certificate_status():
+    """Return dict: cert_present, key_present, ca_present, expiry_iso, expiry_message, error."""
+    out = {'cert_present': False, 'key_present': False, 'ca_present': False, 'expiry_iso': None, 'expiry_message': None, 'error': None}
+    out['cert_present'] = os.path.isfile(SSL_CERT_FILE)
+    out['key_present'] = os.path.isfile(SSL_KEY_FILE)
+    out['ca_present'] = os.path.isfile(SSL_CA_FILE)
+    if not out['cert_present']:
+        return out
+    try:
+        import subprocess
+        r = subprocess.run(
+            ['openssl', 'x509', '-enddate', '-noout', '-in', SSL_CERT_FILE],
+            capture_output=True, text=True, timeout=5, cwd=_base_dir
+        )
+        if r.returncode == 0 and r.stdout.strip().startswith('notAfter='):
+            # notAfter=Dec 31 23:59:59 2025 GMT
+            out['expiry_iso'] = r.stdout.strip().replace('notAfter=', '').strip()
+            out['expiry_message'] = out['expiry_iso']
+    except Exception as e:
+        out['error'] = str(e)
+    return out
 
 
 @app.route('/')
 def index():
     """Render the main page."""
-    return render_template('index.html')
+    authenticated = current_user.is_authenticated
+    is_admin = authenticated and current_user.is_admin
+    profile = None
+    display_name = None
+    avatar_url = None
+    if authenticated:
+        profile = UserProfile.query.filter_by(user_id=current_user.id).first()
+        display_name = (profile and profile.display_name) or current_user.username
+        if profile and profile.avatar_path:
+            avatar_url = url_for('static', filename=profile.avatar_path)
+    return render_template(
+        'index.html',
+        authenticated=authenticated,
+        is_admin=is_admin,
+        display_name=display_name,
+        avatar_url=avatar_url,
+    )
 
 
-@app.route('/api/submit-ioc', methods=['POST'])
-def submit_ioc():
-    """Handle single IOC submission."""
-    try:
-        data = request.get_json()
-        
-        value = data.get('value', '').strip()
-        ioc_type = data.get('type', '')
-        comment = data.get('comment', '')
-        username = data.get('username', '').strip()
-        ttl = data.get('ttl', 'Permanent')
-        ticket_id = data.get('ticket_id', '').strip()
-        campaign_name = (data.get('campaign_name') or '').strip() or None
-        campaign_id = None
-        if campaign_name:
-            c = Campaign.query.filter_by(name=campaign_name).first()
-            if c:
-                campaign_id = c.id
-        
-        # Validation
-        if not value or not ioc_type or not username:
-            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
-        
-        if ioc_type not in IOC_FILES:
-            return jsonify({'success': False, 'message': 'Invalid IOC type'}), 400
-        
-        # Apply refanger (input cleaning)
-        cleaned_value, was_changed = refanger(value)
-        value = cleaned_value
-        
-        # Validate after cleaning
-        if not validate_ioc(value, ioc_type):
-            return jsonify({'success': False, 'message': f'Invalid {ioc_type} format'}), 400
-        
-        # Check allowlist (Safety Net)
-        is_blocked, reason = check_allowlist(value, ioc_type)
-        if is_blocked:
-            return jsonify({
-                'success': False,
-                'message': f'⛔ CRITICAL ASSET: Block Prevented! {reason}'
-            }), 403
-        
-        # Prevent duplicate IOCs (case-insensitive)
-        if check_ioc_exists(ioc_type, value):
-            return jsonify({'success': False, 'message': 'IOC already exists'}), 409
-        
-        exp_date = calculate_expiration_date(ttl)
-        try:
-            db.session.add(IOC(
-                type=ioc_type,
-                value=value.strip(),
-                analyst=username.strip().lower(),
-                ticket_id=ticket_id or None,
-                comment=sanitize_comment(comment) or None,
-                expiration_date=exp_date,
-                campaign_id=campaign_id
-            ))
-            db.session.commit()
-        except IntegrityError:
-            db.session.rollback()
-            return jsonify({'success': False, 'message': 'IOC already exists'}), 409
-        except Exception as e:
-            db.session.rollback()
-            return jsonify({'success': False, 'message': str(e)}), 500
-        audit_log('IOC_CREATE', f'type={ioc_type} value={value} analyst={username}')
-        response = {'success': True, 'message': f'{ioc_type} IOC submitted successfully'}
-        if was_changed:
-            response['auto_corrected'] = True
-        return jsonify(response)
-            
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+@app.route('/favicon.ico')
+def favicon():
+    """Redirect browser favicon request to static ICO."""
+    return redirect(url_for('static', filename='favicon.ico'))
 
 
-@app.route('/api/upload-yara', methods=['POST'])
-def upload_yara():
-    """Handle YARA rule file upload."""
-    try:
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'message': 'No file provided'}), 400
-        
-        file = request.files['file']
-        ticket_id = request.form.get('ticket_id', '').strip()
-        campaign_name = (request.form.get('campaign_name') or '').strip() or None
-        campaign_id = None
-        if campaign_name:
-            c = Campaign.query.filter_by(name=campaign_name).first()
-            if c:
-                campaign_id = c.id
-        
-        if file.filename == '':
-            return jsonify({'success': False, 'message': 'No file selected'}), 400
-        
-        # Check file extension
-        if not file.filename.lower().endswith('.yar'):
-            return jsonify({'success': False, 'message': 'Invalid file type. Only .yar files are allowed'}), 400
-        
-        # Sanitize filename
-        safe_filename = re.sub(r'[^a-zA-Z0-9._-]', '_', file.filename)
-        if not safe_filename:
-            safe_filename = 'rule.yar'
-        
-        # Append ticket ID to filename if provided
-        if ticket_id:
-            base_name, ext = os.path.splitext(safe_filename)
-            safe_filename = f"{base_name}_T{ticket_id}{ext}"
-        
-        filepath = os.path.join(DATA_YARA, safe_filename)
-        if os.path.exists(filepath):
-            return jsonify({'success': False, 'message': 'Rule name already exists'}), 409
-        if YaraRule.query.filter_by(filename=safe_filename).first():
-            return jsonify({'success': False, 'message': 'Rule name already exists'}), 409
-        
-        # Basic YARA syntax validation before saving
-        file_content = file.read().decode('utf-8', errors='replace')
-        if not re.search(r'\brule\s+\w+', file_content):
-            return jsonify({'success': False, 'message': 'Invalid YARA file: missing "rule <name>" declaration'}), 400
-        if '{' not in file_content or '}' not in file_content:
-            return jsonify({'success': False, 'message': 'Invalid YARA file: missing rule body braces'}), 400
-        # Save validated content
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(file_content)
-        username = request.form.get('username', 'upload').strip().lower() or 'upload'
-        comment = (request.form.get('comment') or '').strip() or 'Uploaded YARA Rule'
-        try:
-            db.session.add(YaraRule(
-                filename=safe_filename,
-                analyst=username,
-                ticket_id=ticket_id or None,
-                comment=comment,
-                campaign_id=campaign_id
-            ))
-            db.session.commit()
-        except Exception as e:
-            db.session.rollback()
-            if os.path.exists(filepath):
-                try:
-                    os.remove(filepath)
-                except Exception:
-                    pass
-            return jsonify({'success': False, 'message': str(e)}), 500
-        audit_log('YARA_UPLOAD', f'file={safe_filename} analyst={username}')
-        message = f'YARA rule uploaded successfully: {safe_filename}'
-        if ticket_id:
-            message += f' (Ticket: {ticket_id})'
-        
-        return jsonify({
-            'success': True,
-            'message': message
-        })
-        
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/list-yara', methods=['GET'])
-def list_yara():
-    """List YARA rule files in data/YARA/ with metadata from YaraRule table."""
-    try:
-        files = []
-        if not os.path.isdir(DATA_YARA):
-            return jsonify({'success': True, 'files': []})
-        for name in sorted(os.listdir(DATA_YARA)):
-            if not name.lower().endswith('.yar'):
-                continue
-            filepath = os.path.join(DATA_YARA, name)
-            if not os.path.isfile(filepath):
-                continue
-            size_bytes = os.path.getsize(filepath)
-            mtime = os.path.getmtime(filepath)
-            size_kb = round(size_bytes / 1024, 2)
-            meta = YaraRule.query.filter_by(filename=name).first()
-            if meta and meta.uploaded_at:
-                upload_date = meta.uploaded_at.strftime('%Y-%m-%d %H:%M')
-            else:
-                upload_date = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
-            files.append({
-                'filename': name,
-                'size_kb': size_kb,
-                'upload_date': upload_date,
-                'user': meta.analyst if meta else None,
-                'ticket_id': meta.ticket_id if meta else None,
-                'comment': meta.comment if meta else None
-            })
-        return jsonify({'success': True, 'files': files})
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-def _yara_safe_path(filename):
-    """Return (safe_basename, full_path) if path is under DATA_YARA; else (None, None). Prevents path traversal."""
-    safe = os.path.basename(filename)
-    if safe != filename or '..' in filename or not safe.lower().endswith('.yar'):
-        return None, None
-    filepath = os.path.join(DATA_YARA, safe)
-    try:
-        real_file = os.path.realpath(filepath)
-        real_yara = os.path.realpath(DATA_YARA)
-        if not real_file.startswith(real_yara + os.sep) and real_file != real_yara:
-            return None, None
-    except Exception:
-        return None, None
-    return safe, filepath
-
-
-@app.route('/api/delete-yara', methods=['DELETE'])
-def delete_yara():
-    """Delete a YARA rule file from data/YARA/."""
-    try:
-        data = request.get_json() or {}
-        filename = (data.get('filename') or '').strip()
-        if not filename:
-            return jsonify({'success': False, 'message': 'Filename is required'}), 400
-        safe, filepath = _yara_safe_path(filename)
-        if safe is None:
-            return jsonify({'success': False, 'message': 'Invalid filename'}), 400
-        if not os.path.isfile(filepath):
-            return jsonify({'success': False, 'message': 'File not found'}), 404
-        os.remove(filepath)
-        YaraRule.query.filter_by(filename=safe).delete()
-        db.session.commit()
-        return jsonify({'success': True, 'message': f'Deleted {safe}'})
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/view-yara/<path:filename>', methods=['GET'])
-def view_yara(filename):
-    """Return the content of a specific .yar file (path traversal safe)."""
-    try:
-        safe, filepath = _yara_safe_path(filename)
-        if safe is None:
-            return jsonify({'success': False, 'message': 'Invalid filename'}), 400
-        if not os.path.isfile(filepath):
-            return jsonify({'success': False, 'message': 'File not found'}), 404
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-            content = f.read()
-        return jsonify({'success': True, 'filename': safe, 'content': content})
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/update-yara', methods=['POST'])
-def update_yara():
-    """Overwrite an existing YARA rule file. Accepts JSON { filename, content }."""
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'success': False, 'message': 'JSON body required'}), 400
-        filename = (data.get('filename') or '').strip()
-        content = data.get('content')
-        if not filename:
-            return jsonify({'success': False, 'message': 'Filename is required'}), 400
-        if content is None:
-            return jsonify({'success': False, 'message': 'Content is required'}), 400
-        safe, filepath = _yara_safe_path(filename)
-        if safe is None:
-            return jsonify({'success': False, 'message': 'Invalid filename'}), 400
-        if not os.path.isfile(filepath):
-            return jsonify({'success': False, 'message': 'File not found'}), 404
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content if isinstance(content, str) else '')
-        return jsonify({'success': True, 'message': f'Updated {safe}'})
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/feed/yara-list', methods=['GET'])
-def feed_yara_list():
-    """Return plain text list of all .yar filenames in DATA_YARA (one per line)."""
-    try:
-        if not os.path.isdir(DATA_YARA):
-            return Response("", mimetype='text/plain')
-        names = []
-        for name in sorted(os.listdir(DATA_YARA)):
-            if not name.lower().endswith('.yar'):
-                continue
-            fp = os.path.join(DATA_YARA, name)
-            if os.path.isfile(fp):
-                names.append(name)
-        return Response(('\n'.join(names) + ('\n' if names else '')), mimetype='text/plain')
-    except Exception as e:
-        return Response(f"Error: {e}", mimetype='text/plain', status=500)
-
-
-@app.route('/feed/yara-content/<path:filename>', methods=['GET'])
-def feed_yara_content(filename):
-    """Return raw content of a .yar file. Uses _yara_safe_path to prevent path traversal."""
-    safe, filepath = _yara_safe_path(filename)
-    if safe is None:
-        return Response("Invalid filename", mimetype='text/plain', status=400)
-    if not os.path.isfile(filepath):
-        return Response("File not found", mimetype='text/plain', status=404)
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-            content = f.read()
-        return Response(content, mimetype='text/plain')
-    except Exception as e:
-        return Response(f"Error: {e}", mimetype='text/plain', status=500)
-
-
-@app.route('/feed/<ioc_type>')
-def feed_ioc(ioc_type):
-    """Provide clean IOC feed for security devices: only active (non-expired) IOCs."""
-    ioc_type_raw = ioc_type.strip()
-    type_mapping = {
-        'ip': 'IP', 'ipaddress': 'IP', 'ip_address': 'IP',
-        'domain': 'Domain',
-        'hash': 'Hash',
-        'email': 'Email',
-        'url': 'URL',
-    }
-    ioc_type = type_mapping.get(ioc_type_raw.lower(), ioc_type_raw)
-    if ioc_type not in IOC_FILES or ioc_type == 'YARA':
-        return Response("Invalid IOC type", mimetype='text/plain', status=404)
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == ioc_type,
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    response_text = '\n'.join(r.value for r in rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-def strip_url_protocol(url):
-    """Remove http:// or https:// from URL for Palo Alto feeds."""
-    if not url:
-        return url
-    url = url.strip()
-    if url.startswith('https://'):
-        return url[8:]
-    elif url.startswith('http://'):
-        return url[7:]
-    return url
-
-
-def get_hash_type(hash_value):
-    """Determine hash type based on length: MD5 (32), SHA1 (40), SHA256 (64)."""
-    if not hash_value:
-        return None
-    hash_len = len(hash_value.strip())
-    if hash_len == 32:
-        return 'md5'
-    elif hash_len == 40:
-        return 'sha1'
-    elif hash_len == 64:
-        return 'sha256'
-    return None
-
-
-def format_checkpoint_feed(rows, ioc_type):
-    """Format IOC rows as Checkpoint feed with header and observe numbers."""
-    if not rows:
-        header = "#Uniq-Name,#Value,#Type,#Confidence,#Severity,#Product,#Comment\n"
-        return header
-    
-    # Map IOC types to Checkpoint types
-    cp_type_map = {
-        'IP': 'ip',
-        'Domain': 'domain',
-        'URL': 'url',
-        'Hash': None  # Will be determined by hash length
+@app.route('/health', methods=['GET'])
+def health_check():
+    """
+    Health check endpoint for monitoring and load balancer health checks.
+    Returns system status including database connectivity and feed operational status.
+    """
+    health_status = {
+        'status': 'healthy',
+        'timestamp': _utcnow().isoformat(),
+        'version': '5.3',
+        'checks': {}
     }
     
-    lines = ["#Uniq-Name,#Value,#Type,#Confidence,#Severity,#Product,#Comment"]
+    # Check database connectivity
+    try:
+        db.session.execute(text('SELECT 1'))
+        health_status['checks']['database'] = {
+            'status': 'connected',
+            'path': _db_path
+        }
+    except Exception as e:
+        health_status['status'] = 'unhealthy'
+        health_status['checks']['database'] = {
+            'status': 'error',
+            'error': str(e)
+        }
     
-    observe_num = 1
-    for row in rows:
-        value = row.value.strip()
-        
-        # Determine Checkpoint type
-        if ioc_type == 'Hash':
-            # Determine hash type from length
-            hash_type = get_hash_type(value)
-            if not hash_type:
-                continue
-            cp_type = hash_type
+    # Check database tables exist
+    try:
+        tables = db.session.execute(text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('iocs', 'campaigns', 'yara_rules')"
+        )).fetchall()
+        table_names = [row[0] for row in tables]
+        health_status['checks']['database']['tables'] = table_names
+        if len(table_names) < 3:
+            health_status['status'] = 'degraded'
+            health_status['checks']['database']['warning'] = 'Some tables missing'
+    except Exception as e:
+        health_status['checks']['database']['tables_error'] = str(e)
+    
+    # Check data directory accessibility
+    try:
+        if os.path.exists(_data_dir) and os.access(_data_dir, os.W_OK):
+            health_status['checks']['data_directory'] = {
+                'status': 'accessible',
+                'path': _data_dir
+            }
         else:
-            cp_type = cp_type_map.get(ioc_type, 'ip')
-        
-        # Format the line
-        comment = f'"""Malicious {cp_type.upper()}"""'
-        line = f"observe{observe_num},{value},{cp_type},high,high,AV,{comment}"
-        lines.append(line)
-        observe_num += 1
+            health_status['status'] = 'unhealthy'
+            health_status['checks']['data_directory'] = {
+                'status': 'error',
+                'error': 'Data directory not accessible'
+            }
+    except Exception as e:
+        health_status['status'] = 'unhealthy'
+        health_status['checks']['data_directory'] = {
+            'status': 'error',
+            'error': str(e)
+        }
     
-    return '\n'.join(lines) + '\n'
-
-
-# Standard feed endpoints
-@app.route('/feed/ip', methods=['GET'])
-def feed_ip():
-    """Standard IP feed."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'IP',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    response_text = '\n'.join(r.value for r in rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/domain', methods=['GET'])
-def feed_domain():
-    """Standard domain feed."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Domain',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    response_text = '\n'.join(r.value for r in rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/url', methods=['GET'])
-def feed_url():
-    """Standard URL feed."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'URL',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    response_text = '\n'.join(r.value for r in rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/md5', methods=['GET'])
-def feed_md5():
-    """Standard MD5 hash feed (32 hex characters)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Hash',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    # Filter only MD5 hashes (32 characters)
-    md5_rows = [r for r in rows if len(r.value.strip()) == 32]
-    response_text = '\n'.join(r.value for r in md5_rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/sha1', methods=['GET'])
-def feed_sha1():
-    """Standard SHA1 hash feed (40 hex characters)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Hash',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    # Filter only SHA1 hashes (40 characters)
-    sha1_rows = [r for r in rows if len(r.value.strip()) == 40]
-    response_text = '\n'.join(r.value for r in sha1_rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/sha256', methods=['GET'])
-def feed_sha256():
-    """Standard SHA256 hash feed (64 hex characters)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Hash',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    # Filter only SHA256 hashes (64 characters)
-    sha256_rows = [r for r in rows if len(r.value.strip()) == 64]
-    response_text = '\n'.join(r.value for r in sha256_rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/hash', methods=['GET'])
-def feed_hash():
-    """Standard hash feed (all hash types: MD5, SHA1, SHA256)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Hash',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    response_text = '\n'.join(r.value for r in rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-# Palo Alto feed endpoints
-@app.route('/feed/pa/ip', methods=['GET'])
-def feed_pa_ip():
-    """Palo Alto IP feed."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'IP',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    response_text = '\n'.join(r.value for r in rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/pa/domain', methods=['GET'])
-def feed_pa_domain():
-    """Palo Alto domain feed."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Domain',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    response_text = '\n'.join(r.value for r in rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/pa/url', methods=['GET'])
-def feed_pa_url():
-    """Palo Alto URL feed (URLs without http/https protocol)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'URL',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    # Strip protocol from URLs for Palo Alto
-    urls = [strip_url_protocol(r.value) for r in rows]
-    response_text = '\n'.join(urls) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/pa/md5', methods=['GET'])
-def feed_pa_md5():
-    """Palo Alto MD5 hash feed (32 hex characters)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Hash',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    # Filter only MD5 hashes (32 characters)
-    md5_rows = [r for r in rows if len(r.value.strip()) == 32]
-    response_text = '\n'.join(r.value for r in md5_rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/pa/sha1', methods=['GET'])
-def feed_pa_sha1():
-    """Palo Alto SHA1 hash feed (40 hex characters)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Hash',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    # Filter only SHA1 hashes (40 characters)
-    sha1_rows = [r for r in rows if len(r.value.strip()) == 40]
-    response_text = '\n'.join(r.value for r in sha1_rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/pa/sha256', methods=['GET'])
-def feed_pa_sha256():
-    """Palo Alto SHA256 hash feed (64 hex characters)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Hash',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    # Filter only SHA256 hashes (64 characters)
-    sha256_rows = [r for r in rows if len(r.value.strip()) == 64]
-    response_text = '\n'.join(r.value for r in sha256_rows) + '\n'
-    return Response(response_text, mimetype='text/plain')
-
-
-# Checkpoint feed endpoints
-@app.route('/feed/cp/ip', methods=['GET'])
-def feed_cp_ip():
-    """Checkpoint IP feed in CSV format."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'IP',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    response_text = format_checkpoint_feed(rows, 'IP')
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/cp/domain', methods=['GET'])
-def feed_cp_domain():
-    """Checkpoint domain feed in CSV format."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Domain',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    response_text = format_checkpoint_feed(rows, 'Domain')
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/cp/url', methods=['GET'])
-def feed_cp_url():
-    """Checkpoint URL feed in CSV format."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'URL',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    response_text = format_checkpoint_feed(rows, 'URL')
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/cp/md5', methods=['GET'])
-def feed_cp_md5():
-    """Checkpoint MD5 hash feed in CSV format (32 hex characters)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Hash',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    # Filter only MD5 hashes (32 characters)
-    md5_rows = [r for r in rows if len(r.value.strip()) == 32]
-    response_text = format_checkpoint_feed(md5_rows, 'Hash')
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/cp/sha1', methods=['GET'])
-def feed_cp_sha1():
-    """Checkpoint SHA1 hash feed in CSV format (40 hex characters)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Hash',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    # Filter only SHA1 hashes (40 characters)
-    sha1_rows = [r for r in rows if len(r.value.strip()) == 40]
-    response_text = format_checkpoint_feed(sha1_rows, 'Hash')
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/cp/sha256', methods=['GET'])
-def feed_cp_sha256():
-    """Checkpoint SHA256 hash feed in CSV format (64 hex characters)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Hash',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    # Filter only SHA256 hashes (64 characters)
-    sha256_rows = [r for r in rows if len(r.value.strip()) == 64]
-    response_text = format_checkpoint_feed(sha256_rows, 'Hash')
-    return Response(response_text, mimetype='text/plain')
-
-
-@app.route('/feed/cp/hash', methods=['GET'])
-def feed_cp_hash():
-    """Checkpoint hash feed in CSV format (all hash types: MD5, SHA1, SHA256)."""
-    now = datetime.now()
-    rows = IOC.query.filter(
-        IOC.type == 'Hash',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
-    # Include all hash types (MD5, SHA1, SHA256)
-    response_text = format_checkpoint_feed(rows, 'Hash')
-    return Response(response_text, mimetype='text/plain')
-
-
-def parse_ioc_line(line):
-    """Parse an IOC line to extract metadata."""
-    line = line.strip()
-    if not line:
-        return None
+    # Check feed generation (test one feed endpoint)
+    try:
+        now = datetime.now()
+        test_count = IOC.query.filter(
+            db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
+        ).count()
+        health_status['checks']['feeds'] = {
+            'status': 'operational',
+            'active_iocs': test_count
+        }
+    except Exception as e:
+        health_status['status'] = 'unhealthy'
+        health_status['checks']['feeds'] = {
+            'status': 'error',
+            'error': str(e)
+        }
     
-    # Split by '#' to separate IOC from metadata
-    parts = line.split('#', 1)
-    if len(parts) < 2:
-        return None
-    
-    ioc_value = parts[0].strip()
-    metadata = parts[1].strip()
-    
-    # Parse metadata: Date:{ISO} | User:{user} | Ref:{ticket_id} | Comment:{comment} | EXP:{date}
-    result = {
-        'ioc': ioc_value,
-        'date': None,
-        'user': None,
-        'ref': None,
-        'comment': None,
-        'expiration': None
-    }
-    
-    # Extract Date
-    date_match = re.search(r'Date:([^|]+)', metadata)
-    if date_match:
-        result['date'] = date_match.group(1).strip()
-    
-    # Extract User
-    user_match = re.search(r'User:([^|]+)', metadata)
-    if user_match:
-        result['user'] = user_match.group(1).strip()
-    
-    # Extract Ref (ticket_id)
-    ref_match = re.search(r'Ref:([^|]+)', metadata)
-    if ref_match:
-        result['ref'] = ref_match.group(1).strip()
-    
-    # Extract Comment
-    comment_match = re.search(r'Comment:([^|]+)', metadata)
-    if comment_match:
-        result['comment'] = comment_match.group(1).strip()
-    
-    # Extract Expiration
-    exp_match = re.search(r'EXP:([^|]+|NEVER)', metadata)
-    if exp_match:
-        result['expiration'] = exp_match.group(1).strip()
-    
-    return result
+    # Check GeoIP database (optional)
+    if GEOIP_AVAILABLE:
+        try:
+            if os.path.exists(GEOIP_DB_PATH):
+                health_status['checks']['geoip'] = {
+                    'status': 'available',
+                    'path': GEOIP_DB_PATH
+                }
+            else:
+                health_status['checks']['geoip'] = {
+                    'status': 'not_found',
+                    'note': 'GeoIP is optional, system works without it'
+                }
+        except Exception as e:
+            health_status['checks']['geoip'] = {
+                'status': 'error',
+                'error': str(e)
+            }
+    else:
+        health_status['checks']['geoip'] = {
+            'status': 'not_installed',
+            'note': 'GeoIP is optional'
+        }
 
-
-def _parse_ioc_line_permissive(line):
-    """Return a dict with at least ioc, date, user, ref, comment, expiration. Raw lines (no '#') get minimal dict."""
-    parsed = parse_ioc_line(line)
-    if parsed:
-        return parsed
-    line = line.strip()
-    if not line:
-        return None
-    ioc_value = line.split('#', 1)[0].strip()
-    if not ioc_value:
-        return None
-    return {
-        'ioc': ioc_value,
-        'date': None,
-        'user': '',
-        'ref': '',
-        'comment': '',
-        'expiration': None
-    }
+    # LDAP health (Phase 3.7)
+    try:
+        ldap_enabled = _get_setting('ldap_enabled', 'false').lower() == 'true'
+        if ldap_enabled:
+            reachable, msg = check_ldap_reachable(
+                _get_setting('ldap_url', ''),
+                _get_setting('ldap_base_dn', ''),
+                _get_setting('ldap_bind_dn', ''),
+                _get_setting('ldap_bind_password', ''),
+            )
+            health_status['checks']['ldap'] = {
+                'status': 'reachable' if reachable else 'unreachable',
+                'message': msg,
+            }
+        else:
+            health_status['checks']['ldap'] = {
+                'status': 'disabled',
+                'message': 'LDAP not enabled',
+            }
+    except Exception as e:
+        health_status['checks']['ldap'] = {
+            'status': 'error',
+            'error': str(e)[:100],
+        }
+    
+    # Determine HTTP status code
+    if health_status['status'] == 'healthy':
+        status_code = 200
+    elif health_status['status'] == 'degraded':
+        status_code = 200  # Still return 200 but indicate degraded status
+    else:
+        status_code = 503  # Service Unavailable
+    
+    return jsonify(health_status), status_code
 
 
 def check_expiration_status(exp_date_str):
@@ -1107,16 +895,13 @@ def migrate_legacy_data():
                     except (ValueError, TypeError):
                         created = _utcnow()
                     try:
-                        db.session.add(IOC(
-                            type=ioc_type,
-                            value=value,
-                            analyst=analyst,
-                            ticket_id=ticket_id,
-                            comment=comment,
-                            expiration_date=exp_dt,
-                            created_at=created
+                        db.session.add(_create_ioc(
+                            ioc_type, value, analyst, 'import',
+                            ticket_id=ticket_id, comment=comment,
+                            expiration_date=exp_dt, created_at=created,
+                            user_id=1,
                         ))
-                        db.session.commit()
+                        _commit_with_retry()
                     except IntegrityError:
                         db.session.rollback()
                         continue
@@ -1157,11 +942,108 @@ def migrate_legacy_data():
                             ))
                     except IntegrityError:
                         pass
-            db.session.commit()
+            _commit_with_retry()
         except Exception as e:
             print(f"[Migration] Error reading yara.txt: {e}")
             db.session.rollback()
     print("[Migration] Legacy data import complete.")
+
+
+def _tag_matches(tags_field, query_lower):
+    """Return True if any tag in the tags JSON field contains query_lower."""
+    if not tags_field:
+        return False
+    try:
+        tags = json.loads(tags_field) if isinstance(tags_field, str) else tags_field
+        return any(query_lower in (str(t).lower()) for t in (tags or []))
+    except (TypeError, ValueError):
+        return False
+
+
+def _search_expiration_status_matches(row, query_lower):
+    """Return True if the row's expiration status (Active/Expired/Permanent) matches query_lower."""
+    exp_str = row.expiration_date.strftime('%Y-%m-%d') if row.expiration_date else 'NEVER'
+    status = check_expiration_status(exp_str)
+    label = (status.get('status') or 'Active').lower()
+    return query_lower in label or query_lower in exp_str.lower()
+
+
+def _history_deleted_to_search_result(h):
+    """Build a search-result dict from an IocHistory 'deleted' row (same shape as frontend expects)."""
+    payload = {}
+    if h.payload:
+        try:
+            payload = json.loads(h.payload)
+        except (TypeError, ValueError):
+            pass
+    comment = (payload.get('comment') or '') if payload else ''
+    expiration_str = (payload.get('expiration_date') or '')[:10] if payload.get('expiration_date') else 'NEVER'
+    date_str = h.at.isoformat() if h.at else None
+    return {
+        'ioc': h.ioc_value,
+        'value': h.ioc_value,
+        'date': date_str,
+        'user': h.username or '',
+        'ref': '',
+        'comment': comment,
+        'expiration': expiration_str,
+        'file_type': h.ioc_type,
+        'line_number': None,
+        'raw_line': f"{h.ioc_value} # Deleted at {date_str}",
+        'expiration_status': 'Deleted',
+        'expires_on': None,
+        'is_expired': True,
+        'status': 'Deleted',
+        'campaign_name': None,
+        'tags': [],
+    }
+
+
+def _deleted_history_matches(h, query_lower, filter_type):
+    """Return True if this IocHistory deleted row matches the search query for the given filter."""
+    payload = {}
+    if h.payload:
+        try:
+            payload = json.loads(h.payload)
+        except (TypeError, ValueError):
+            pass
+    comment = (payload.get('comment') or '').lower()
+    value_lower = (h.ioc_value or '').lower()
+    user_lower = (h.username or '').lower()
+    date_str = (h.at.isoformat() if h.at else '').lower()
+    if filter_type == 'all':
+        return (
+            query_lower in value_lower or
+            query_lower in user_lower or
+            query_lower in date_str or
+            query_lower in comment or
+            query_lower in (h.ioc_type or '').lower() or
+            query_lower in 'deleted'
+        )
+    if filter_type == 'ioc_value':
+        return query_lower in value_lower
+    if filter_type == 'user':
+        return query_lower in user_lower
+    if filter_type == 'comment':
+        return query_lower in comment
+    if filter_type == 'date':
+        return query_lower in date_str
+    if filter_type == 'file_type':
+        return query_lower in (h.ioc_type or '').lower() or query_lower == 'yara'
+    if filter_type == 'expiration_status':
+        return query_lower in 'deleted'
+    if filter_type == 'ticket_id':
+        ref = (payload.get('ticket_id') or '').lower()
+        return query_lower in ref
+    if filter_type == 'tag':
+        tags = payload.get('tags') or []
+        if isinstance(tags, str):
+            try:
+                tags = json.loads(tags)
+            except (TypeError, ValueError):
+                tags = []
+        return any(query_lower in (str(t).lower()) for t in tags)
+    return False
 
 
 def _ioc_row_to_search_result(row, ioc_type, query_lower, filter_type):
@@ -1188,1084 +1070,16 @@ def _ioc_row_to_search_result(row, ioc_type, query_lower, filter_type):
         'status': 'Expired' if exp_status['is_expired'] else 'Active',
         'campaign_name': campaign_name,
     }
+    if getattr(row, 'tags', None):
+        try:
+            result['tags'] = json.loads(row.tags) if isinstance(row.tags, str) else (row.tags or [])
+        except (TypeError, ValueError):
+            result['tags'] = []
+    else:
+        result['tags'] = []
     if ioc_type == 'IP':
         result['country_code'] = get_country_code(row.value)
     return result
-
-
-@app.route('/api/search', methods=['GET'])
-def search_ioc():
-    """Search for an IOC across all types with optional field filter."""
-    query = request.args.get('q', '').strip()
-    filter_type = request.args.get('filter', 'all').strip().lower()
-    if not query:
-        return jsonify({'success': False, 'message': 'Search query is required'}), 400
-    query_lower = query.lower()
-    q = IOC.query.options(joinedload(IOC.campaign))
-    if filter_type == 'ioc_value':
-        q = q.filter(func.lower(IOC.value).contains(query_lower))
-    elif filter_type == 'ticket_id':
-        q = q.filter(IOC.ticket_id.isnot(None), func.lower(IOC.ticket_id).contains(query_lower))
-    elif filter_type == 'user':
-        q = q.filter(func.lower(IOC.analyst).contains(query_lower))
-    elif filter_type == 'date':
-        q = q.filter(IOC.created_at.isnot(None))
-        # Filter by date substring in Python (SQLite-friendly)
-        rows_all = q.all()
-        rows = [r for r in rows_all if query_lower in (r.created_at.isoformat() if r.created_at else '').lower()]
-        return jsonify({
-            'success': True,
-            'query': query,
-            'filter': filter_type,
-            'results': [_ioc_row_to_search_result(r, r.type, query_lower, filter_type) for r in rows],
-            'count': len(rows)
-        })
-    else:
-        q = q.filter(
-            db.or_(
-                func.lower(IOC.value).contains(query_lower),
-                func.lower(IOC.analyst).contains(query_lower),
-                func.lower(IOC.ticket_id).contains(query_lower),
-                func.lower(IOC.comment).contains(query_lower)
-            )
-        )
-    rows = q.all()
-    # For 'all' filter, also include rows where date string matches (SQLite-friendly)
-    if filter_type == 'all':
-        rows = [r for r in rows if (
-            query_lower in (r.value or '').lower() or
-            query_lower in (r.analyst or '').lower() or
-            query_lower in (r.ticket_id or '').lower() or
-            query_lower in (r.comment or '').lower() or
-            (r.created_at and query_lower in r.created_at.isoformat().lower())
-        )]
-    results = [_ioc_row_to_search_result(row, row.type, query_lower, filter_type) for row in rows]
-    # Federated search: also search YaraRule (filename and comment)
-    yara_matches = YaraRule.query.filter(
-        db.or_(
-            func.lower(YaraRule.filename).contains(query_lower),
-            func.lower(YaraRule.comment).contains(query_lower)
-        )
-    ).all()
-    for rule in yara_matches:
-        campaign_name = None
-        if rule.campaign_id:
-            c = Campaign.query.get(rule.campaign_id)
-            if c:
-                campaign_name = c.name
-        results.append({
-            'ioc': rule.filename,
-            'value': rule.filename,
-            'file_type': 'YARA',
-            'date': rule.uploaded_at.isoformat() if rule.uploaded_at else None,
-            'user': rule.analyst or '',
-            'ref': rule.ticket_id or '',
-            'comment': rule.comment or '',
-            'expiration': 'NEVER',
-            'line_number': rule.id,
-            'raw_line': f"YARA:{rule.filename}",
-            'expiration_status': 'Permanent',
-            'expires_on': None,
-            'is_expired': False,
-            'status': 'Active',
-            'campaign_name': campaign_name,
-        })
-    return jsonify({
-        'success': True,
-        'query': query,
-        'filter': filter_type,
-        'results': results,
-        'count': len(results)
-    })
-
-
-@app.route('/api/v1/ioc', methods=['POST'])
-def ingest_ioc():
-    """External API endpoint for programmatic IOC ingestion (e.g., MISP integration)."""
-    try:
-        data = request.get_json()
-        
-        if not data:
-            return jsonify({'success': False, 'message': 'Invalid JSON payload'}), 400
-        
-        ioc_type = data.get('type', '').strip()
-        value = data.get('value', '').strip()
-        comment = data.get('comment', '')
-        username = data.get('username', '').strip()
-        expiration = data.get('expiration', 'Permanent').strip()
-        ticket_id = data.get('ticket_id', '').strip()
-        
-        # Validation
-        if not value or not ioc_type or not username:
-            return jsonify({'success': False, 'message': 'Missing required fields: type, value, username'}), 400
-        
-        if ioc_type not in IOC_FILES:
-            return jsonify({'success': False, 'message': f'Invalid IOC type. Must be one of: {", ".join(IOC_FILES.keys())}'}), 400
-        
-        # Apply refanger (input cleaning)
-        cleaned_value, was_changed = refanger(value)
-        value = cleaned_value
-        
-        # Validate after cleaning
-        if not validate_ioc(value, ioc_type):
-            return jsonify({'success': False, 'message': f'Invalid {ioc_type} format'}), 400
-        
-        # Check allowlist (Safety Net)
-        is_blocked, reason = check_allowlist(value, ioc_type)
-        if is_blocked:
-            return jsonify({
-                'success': False,
-                'message': f'⛔ CRITICAL ASSET: Block Prevented! {reason}'
-            }), 403
-        
-        if check_ioc_exists(ioc_type, value):
-            return jsonify({'success': False, 'message': 'IOC already exists'}), 409
-        if expiration.lower() == 'permanent':
-            exp_dt = None
-        else:
-            try:
-                exp_dt = datetime.strptime(expiration, '%Y-%m-%d')
-            except ValueError:
-                return jsonify({'success': False, 'message': 'Invalid expiration date format. Use YYYY-MM-DD or "Permanent"'}), 400
-        try:
-            db.session.add(IOC(
-                type=ioc_type,
-                value=value,
-                analyst=username,
-                ticket_id=ticket_id or None,
-                comment=comment or None,
-                expiration_date=exp_dt
-            ))
-            db.session.commit()
-            return jsonify({
-                'success': True,
-                'message': f'{ioc_type} IOC ingested successfully',
-                'ioc': value,
-                'type': ioc_type
-            }), 201
-        except IntegrityError:
-            db.session.rollback()
-            return jsonify({'success': False, 'message': 'IOC already exists'}), 409
-        except Exception as e:
-            db.session.rollback()
-            return jsonify({'success': False, 'message': str(e)}), 500
-            
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/revoke', methods=['POST'])
-def revoke_ioc():
-    """Remove an IOC from the database."""
-    try:
-        data = request.get_json()
-        ioc_type = data.get('type', '').strip()
-        value = data.get('value', '').strip()
-        if not value or not ioc_type:
-            return jsonify({'success': False, 'message': 'Missing required fields: type, value'}), 400
-        if ioc_type not in IOC_FILES:
-            return jsonify({'success': False, 'message': 'Invalid IOC type'}), 400
-        row = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.strip().lower()).first()
-        if not row:
-            return jsonify({'success': False, 'message': 'IOC not found'}), 404
-        db.session.delete(row)
-        db.session.commit()
-        return jsonify({'success': True, 'message': f'{ioc_type} IOC revoked successfully'})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/edit', methods=['POST'])
-def edit_ioc():
-    """Edit an IOC's metadata (comment, expiration, and optional campaign assignment)."""
-    try:
-        data = request.get_json()
-        ioc_type = data.get('type', '').strip()
-        value = data.get('value', '').strip()
-        new_comment = data.get('comment', '')
-        new_expiration = data.get('expiration', '').strip()
-        campaign_name_raw = data.get('campaign_name')
-        campaign_name = (campaign_name_raw.strip() if isinstance(campaign_name_raw, str) else '') or None
-        if not value or not ioc_type:
-            return jsonify({'success': False, 'message': 'Missing required fields: type, value'}), 400
-        if ioc_type not in IOC_FILES:
-            return jsonify({'success': False, 'message': 'Invalid IOC type'}), 400
-        if new_expiration.lower() == 'permanent':
-            exp_dt = None
-        elif new_expiration:
-            try:
-                exp_dt = datetime.strptime(new_expiration, '%Y-%m-%d')
-            except ValueError:
-                return jsonify({'success': False, 'message': 'Invalid expiration date format. Use YYYY-MM-DD or "Permanent"'}), 400
-        else:
-            return jsonify({'success': False, 'message': 'Expiration is required'}), 400
-        row = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.strip().lower()).first()
-        if not row:
-            return jsonify({'success': False, 'message': 'IOC not found'}), 404
-        row.comment = sanitize_comment(new_comment) or None
-        row.expiration_date = exp_dt
-        # Ticket ID update
-        new_ticket_id = data.get('ticket_id')
-        if new_ticket_id is not None:
-            row.ticket_id = new_ticket_id.strip() or None
-        # Campaign assignment: "None" or empty -> unlink; otherwise find campaign by name
-        if campaign_name is None or campaign_name == '' or campaign_name.lower() == 'none':
-            row.campaign_id = None
-        else:
-            camp = Campaign.query.filter_by(name=campaign_name).first()
-            if camp:
-                row.campaign_id = camp.id
-            else:
-                return jsonify({'success': False, 'message': f'Campaign "{campaign_name}" not found'}), 400
-        db.session.commit()
-        audit_log('IOC_EDIT', f'type={ioc_type} value={value}')
-        return jsonify({'success': True, 'message': f'{ioc_type} IOC updated successfully'})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/edit-yara-meta', methods=['POST'])
-def edit_yara_meta():
-    """Edit a YARA rule's metadata (ticket_id, campaign assignment, comment)."""
-    try:
-        data = request.get_json()
-        filename = (data.get('filename') or '').strip()
-        if not filename:
-            return jsonify({'success': False, 'message': 'Filename is required'}), 400
-        rule = YaraRule.query.filter_by(filename=filename).first()
-        if not rule:
-            return jsonify({'success': False, 'message': 'YARA rule not found'}), 404
-
-        # Update ticket_id
-        new_ticket_id = data.get('ticket_id')
-        if new_ticket_id is not None:
-            rule.ticket_id = new_ticket_id.strip() or None
-
-        # Update comment
-        new_comment = data.get('comment')
-        if new_comment is not None:
-            rule.comment = sanitize_comment(new_comment) or None
-
-        # Campaign assignment
-        campaign_name_raw = data.get('campaign_name')
-        if campaign_name_raw is not None:
-            campaign_name = (campaign_name_raw.strip() if isinstance(campaign_name_raw, str) else '') or None
-            if campaign_name is None or campaign_name == '' or campaign_name.lower() == 'none':
-                rule.campaign_id = None
-            else:
-                camp = Campaign.query.filter_by(name=campaign_name).first()
-                if camp:
-                    rule.campaign_id = camp.id
-                else:
-                    return jsonify({'success': False, 'message': f'Campaign "{campaign_name}" not found'}), 400
-
-        db.session.commit()
-        audit_log('YARA_EDIT_META', f'file={filename}')
-        return jsonify({'success': True, 'message': f'YARA rule "{filename}" updated successfully'})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/recent', methods=['GET'])
-def get_recent():
-    """Get the latest 50 items from both IOC and YaraRule tables, merged and sorted by date (newest first)."""
-    limit = int(request.args.get('limit', 50))
-    # Fetch IOCs (no type filter; IOCs are IP/Domain/Hash/Email/URL)
-    ioc_rows = IOC.query.order_by(IOC.created_at.desc()).limit(limit).all()
-    # Fetch YARA rules
-    yara_rows = YaraRule.query.order_by(YaraRule.uploaded_at.desc()).limit(limit).all()
-    combined = []
-    for row in ioc_rows:
-        exp_str = row.expiration_date.strftime('%Y-%m-%d') if row.expiration_date else 'NEVER'
-        exp_status = check_expiration_status(exp_str)
-        dt = row.created_at
-        item = {
-            'id': row.id,
-            'type': row.type,
-            'value': row.value,
-            'analyst': row.analyst or '',
-            'date': dt.isoformat() if dt else None,
-            'ioc': row.value,
-            'user': row.analyst or '',
-            'ref': row.ticket_id or '',
-            'comment': row.comment or '',
-            'expiration': exp_str,
-            'file_type': row.type,
-            'expiration_status': exp_status['status'],
-            'is_expired': exp_status['is_expired'],
-        }
-        if row.type == 'IP':
-            item['country_code'] = get_country_code(row.value)
-        combined.append((dt, item))
-    for row in yara_rows:
-        dt = row.uploaded_at
-        item = {
-            'id': row.id,
-            'type': 'YARA',
-            'value': row.filename,
-            'analyst': row.analyst or '',
-            'date': dt.isoformat() if dt else None,
-            'ioc': row.filename,
-            'user': row.analyst or '',
-            'ref': row.ticket_id or '',
-            'comment': row.comment or '',
-            'expiration': 'NEVER',
-            'file_type': 'YARA',
-            'expiration_status': 'Permanent',
-            'is_expired': False,
-        }
-        combined.append((dt, item))
-    combined.sort(key=lambda x: x[0] if x[0] else datetime(1970, 1, 1), reverse=True)
-    recent = [item for _, item in combined[:limit]]
-    return jsonify({'success': True, 'recent': recent, 'count': len(recent)})
-
-
-@app.route('/api/stats', methods=['GET'])
-def get_stats():
-    """Active IOC count per type (non-expired). YARA rules count, weighted total, and campaign stats (all campaigns with IOC counts)."""
-    stats = {'IP': 0, 'Domain': 0, 'Hash': 0, 'Email': 0, 'URL': 0}
-    now = datetime.now()
-    for ioc_type in stats:
-        count = IOC.query.filter(
-            IOC.type == ioc_type,
-            db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-        ).count()
-        stats[ioc_type] = count
-    yara_count = YaraRule.query.count()
-    ioc_total = sum(stats.values())
-    weighted_total = ioc_total + (yara_count * 5)
-
-    # All campaigns with their active IOC counts (including campaigns with 0 IOCs)
-    campaign_stats = {}
-    rows = db.session.query(
-        Campaign.name,
-        func.count(IOC.id).label('cnt')
-    ).outerjoin(IOC, db.and_(
-        IOC.campaign_id == Campaign.id,
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    )).group_by(Campaign.id, Campaign.name).all()
-    for row in rows:
-        if row.name:
-            campaign_stats[row.name] = row.cnt or 0
-
-    return jsonify({
-        'success': True,
-        'stats': stats,
-        'yara_count': yara_count,
-        'weighted_total': weighted_total,
-        'campaign_stats': campaign_stats,
-    })
-
-
-@app.route('/api/all-iocs', methods=['GET'])
-def get_all_iocs():
-    """Get all IOCs for historical table (limited to last 500 for performance)."""
-    limit = int(request.args.get('limit', 500))
-    total = IOC.query.filter(IOC.type != 'YARA').count()
-    rows = IOC.query.filter(IOC.type != 'YARA').order_by(IOC.created_at.desc()).limit(limit).all()
-    iocs = []
-    for row in rows:
-        exp_str = row.expiration_date.strftime('%Y-%m-%d') if row.expiration_date else 'NEVER'
-        exp_status = check_expiration_status(exp_str)
-        item = {
-            'ioc': row.value,
-            'date': row.created_at.isoformat() if row.created_at else None,
-            'user': row.analyst or '',
-            'ref': row.ticket_id or '',
-            'comment': row.comment or '',
-            'expiration': exp_str,
-            'file_type': row.type,
-            'expiration_status': exp_status['status'],
-            'is_expired': exp_status['is_expired']
-        }
-        if row.type == 'IP':
-            item['country_code'] = get_country_code(row.value)
-        iocs.append(item)
-    return jsonify({'success': True, 'iocs': iocs, 'count': len(iocs), 'total': total})
-
-
-@app.route('/api/bulk-csv', methods=['POST'])
-def bulk_csv():
-    """Handle bulk CSV intelligence dump."""
-    try:
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'message': 'No file provided'}), 400
-        
-        file = request.files['file']
-        global_comment = request.form.get('comment', '')
-        username = request.form.get('username', '').strip()
-        ttl = request.form.get('ttl', 'Permanent')
-        campaign_name = (request.form.get('campaign_name') or '').strip() or None
-        campaign_id = None
-        if campaign_name:
-            c = Campaign.query.filter_by(name=campaign_name).first()
-            if c:
-                campaign_id = c.id
-        
-        if not username:
-            return jsonify({'success': False, 'message': 'Analyst username is required'}), 400
-        
-        if file.filename == '':
-            return jsonify({'success': False, 'message': 'No file selected'}), 400
-        
-        # Stream CSV content line-by-line (avoids loading entire file into memory)
-        stream = io.TextIOWrapper(file.stream, encoding='utf-8', errors='replace')
-        csv_reader = csv.reader(stream)
-        
-        # Read header row to detect ticket ID column
-        header_row = next(csv_reader, None)
-        ticket_id_column_index = None
-        if header_row:
-            # Look for ticket ID columns (case-insensitive)
-            ticket_id_keywords = ['reportid', 'ticket_id', 'ref', 'reference']
-            for idx, col_name in enumerate(header_row):
-                if col_name.lower().strip() in ticket_id_keywords:
-                    ticket_id_column_index = idx
-                    break
-        
-        exp_date = calculate_expiration_date(ttl)
-        
-        # Collect all findings with ticket IDs
-        findings = {
-            'IP': {},
-            'Domain': {},
-            'Hash': {},
-            'Email': {},
-            'URL': {}
-        }
-        
-        # Process every row in the CSV
-        for row in csv_reader:
-            # Extract ticket ID from the row if column was found
-            ticket_id = None
-            if ticket_id_column_index is not None and ticket_id_column_index < len(row):
-                ticket_id = row[ticket_id_column_index].strip()
-                if not ticket_id:
-                    ticket_id = None
-            
-            # Process every cell in the row
-            for cell in row:
-                if not cell:
-                    continue
-                
-                # Apply refanging immediately to the cell value BEFORE regex matching
-                # This handles cases like "38[.]60[.]204[.]176"
-                cleaned_cell = cell.replace('[.]', '.').replace('[', '').replace(']', '').strip()
-                
-                # Try to detect IOCs in the cleaned cell
-                for ioc_type, pattern in AUTO_DETECT_PATTERNS.items():
-                    matches = re.findall(pattern, cleaned_cell)
-                    for match in matches:
-                        # Apply full refanger for additional cleaning (hxxp, whitespace, etc.)
-                        cleaned_match, _ = refanger(match)
-                        # Validate the match with strict pattern
-                        if validate_ioc(cleaned_match, ioc_type):
-                            # Check allowlist (Safety Net)
-                            is_blocked, _ = check_allowlist(cleaned_match, ioc_type)
-                            if not is_blocked:
-                                # Store IOC with ticket ID (use first ticket ID found for this IOC)
-                                if cleaned_match not in findings[ioc_type]:
-                                    findings[ioc_type][cleaned_match] = ticket_id
-        
-        comment = sanitize_comment(global_comment)
-        summary = {}
-        total_updated = 0
-        total_new = 0
-        for ioc_type, ioc_dict in findings.items():
-            updated_count = 0
-            new_count = 0
-            for value, ticket_id in ioc_dict.items():
-                ticket_id_val = ticket_id.strip() if ticket_id else None
-                existing = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.lower()).first()
-                if existing:
-                    existing.comment = comment
-                    existing.expiration_date = exp_date
-                    existing.ticket_id = ticket_id_val or existing.ticket_id
-                    if campaign_id is not None:
-                        existing.campaign_id = campaign_id
-                    updated_count += 1
-                else:
-                    db.session.add(IOC(
-                        type=ioc_type,
-                        value=value,
-                        analyst=username,
-                        ticket_id=ticket_id_val,
-                        comment=comment,
-                        expiration_date=exp_date,
-                        campaign_id=campaign_id
-                    ))
-                    new_count += 1
-            try:
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
-                raise
-            summary[ioc_type] = {'updated': updated_count, 'new': new_count}
-            total_updated += updated_count
-            total_new += new_count
-        
-        # Build summary message
-        summary_parts = []
-        for ioc_type, counts in summary.items():
-            if counts['new'] > 0 or counts['updated'] > 0:
-                parts = []
-                if counts['new'] > 0:
-                    parts.append(f"{counts['new']} new")
-                if counts['updated'] > 0:
-                    parts.append(f"{counts['updated']} updated")
-                summary_parts.append(f"{ioc_type}s ({', '.join(parts)})")
-        
-        message = f"Processed CSV: {', '.join(summary_parts)}" if summary_parts else "No valid IOCs found in CSV"
-        audit_log('BULK_CSV', f'analyst={username} new={total_new} updated={total_updated}')
-        
-        return jsonify({
-            'success': True,
-            'message': message,
-            'summary': summary,
-            'total': total_new + total_updated
-        })
-        
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/preview-csv', methods=['POST'])
-def preview_csv():
-    """
-    Parse CSV using same logic as bulk_csv; return JSON items for staging (no DB write).
-    Accepts: file, username, ttl, comment, optional ticket_id (fallback when CSV has no ticket column).
-    For each IOC: existing_permanent=True if DB row exists with expiration_date IS NULL.
-    """
-    try:
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'message': 'No file provided'}), 400
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'success': False, 'message': 'No file selected'}), 400
-        username = request.form.get('username', '').strip().lower()
-        if not username:
-            return jsonify({'success': False, 'message': 'Analyst username is required'}), 400
-        ttl = request.form.get('ttl', 'Permanent')
-        comment = request.form.get('comment', '').strip()
-        ticket_id_fallback = request.form.get('ticket_id', '').strip() or None
-
-        if ttl == 'Permanent':
-            expiration_display = 'Permanent'
-        else:
-            exp_dt = calculate_expiration_date(ttl)
-            expiration_display = exp_dt.strftime('%Y-%m-%d') if exp_dt else 'Permanent'
-
-        stream = io.StringIO(file.read().decode('utf-8'))
-        csv_reader = csv.reader(stream)
-        header_row = next(csv_reader, None)
-        ticket_id_column_index = None
-        if header_row:
-            ticket_id_keywords = ['reportid', 'ticket_id', 'ref', 'reference']
-            for idx, col_name in enumerate(header_row):
-                if col_name.lower().strip() in ticket_id_keywords:
-                    ticket_id_column_index = idx
-                    break
-
-        # Collect unique IOCs per (type, value), ticket_id from last occurrence (same as bulk_csv)
-        ioc_to_ticket = {
-            'IP': {}, 'Domain': {}, 'Hash': {}, 'Email': {}, 'URL': {}
-        }
-        for row in csv_reader:
-            ticket_id = None
-            if ticket_id_column_index is not None and ticket_id_column_index < len(row):
-                ticket_id = row[ticket_id_column_index].strip() or None
-            if not ticket_id:
-                ticket_id = ticket_id_fallback
-
-            for cell in row:
-                if not cell:
-                    continue
-                cleaned_cell = cell.replace('[.]', '.').replace('[', '').replace(']', '').strip()
-                for ioc_type, pattern in AUTO_DETECT_PATTERNS.items():
-                    matches = re.findall(pattern, cleaned_cell)
-                    for match in matches:
-                        cleaned_match, _ = refanger(match)
-                        if not validate_ioc(cleaned_match, ioc_type):
-                            continue
-                        is_blocked, _ = check_allowlist(cleaned_match, ioc_type)
-                        if is_blocked:
-                            continue
-                        if cleaned_match not in ioc_to_ticket[ioc_type]:
-                            ioc_to_ticket[ioc_type][cleaned_match] = ticket_id
-                        break
-
-        items = []
-        for ioc_type, ioc_dict in ioc_to_ticket.items():
-            for value, ticket_id in ioc_dict.items():
-                existing_permanent = False
-                existing_analyst = ''
-                existing_comment = ''
-                existing_row = IOC.query.filter(
-                    IOC.type == ioc_type,
-                    func.lower(IOC.value) == value.lower()
-                ).first()
-                if existing_row and existing_row.expiration_date is None:
-                    existing_permanent = True
-                    existing_analyst = (existing_row.analyst or '')
-                    existing_comment = (existing_row.comment or '')
-
-                ticket_id_val = (ticket_id.strip() if ticket_id else None) or ticket_id_fallback
-                items.append({
-                    'ioc': value,
-                    'type': ioc_type,
-                    'ticket_id': ticket_id_val or '',
-                    'analyst': username,
-                    'date': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
-                    'comment': sanitize_comment(comment) or '',
-                    'expiration': expiration_display,
-                    'existing_permanent': existing_permanent,
-                    'existing_analyst': existing_analyst,
-                    'existing_comment': existing_comment
-                })
-
-        return jsonify({'success': True, 'items': items, 'count': len(items)})
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-def remove_duplicates_from_files():
-    """No-op for SQLite backend: unique constraint on (type, value) prevents duplicates."""
-    return 0
-
-
-@app.route('/api/analyst-stats', methods=['GET'])
-def get_analyst_stats():
-    """Get statistics for all analysts (for Champs Analysis). YARA uploads count as 5x points."""
-    ioc_rows = db.session.query(
-        IOC.analyst,
-        func.count(IOC.id).label('total_iocs'),
-        func.max(IOC.created_at).label('last_activity')
-    ).group_by(IOC.analyst).all()
-    yara_rows = db.session.query(
-        YaraRule.analyst,
-        func.count(YaraRule.id).label('yara_count'),
-        func.max(YaraRule.uploaded_at).label('last_yara')
-    ).group_by(YaraRule.analyst).all()
-    analyst_data = {}
-    for analyst, total_iocs, last_activity in ioc_rows:
-        u = (analyst or 'unknown').lower()
-        analyst_data[u] = {
-            'user': u,
-            'total_iocs': total_iocs,
-            'yara_count': 0,
-            'last_activity': last_activity,
-            'last_yara': None,
-        }
-    for analyst, yara_count, last_yara in yara_rows:
-        u = (analyst or 'unknown').lower()
-        if u not in analyst_data:
-            analyst_data[u] = {
-                'user': u,
-                'total_iocs': 0,
-                'yara_count': 0,
-                'last_activity': None,
-                'last_yara': None,
-            }
-        analyst_data[u]['yara_count'] = yara_count
-        analyst_data[u]['last_yara'] = last_yara
-    analyst_list = []
-    for u, d in analyst_data.items():
-        last_activity = d['last_activity']
-        last_yara = d['last_yara']
-        last_date = last_activity
-        if last_yara and (last_date is None or last_yara > last_date):
-            last_date = last_yara
-        weighted = d['total_iocs'] + (d['yara_count'] * 5)
-        analyst_list.append({
-            'user': u,
-            'total_iocs': d['total_iocs'],
-            'yara_count': d['yara_count'],
-            'weighted_score': weighted,
-            'last_activity': last_date.strftime('%Y-%m-%d') if last_date else 'N/A',
-        })
-    analyst_list.sort(key=lambda x: x['weighted_score'], reverse=True)
-    for idx, a in enumerate(analyst_list, 1):
-        a['rank'] = idx
-    return jsonify({'success': True, 'analysts': analyst_list, 'count': len(analyst_list)})
-
-
-def _parse_txt_metadata(metadata_raw):
-    """
-    Parse metadata string per spec: Date (end) -> User 'by X' (end) -> Ticket ID 'N -' (start) -> Comment (remainder).
-    Returns dict: created_at (datetime or None), analyst (str or None), ticket_id (str or None), comment (str).
-    """
-    s = (metadata_raw or '').strip()
-    created_at = None
-    analyst = None
-    ticket_id = None
-
-    # Step A: Date at end — e.g. "1/12/2026 9:47:43 PM" or "12/28/2025"
-    date_time_end = re.compile(
-        r'(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)\s*$',
-        re.IGNORECASE
-    )
-    date_only_end = re.compile(r'(\d{1,2})/(\d{1,2})/(\d{4})\s*$')
-    m = date_time_end.search(s)
-    if m:
-        try:
-            month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            hour, minute = int(m.group(4)), int(m.group(5))
-            sec = int(m.group(6)) if m.group(6) else 0
-            ampm = (m.group(7) or '').upper()
-            if ampm == 'PM' and hour != 12:
-                hour += 12
-            elif ampm == 'AM' and hour == 12:
-                hour = 0
-            created_at = datetime(year, month, day, hour, minute, sec)
-        except (ValueError, IndexError):
-            pass
-        s = s[:m.start()].strip()
-    else:
-        m = date_only_end.search(s)
-        if m:
-            try:
-                month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
-                created_at = datetime(year, month, day)
-            except (ValueError, IndexError):
-                pass
-            s = s[:m.start()].strip()
-
-    # Step B: "by <username>" at end (case-insensitive)
-    by_user_end = re.compile(r'\s+by\s+([a-zA-Z0-9_-]+)\s*$', re.IGNORECASE)
-    m = by_user_end.search(s)
-    if m:
-        analyst = m.group(1).strip().lower()
-        s = s[:m.start()].strip()
-
-    # Step C: Ticket ID at start — number followed by hyphen (e.g. "45036 - ...")
-    ticket_start = re.compile(r'^\s*(\d+)\s*-\s*')
-    m = ticket_start.match(s)
-    if m:
-        ticket_id = m.group(1).strip()
-        s = s[m.end():].strip()
-
-    # Step D: Comment = remainder; clean leading/trailing whitespace and stray separators
-    comment = re.sub(r'^[\s\-]+|[\s\-]+$', '', s)
-    comment = re.sub(r'\s+', ' ', comment).strip()
-    return {'created_at': created_at, 'analyst': analyst, 'ticket_id': ticket_id, 'comment': comment}
-
-
-@app.route('/api/preview-txt', methods=['POST'])
-def preview_txt():
-    """
-    Parse TXT file with smart metadata logic; fill missing fields from form defaults.
-    Returns JSON array of { ioc, type, ticket_id, analyst, date, comment } for staging table.
-    """
-    try:
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'message': 'No file provided'}), 400
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'success': False, 'message': 'No file selected'}), 400
-        default_analyst = request.form.get('default_analyst', '').strip().lower()
-        default_ticket = request.form.get('default_ticket', '').strip() or None
-        default_ttl = request.form.get('default_ttl', 'Permanent')
-        default_comment = request.form.get('default_comment', '').strip()
-        if not default_analyst:
-            return jsonify({'success': False, 'message': 'Default analyst is required'}), 400
-
-        if default_ttl == 'Permanent':
-            expiration_display = 'Permanent'
-        else:
-            exp_dt = calculate_expiration_date(default_ttl)
-            expiration_display = exp_dt.strftime('%Y-%m-%d') if exp_dt else 'Permanent'
-
-        content = file.read().decode('utf-8')
-        lines = content.split('\n')
-        items = []
-
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            if '#' in line:
-                parts = line.split('#', 1)
-                ioc_raw = parts[0].strip()
-                metadata_raw = (parts[1] or '').strip()
-            else:
-                ioc_raw = line
-                metadata_raw = ''
-
-            ioc_cleaned = ioc_raw.replace('[.]', '.').replace('[', '').replace(']', '').strip()
-            if not ioc_cleaned:
-                continue
-            ioc_type = None
-            for test_type in PRIORITY_ORDER:
-                pattern = REGEX_PATTERNS.get(test_type)
-                if pattern and re.match(pattern, ioc_cleaned):
-                    ioc_type = test_type
-                    break
-            if not ioc_type:
-                continue
-            is_blocked, _ = check_allowlist(ioc_cleaned, ioc_type)
-            if is_blocked:
-                continue
-
-            parsed = _parse_txt_metadata(metadata_raw)
-            analyst = (parsed['analyst'] or default_analyst).lower()
-            ticket_id = parsed['ticket_id'] or default_ticket
-            created_at = parsed['created_at'] or datetime.now()
-            comment = sanitize_comment(parsed['comment'] or default_comment or '') or ''
-
-            existing_permanent = False
-            existing_analyst = ''
-            existing_comment = ''
-            existing_row = IOC.query.filter(
-                IOC.type == ioc_type,
-                func.lower(IOC.value) == ioc_cleaned.lower()
-            ).first()
-            if existing_row and existing_row.expiration_date is None:
-                existing_permanent = True
-                existing_analyst = (existing_row.analyst or '')
-                existing_comment = (existing_row.comment or '')
-
-            items.append({
-                'ioc': ioc_cleaned,
-                'type': ioc_type,
-                'ticket_id': ticket_id or '',
-                'analyst': analyst,
-                'date': created_at.strftime('%Y-%m-%dT%H:%M:%S'),
-                'comment': comment,
-                'expiration': expiration_display,
-                'existing_permanent': existing_permanent,
-                'existing_analyst': existing_analyst,
-                'existing_comment': existing_comment
-            })
-
-        return jsonify({'success': True, 'items': items, 'count': len(items)})
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/submit-staging', methods=['POST'])
-def submit_staging():
-    """Save staged IOC array to DB. Expects JSON: { items: [...], ttl, campaign_name? }. Each item: ioc, type, ticket_id?, analyst, date?, comment?."""
-    try:
-        data = request.get_json() or {}
-        items = data.get('items') or []
-        ttl = (data.get('ttl') or 'Permanent').strip()
-        campaign_name = (data.get('campaign_name') or '').strip() or None
-        campaign_id = None
-        if campaign_name:
-            c = Campaign.query.filter_by(name=campaign_name).first()
-            if c:
-                campaign_id = c.id
-
-        summary = {}
-        total_updated = 0
-        total_new = 0
-        for raw in items:
-            ioc_value = (raw.get('ioc') or '').strip()
-            ioc_type = (raw.get('type') or '').strip()
-            if not ioc_value or not ioc_type:
-                continue
-            if ioc_type not in IOC_FILES or ioc_type == 'YARA':
-                continue
-            is_blocked, _ = check_allowlist(ioc_value, ioc_type)
-            if is_blocked:
-                continue
-            analyst = (raw.get('analyst') or '').strip().lower() or 'unknown'
-            ticket_id = (raw.get('ticket_id') or '').strip() or None
-            comment = sanitize_comment(raw.get('comment') or '') or None
-            date_str = (raw.get('date') or '').strip()
-            created_at = datetime.now()
-            if date_str:
-                try:
-                    created_at = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                    if created_at.tzinfo:
-                        created_at = created_at.replace(tzinfo=None)
-                except (ValueError, TypeError):
-                    pass
-
-            exp_str = (raw.get('expiration') or '').strip()
-            if exp_str.upper() in ('PERMANENT', 'NEVER'):
-                exp_date = None
-            elif exp_str:
-                try:
-                    exp_date = datetime.strptime(exp_str[:10], '%Y-%m-%d')
-                except (ValueError, TypeError):
-                    exp_date = calculate_expiration_date(ttl)
-            else:
-                exp_date = calculate_expiration_date(ttl)
-
-            existing = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == ioc_value.lower()).first()
-            if existing:
-                existing.comment = comment
-                existing.expiration_date = exp_date
-                existing.ticket_id = ticket_id or existing.ticket_id
-                if campaign_id is not None:
-                    existing.campaign_id = campaign_id
-                total_updated += 1
-                summary[ioc_type] = summary.get(ioc_type, {'updated': 0, 'new': 0})
-                summary[ioc_type]['updated'] += 1
-            else:
-                db.session.add(IOC(
-                    type=ioc_type,
-                    value=ioc_value,
-                    analyst=analyst,
-                    ticket_id=ticket_id,
-                    comment=comment,
-                    expiration_date=exp_date,
-                    created_at=created_at,
-                    campaign_id=campaign_id
-                ))
-                total_new += 1
-                summary[ioc_type] = summary.get(ioc_type, {'updated': 0, 'new': 0})
-                summary[ioc_type]['new'] += 1
-        try:
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-            raise
-
-        summary_parts = []
-        for ioc_type, counts in summary.items():
-            parts = []
-            if counts.get('new'):
-                parts.append(f"{counts['new']} new")
-            if counts.get('updated'):
-                parts.append(f"{counts['updated']} updated")
-            if parts:
-                summary_parts.append(f"{ioc_type}s ({', '.join(parts)})")
-        message = f"Imported: {', '.join(summary_parts)}" if summary_parts else "No items imported"
-        return jsonify({'success': True, 'message': message, 'summary': summary, 'total': total_new + total_updated})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/upload-txt', methods=['POST'])
-def upload_txt():
-    """Handle bulk TXT file upload with smart parsing (log-format aware)."""
-    try:
-        if 'file' not in request.files:
-            return jsonify({'success': False, 'message': 'No file provided'}), 400
-        
-        file = request.files['file']
-        default_ticket_id = request.form.get('ticket_id', '').strip() or None
-        username = request.form.get('username', '').strip().lower()
-        ttl = request.form.get('ttl', 'Permanent')
-        campaign_name = (request.form.get('campaign_name') or '').strip() or None
-        campaign_id = None
-        if campaign_name:
-            c = Campaign.query.filter_by(name=campaign_name).first()
-            if c:
-                campaign_id = c.id
-        
-        if not username:
-            return jsonify({'success': False, 'message': 'Analyst username is required'}), 400
-        
-        if file.filename == '':
-            return jsonify({'success': False, 'message': 'No file selected'}), 400
-        
-        # Stream TXT content line-by-line (avoids loading entire file into memory)
-        stream = io.TextIOWrapper(file.stream, encoding='utf-8', errors='replace')
-        exp_date = calculate_expiration_date(ttl)
-        findings = {'IP': {}, 'Domain': {}, 'Hash': {}, 'Email': {}, 'URL': {}}
-
-        for raw_line in stream:
-            line = raw_line.strip()
-            if not line:
-                continue
-            parts = line.split('#', 1)
-            if len(parts) < 2:
-                continue
-            ioc_raw = parts[0].strip()
-            metadata_raw = parts[1].strip()
-            ioc_cleaned = ioc_raw.replace('[.]', '.').replace('[', '').replace(']', '').strip()
-            ioc_type = None
-            for test_type in PRIORITY_ORDER:
-                pattern = REGEX_PATTERNS.get(test_type)
-                if pattern and re.match(pattern, ioc_cleaned):
-                    ioc_type = test_type
-                    break
-            if not ioc_type:
-                continue
-            is_blocked, _ = check_allowlist(ioc_cleaned, ioc_type)
-            if is_blocked:
-                continue
-
-            parsed = _parse_txt_metadata(metadata_raw)
-            final_user = (parsed['analyst'] or username).lower()
-            final_date = parsed['created_at'] or datetime.now()
-            final_ticket_id = parsed['ticket_id'] or default_ticket_id
-            comment_sanitized = sanitize_comment(parsed['comment'] or '')
-
-            if ioc_cleaned not in findings[ioc_type]:
-                findings[ioc_type][ioc_cleaned] = {
-                    'comment': comment_sanitized or None,
-                    'user': final_user,
-                    'ticket_id': final_ticket_id,
-                    'created_at': final_date
-                }
-        
-        summary = {}
-        total_updated = 0
-        total_new = 0
-        for ioc_type, ioc_dict in findings.items():
-            updated_count = 0
-            new_count = 0
-            for value, meta in ioc_dict.items():
-                existing = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.lower()).first()
-                if existing:
-                    existing.comment = meta['comment']
-                    existing.expiration_date = exp_date
-                    existing.ticket_id = meta['ticket_id'] or existing.ticket_id
-                    if campaign_id is not None:
-                        existing.campaign_id = campaign_id
-                    updated_count += 1
-                else:
-                    db.session.add(IOC(
-                        type=ioc_type,
-                        value=value,
-                        analyst=meta['user'],
-                        ticket_id=meta['ticket_id'],
-                        comment=meta['comment'],
-                        expiration_date=exp_date,
-                        created_at=meta['created_at'],
-                        campaign_id=campaign_id
-                    ))
-                    new_count += 1
-            try:
-                db.session.commit()
-            except Exception:
-                db.session.rollback()
-                raise
-            summary[ioc_type] = {'updated': updated_count, 'new': new_count}
-            total_updated += updated_count
-            total_new += new_count
-        
-        # Build summary message
-        summary_parts = []
-        for ioc_type, counts in summary.items():
-            if counts['new'] > 0 or counts['updated'] > 0:
-                parts = []
-                if counts['new'] > 0:
-                    parts.append(f"{counts['new']} new")
-                if counts['updated'] > 0:
-                    parts.append(f"{counts['updated']} updated")
-                summary_parts.append(f"{ioc_type}s ({', '.join(parts)})")
-        
-        message = f"Processed TXT: {', '.join(summary_parts)}" if summary_parts else "No valid IOCs found in TXT"
-        audit_log('BULK_TXT', f'analyst={username} new={total_new} updated={total_updated}')
-        
-        return jsonify({
-            'success': True,
-            'message': message,
-            'summary': summary,
-            'total': total_new + total_updated
-        })
-        
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 def _startup_diagnostic():
@@ -2290,371 +1104,6 @@ def _startup_diagnostic():
         print(f"[DIAGNOSTIC] Failed to list {target_dir}: {e}")
 
 
-@app.route('/api/campaigns', methods=['GET'])
-def list_campaigns():
-    """List all campaigns (for future UI)."""
-    try:
-        campaigns = Campaign.query.order_by(Campaign.created_at.desc()).all()
-        return jsonify({
-            'success': True,
-            'campaigns': [
-                {'id': c.id, 'name': c.name, 'description': c.description, 'created_at': c.created_at.isoformat() if c.created_at else None}
-                for c in campaigns
-            ],
-            'count': len(campaigns)
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/campaigns', methods=['POST'])
-def create_campaign():
-    """Create a new campaign."""
-    try:
-        data = request.get_json() or {}
-        name = (data.get('name') or '').strip()
-        description = (data.get('description') or '').strip() or None
-        if not name:
-            return jsonify({'success': False, 'message': 'Campaign name is required'}), 400
-        db.session.add(Campaign(name=name, description=description))
-        db.session.commit()
-        audit_log('CAMPAIGN_CREATE', f'name={name}')
-        c = Campaign.query.filter_by(name=name).first()
-        return jsonify({
-            'success': True,
-            'message': 'Campaign created',
-            'campaign': {'id': c.id, 'name': c.name, 'description': c.description, 'created_at': c.created_at.isoformat() if c.created_at else None}
-        }), 201
-    except IntegrityError:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': 'Campaign name already exists'}), 409
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/campaigns/link', methods=['POST'])
-def link_ioc_to_campaign():
-    """Link an existing IOC to a campaign by value. Expects {ioc_value, campaign_id}."""
-    try:
-        data = request.get_json() or {}
-        ioc_value = (data.get('ioc_value') or '').strip()
-        campaign_id = data.get('campaign_id')
-        if not ioc_value:
-            return jsonify({'success': False, 'message': 'ioc_value is required'}), 400
-        if campaign_id is None:
-            return jsonify({'success': False, 'message': 'campaign_id is required'}), 400
-        campaign = Campaign.query.get(campaign_id)
-        if not campaign:
-            return jsonify({'success': False, 'message': 'Campaign not found'}), 404
-        ioc = IOC.query.filter(IOC.value == ioc_value).first()
-        if not ioc:
-            return jsonify({'success': False, 'message': 'IOC not found'}), 404
-        ioc.campaign_id = campaign_id
-        db.session.commit()
-        return jsonify({
-            'success': True,
-            'message': f'IOC linked to campaign "{campaign.name}"',
-            'ioc_id': ioc.id,
-            'campaign_id': campaign_id
-        })
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/campaigns/<int:campaign_id>', methods=['PUT'])
-def update_campaign(campaign_id):
-    """Update campaign name and/or description."""
-    try:
-        campaign = Campaign.query.get(campaign_id)
-        if not campaign:
-            return jsonify({'success': False, 'message': 'Campaign not found'}), 404
-        data = request.get_json() or {}
-        name = (data.get('name') or '').strip()
-        if name:
-            campaign.name = name
-        description = data.get('description')
-        if description is not None:
-            campaign.description = description.strip() or None
-        db.session.commit()
-        audit_log('CAMPAIGN_UPDATE', f'id={campaign_id} name={campaign.name}')
-        return jsonify({
-            'success': True,
-            'message': f'Campaign "{campaign.name}" updated',
-            'campaign': {'id': campaign.id, 'name': campaign.name, 'description': campaign.description}
-        })
-    except IntegrityError:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': 'Campaign name already exists'}), 409
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/campaigns/<int:campaign_id>', methods=['DELETE'])
-def delete_campaign(campaign_id):
-    """Delete a campaign after unlinking all associated IOCs and YARA rules."""
-    try:
-        campaign = Campaign.query.get(campaign_id)
-        if not campaign:
-            return jsonify({'success': False, 'message': 'Campaign not found'}), 404
-        # Unlink IOCs (set campaign_id to NULL, don't delete the IOCs)
-        IOC.query.filter(IOC.campaign_id == campaign_id).update({'campaign_id': None})
-        # Unlink YARA rules
-        YaraRule.query.filter(YaraRule.campaign_id == campaign_id).update({'campaign_id': None})
-        campaign_name = campaign.name
-        db.session.delete(campaign)
-        db.session.commit()
-        audit_log('CAMPAIGN_DELETE', f'id={campaign_id} name={campaign_name}')
-        return jsonify({'success': True, 'message': f'Campaign "{campaign_name}" deleted'})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-@app.route('/api/campaigns/<int:campaign_id>/export', methods=['GET'])
-def export_campaign_csv(campaign_id):
-    """Export all IOCs and YARA rules for a campaign as a CSV download."""
-    try:
-        campaign = Campaign.query.get(campaign_id)
-        if not campaign:
-            return jsonify({'success': False, 'message': 'Campaign not found'}), 404
-
-        iocs = IOC.query.filter(IOC.campaign_id == campaign_id).all()
-        yara_rules = YaraRule.query.filter(YaraRule.campaign_id == campaign_id).all()
-
-        output = io.StringIO()
-        writer = csv.writer(output)
-        writer.writerow(['Type', 'Value', 'Country', 'Analyst', 'Ticket ID', 'Comment', 'Created', 'Expiration'])
-
-        for ioc in iocs:
-            country = ''
-            if ioc.type == 'IP':
-                country = get_country_code(ioc.value) or ''
-            writer.writerow([
-                ioc.type,
-                ioc.value,
-                country.upper() if country else '',
-                ioc.analyst or '',
-                ioc.ticket_id or '',
-                ioc.comment or '',
-                ioc.created_at.strftime('%Y-%m-%d %H:%M:%S') if ioc.created_at else '',
-                ioc.expiration_date.strftime('%Y-%m-%d %H:%M:%S') if ioc.expiration_date else 'Permanent',
-            ])
-
-        for rule in yara_rules:
-            writer.writerow([
-                'YARA',
-                rule.filename,
-                '',
-                rule.analyst or '',
-                rule.ticket_id or '',
-                rule.comment or '',
-                rule.uploaded_at.strftime('%Y-%m-%d %H:%M:%S') if rule.uploaded_at else '',
-                '',
-            ])
-
-        csv_content = output.getvalue()
-        output.close()
-        safe_name = ''.join(c if c.isalnum() or c in '-_ ' else '_' for c in campaign.name).strip()
-        filename = f'campaign_{safe_name}_{campaign.id}.csv'
-
-        return Response(
-            csv_content,
-            mimetype='text/csv',
-            headers={'Content-Disposition': f'attachment; filename="{filename}"'}
-        )
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
-# Vis.js node colors by IOC type (Commander neon theme)
-_IOC_TYPE_COLORS = {
-    'IP': '#00d4ff',
-    'Domain': '#a78bfa',
-    'Hash': '#f43f5e',
-    'Email': '#22c55e',
-    'URL': '#f59e0b',
-    'YARA': '#eab308',
-}
-
-
-def _emoji_svg_data_uri(emoji, bg_color='#3b82f6'):
-    """Generate a base64 data URI of an SVG circle with an emoji inside (for Vis.js circularImage)."""
-    svg = (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">'
-        f'<circle cx="32" cy="32" r="32" fill="{bg_color}"/>'
-        f'<text x="32" y="44" text-anchor="middle" font-size="32">{emoji}</text>'
-        f'</svg>'
-    )
-    b64 = base64.b64encode(svg.encode('utf-8')).decode('ascii')
-    return f'data:image/svg+xml;base64,{b64}'
-
-# Pre-generate emoji SVGs for each IOC type (cached at module level)
-_EMOJI_SVGS = {
-    'campaign': _emoji_svg_data_uri('🎯', '#ef4444'),
-    'IP':       _emoji_svg_data_uri('🛡️', '#0891b2'),
-    'Domain':   _emoji_svg_data_uri('🌐', '#7c3aed'),
-    'URL':      _emoji_svg_data_uri('🔗', '#d97706'),
-    'Email':    _emoji_svg_data_uri('📧', '#16a34a'),
-    'Hash':     _emoji_svg_data_uri('☣️', '#e11d48'),
-    'YARA':     _emoji_svg_data_uri('📜', '#ca8a04'),
-}
-
-# Column X-offsets for the "Orchestra" layout (type → x)
-_COLUMN_X = {
-    'IP':     -500,
-    'Domain': -250,
-    'URL':       0,
-    'Email':   250,
-    'Hash':    500,
-    'YARA':    500,   # YARA shares column with Hash
-}
-
-
-@app.route('/api/campaign-graph/<int:campaign_id>', methods=['GET'])
-def campaign_graph(campaign_id):
-    """Return Orchestra-layout Vis.js graph: Campaign at top, IOC columns below with fixed x/y."""
-    try:
-        campaign = Campaign.query.get(campaign_id)
-        if not campaign:
-            return jsonify({'success': False, 'message': 'Campaign not found'}), 404
-
-        camp_node_id = f'camp_{campaign.id}'
-
-        # Root node — top center (label ABOVE the image via large negative vadjust)
-        # circularImage label defaults to below the node (~y+45 for size 40).
-        # vadjust -120 shifts it to ~y-75, well above the 40px-radius image.
-        camp_label = campaign.name[:30] + ('…' if len(campaign.name) > 30 else '')
-        nodes = [{
-            'id': camp_node_id,
-            'label': f'<b>{camp_label}</b>',
-            'title': (campaign.name + ('\n' + (campaign.description or ''))) if campaign.description else campaign.name,
-            'shape': 'circularImage',
-            'image': _EMOJI_SVGS['campaign'],
-            'size': 40,
-            'x': 0, 'y': 0,
-            'fixed': {'x': True, 'y': True},
-            'borderWidth': 3,
-            'color': {'border': '#ef4444', 'highlight': {'border': '#f87171'}},
-            'font': {
-                'multi': 'html',
-                'vadjust': -140,
-                'size': 24,
-                'color': '#ffffff',
-                'face': 'Segoe UI, sans-serif',
-                'bold': {'color': '#ffffff', 'size': 24, 'face': 'Segoe UI, sans-serif'},
-            },
-        }]
-        edges = []
-
-        # Column header labels (type name above each column)
-        _COLUMN_HEADERS = {
-            'IP':     ('IP Addresses',  '#00d4ff'),
-            'Domain': ('Domains',       '#a78bfa'),
-            'URL':    ('URLs',          '#f59e0b'),
-            'Email':  ('Emails',        '#22c55e'),
-            'Hash':   ('Hashes / YARA', '#f43f5e'),
-        }
-        for col_type, (col_label, col_color) in _COLUMN_HEADERS.items():
-            col_x = _COLUMN_X.get(col_type, 0)
-            nodes.append({
-                'id': f'header_{col_type}',
-                'label': col_label,
-                'x': col_x, 'y': 85,
-                'fixed': {'x': True, 'y': True},
-                'shape': 'text',
-                'font': {'size': 13, 'color': col_color, 'face': 'Inter, Segoe UI, sans-serif',
-                          'bold': {'color': col_color, 'size': 13}},
-            })
-
-        # Track current Y position per column (start below root)
-        col_y = {}  # type_key → next y
-
-        # IOC nodes — fixed x/y per type column
-        iocs = IOC.query.filter(IOC.campaign_id == campaign_id).all()
-        for ioc in iocs:
-            ioc_type = ioc.type or 'Hash'
-            col_x = _COLUMN_X.get(ioc_type, 400)
-            node_color = _IOC_TYPE_COLORS.get(ioc_type, '#94a3b8')
-            truncated = (ioc.value[:24] + '…') if len(ioc.value) > 24 else ioc.value
-
-            # Compute y for this column
-            y_key = ioc_type
-            if y_key not in col_y:
-                col_y[y_key] = 150
-            node_y = col_y[y_key]
-            col_y[y_key] += 80
-
-            node = {
-                'id': f'ioc_{ioc.id}',
-                'label': truncated,
-                'title': f"{ioc_type}: {ioc.value}",
-                'shape': 'circularImage',
-                'size': 22,
-                'x': col_x, 'y': node_y,
-                'fixed': {'x': True, 'y': True},
-                'borderWidth': 2,
-                'color': {'border': node_color, 'highlight': {'border': '#ffffff'}},
-                'font': {'color': '#e2e8f0', 'size': 14, 'face': 'Consolas, monospace', 'bold': True, 'vadjust': 0},
-            }
-
-            # IP nodes: use country flag image; others: emoji SVG
-            if ioc_type == 'IP':
-                cc = get_country_code(ioc.value)
-                node['image'] = f'/static/flags/1x1/{cc}.svg' if cc else _EMOJI_SVGS['IP']
-            else:
-                node['image'] = _EMOJI_SVGS.get(ioc_type, _EMOJI_SVGS['Hash'])
-
-            nodes.append(node)
-            edges.append({
-                'from': camp_node_id,
-                'to': f'ioc_{ioc.id}',
-                'color': {'color': node_color, 'opacity': 0.5},
-                'width': 1.5,
-            })
-
-        # YARA rule nodes — same column logic (shares Hash column, offset right)
-        yara_rules = YaraRule.query.filter(YaraRule.campaign_id == campaign_id).all()
-        y_key_yara = 'YARA'
-        for rule in yara_rules:
-            if y_key_yara not in col_y:
-                # Start YARA after Hash column entries (or at 150 if none)
-                col_y[y_key_yara] = col_y.get('Hash', 150)
-            node_y = col_y[y_key_yara]
-            col_y[y_key_yara] += 80
-
-            nodes.append({
-                'id': f'yara_{rule.id}',
-                'label': rule.filename[:20] + ('…' if len(rule.filename) > 20 else ''),
-                'title': f"YARA: {rule.filename}\n{rule.comment or ''}",
-                'shape': 'circularImage',
-                'image': _EMOJI_SVGS['YARA'],
-                'size': 22,
-                'x': 500, 'y': node_y,
-                'fixed': {'x': True, 'y': True},
-                'borderWidth': 2,
-                'color': {'border': '#eab308', 'highlight': {'border': '#fde68a'}},
-                'font': {'color': '#e2e8f0', 'size': 14, 'face': 'Consolas, monospace', 'bold': True, 'vadjust': 0},
-            })
-            edges.append({
-                'from': camp_node_id,
-                'to': f'yara_{rule.id}',
-                'color': {'color': '#fbbf24', 'opacity': 0.5},
-                'width': 1.5,
-            })
-
-        return jsonify({
-            'success': True,
-            'nodes': nodes,
-            'edges': edges,
-            'campaign': {'id': campaign.id, 'name': campaign.name, 'description': campaign.description}
-        })
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
-
-
 def _ensure_yara_campaign_id_column():
     """If yara_rules table exists without campaign_id, add it (migration safety)."""
     try:
@@ -2665,10 +1114,230 @@ def _ensure_yara_campaign_id_column():
             db.session.execute(text(
                 "ALTER TABLE yara_rules ADD COLUMN campaign_id INTEGER REFERENCES campaigns(id)"
             ))
-            db.session.commit()
+            _commit_with_retry()
     except Exception as e:
         db.session.rollback()
         print(f"[Migration] yara_rules campaign_id check/add: {e}")
+
+
+def _ensure_yara_quality_points_column():
+    """Add quality_points to yara_rules for Champs YARA scoring (10-50 per rule)."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(yara_rules)"))
+        rows = result.fetchall()
+        has_qp = any((row[1] == 'quality_points' for row in rows))
+        if not has_qp:
+            db.session.execute(text("ALTER TABLE yara_rules ADD COLUMN quality_points INTEGER"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] yara_rules quality_points check/add: {e}")
+
+
+def _ensure_yara_status_column():
+    """Add status to yara_rules for approval workflow (pending | approved | rejected)."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(yara_rules)"))
+        rows = result.fetchall()
+        has_status = any((row[1] == 'status' for row in rows))
+        if not has_status:
+            db.session.execute(text(
+                "ALTER TABLE yara_rules ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'approved'"
+            ))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] yara_rules status check/add: {e}")
+
+
+def _ensure_ioc_submission_method_column():
+    """Add submission_method to iocs if missing (single|csv|txt|paste|import)."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(iocs)"))
+        rows = result.fetchall()
+        if not any(row[1] == 'submission_method' for row in rows):
+            db.session.execute(text("ALTER TABLE iocs ADD COLUMN submission_method VARCHAR(16) DEFAULT 'single'"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] iocs submission_method check/add: {e}")
+
+
+def _ensure_ioc_tags_column():
+    """If iocs table exists without tags column, add it (migration safety)."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(iocs)"))
+        rows = result.fetchall()
+        has_tags = any((row[1] == 'tags' for row in rows))
+        if not has_tags:
+            db.session.execute(text("ALTER TABLE iocs ADD COLUMN tags TEXT DEFAULT '[]'"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] iocs tags check/add: {e}")
+
+
+def _ensure_ioc_rare_find_columns():
+    """Add Rare Find columns to iocs if missing (country_code, tld, email_domain, rare_find_type)."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(iocs)"))
+        rows = result.fetchall()
+        names = {row[1] for row in rows}
+        if 'country_code' not in names:
+            db.session.execute(text("ALTER TABLE iocs ADD COLUMN country_code VARCHAR(8)"))
+            _commit_with_retry()
+        if 'tld' not in names:
+            db.session.execute(text("ALTER TABLE iocs ADD COLUMN tld VARCHAR(32)"))
+            _commit_with_retry()
+        if 'email_domain' not in names:
+            db.session.execute(text("ALTER TABLE iocs ADD COLUMN email_domain VARCHAR(255)"))
+            _commit_with_retry()
+        if 'rare_find_type' not in names:
+            db.session.execute(text("ALTER TABLE iocs ADD COLUMN rare_find_type VARCHAR(32)"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] iocs rare_find columns: {e}")
+
+
+def _ensure_admin_user():
+    """Create default admin user if no users exist (offline-friendly)."""
+    if User.query.limit(1).first() is not None:
+        return
+    default_password = os.environ.get('ADMIN_DEFAULT_PASSWORD', 'admin')
+    admin = User(
+        username='admin',
+        password_hash=hash_password(default_password),
+        source='local',
+        is_admin=True,
+        is_active=True,
+        must_change_password=True,
+    )
+    db.session.add(admin)
+    _commit_with_retry()
+    print("[Migration] Created default admin user (must_change_password=True).")
+    profile = UserProfile(user_id=admin.id, display_name='Administrator')
+    db.session.add(profile)
+    _commit_with_retry()
+
+
+def _ensure_system_settings_table():
+    """Ensure system_settings table exists (Phase 2.5 config storage)."""
+    try:
+        db.create_all()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] system_settings: {e}")
+
+
+def _ensure_user_last_login_column():
+    """Add last_login_at to users if missing."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(users)"))
+        rows = result.fetchall()
+        has_col = any((row[1] == 'last_login_at' for row in rows))
+        if not has_col:
+            db.session.execute(text("ALTER TABLE users ADD COLUMN last_login_at DATETIME"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] users last_login_at: {e}")
+
+
+def _ensure_user_must_change_password_column():
+    """Add must_change_password to users if missing; set True for default admin."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(users)"))
+        rows = result.fetchall()
+        has_col = any((row[1] == 'must_change_password' for row in rows))
+        if not has_col:
+            db.session.execute(text("ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT 0"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] users must_change_password: {e}")
+
+
+def _ensure_ioc_user_id_column():
+    """Add user_id to iocs if missing; assign existing IOCs to admin (id=1)."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(iocs)"))
+        rows = result.fetchall()
+        has_user_id = any((row[1] == 'user_id' for row in rows))
+        if not has_user_id:
+            db.session.execute(text("ALTER TABLE iocs ADD COLUMN user_id INTEGER REFERENCES users(id)"))
+            _commit_with_retry()
+        admin = db.session.get(User, 1)
+        if admin:
+            db.session.execute(text("UPDATE iocs SET user_id = 1 WHERE user_id IS NULL"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] iocs user_id check/add: {e}")
+
+
+def _ensure_team_goal_type_column():
+    """Add goal_type to team_goals if missing."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(team_goals)"))
+        rows = result.fetchall()
+        if not rows:
+            return
+        has_goal_type = any((row[1] == 'goal_type' for row in rows))
+        if not has_goal_type:
+            db.session.execute(text("ALTER TABLE team_goals ADD COLUMN goal_type VARCHAR(32) DEFAULT 'ioc_add' NOT NULL"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] team_goals goal_type: {e}")
+
+
+def _ensure_team_goal_description_column():
+    """Add description to team_goals if missing."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(team_goals)"))
+        rows = result.fetchall()
+        if not rows:
+            return
+        has_desc = any((row[1] == 'description' for row in rows))
+        if not has_desc:
+            db.session.execute(text("ALTER TABLE team_goals ADD COLUMN description TEXT"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] team_goals description: {e}")
+
+
+def _ensure_campaign_dir_column():
+    """Add dir (ltr/rtl) to campaigns if missing."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(campaigns)"))
+        rows = result.fetchall()
+        if not rows:
+            return
+        has_dir = any((row[1] == 'dir' for row in rows))
+        if not has_dir:
+            db.session.execute(text("ALTER TABLE campaigns ADD COLUMN dir VARCHAR(8) DEFAULT 'ltr'"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] campaigns dir: {e}")
+
+
+def _ensure_campaign_created_by_column():
+    """Add created_by (user_id) to campaigns if missing."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(campaigns)"))
+        rows = result.fetchall()
+        if not rows:
+            return
+        has_created_by = any((row[1] == 'created_by' for row in rows))
+        if not has_created_by:
+            db.session.execute(text("ALTER TABLE campaigns ADD COLUMN created_by INTEGER REFERENCES users(id)"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] campaigns created_by: {e}")
 
 
 def _init_db():
@@ -2676,11 +1345,40 @@ def _init_db():
     with app.app_context():
         db.create_all()
         _ensure_yara_campaign_id_column()
+        _ensure_yara_quality_points_column()
+        _ensure_yara_status_column()
+        _ensure_ioc_tags_column()
+        _ensure_ioc_submission_method_column()
+        _ensure_ioc_rare_find_columns()
+        _ensure_user_last_login_column()  # Must run before any User query (admin_user, etc.)
+        _ensure_user_must_change_password_column()
+        _ensure_admin_user()  # Must exist before user_id migration
+        _ensure_ioc_user_id_column()
+        _ensure_system_settings_table()
+        _ensure_team_goal_type_column()
+        _ensure_team_goal_description_column()
+        _ensure_campaign_dir_column()
+        _ensure_campaign_created_by_column()
         migrate_legacy_data()
+
+
+# Ensure DB exists when app is loaded (e.g. under gunicorn); avoids service crash on first start
+try:
+    _init_db()
+except Exception:
+    pass
 
 
 if __name__ == '__main__':
     _init_db()
-    app.run(debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true',
-            host='0.0.0.0',
-            port=int(os.environ.get('FLASK_PORT', 5000)))
+    port = int(os.environ.get('FLASK_PORT', 5000))
+    use_ssl = os.path.isfile(SSL_CERT_FILE) and os.path.isfile(SSL_KEY_FILE)
+    if use_ssl:
+        app.run(debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true',
+                host='0.0.0.0',
+                port=port,
+                ssl_context=(SSL_CERT_FILE, SSL_KEY_FILE))
+    else:
+        app.run(debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true',
+                host='0.0.0.0',
+                port=port)

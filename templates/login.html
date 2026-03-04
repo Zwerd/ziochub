@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en" id="htmlRoot" data-version="{{ version }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - ThreatGate v{{ version }}</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}">
+    <script>
+        (function() {
+            var theme = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+</head>
+<body>
+    <div class="login-wrap">
+        <div class="login-card">
+            <img src="{{ url_for('static', filename='threatgate_smaller.png') }}" alt="ThreatGate" class="login-logo">
+            <h1>ThreatGate v{{ version }} <span class="login-badge">Commander Edition</span></h1>
+            <p class="login-subtitle">Sign in to submit IOCs and manage the platform</p>
+
+            {% if error %}
+            <div class="login-error">{{ error }}</div>
+            {% endif %}
+
+            <form method="POST" action="{{ url_for('auth.login') }}" class="login-form">
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" required
+                       placeholder="admin" autocomplete="username" autofocus>
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required
+                       placeholder="••••••••" autocomplete="current-password">
+                <button type="submit">Sign In</button>
+            </form>
+        </div>
+        <p class="login-back">
+            <a href="{{ url_for('index') }}">← Back to app</a> (view-only without login)
+        </p>
+    </div>
+</body>
+</html>

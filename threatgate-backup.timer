@@ -1,0 +1,11 @@
+[Unit]
+Description=Run ThreatGate DB backup daily
+Requires=threatgate-backup.service
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

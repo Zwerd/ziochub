@@ -1,0 +1,22 @@
+[Unit]
+Description=ThreatGate HTTP to HTTPS Redirect
+After=network.target threatgate.service
+BindsTo=threatgate.service
+
+[Service]
+Type=simple
+User=threatgate
+Group=threatgate
+WorkingDirectory=/opt/threatgate
+ExecStart=/opt/threatgate/venv/bin/python /opt/threatgate/http_redirect.py
+Environment="REDIRECT_HTTP_PORT=8080"
+Environment="REDIRECT_HTTPS_PORT=8443"
+Restart=always
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

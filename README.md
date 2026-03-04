@@ -1,4 +1,4 @@
-# ThreatGate v2.0 Beta — Commander Edition
+# ThreatGate v2.0 Beta - Commander Edition
 
 ThreatGate is a **modern IOC & YARA Management Platform** built for SOC operations. Analysts submit indicators, ThreatGate stores them in a SQLite database, and security devices ingest **plain-text feeds** for enforcement. Designed for **air-gapped / offline** environments.
 
@@ -561,6 +561,6 @@ sudo ./setup.sh --offline      # Fresh install
 
 ## Version
 
-**ThreatGate v2.0 Beta — Commander Edition**  
+**ThreatGate v2.0 Beta - Commander Edition**  
 Single source of version: `constants.py` → `VERSION` (used in UI and docs).  
 Last updated: **March 2026**

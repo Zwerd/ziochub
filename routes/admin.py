@@ -206,9 +206,17 @@ def save_settings():
         except ImportError:
             misp_keys = _MISP_SAVE_KEYS_FALLBACK
         syslog_keys = ('syslog_udp_enabled', 'syslog_udp_host', 'syslog_udp_port')
-        for key in ('auth_mode', 'ldap_enabled', 'ldap_url', 'ldap_base_dn', 'ldap_bind_dn', 'ldap_bind_password', 'ldap_user_filter') + misp_keys + syslog_keys:
+        ldap_keys = ('auth_mode', 'ldap_enabled', 'ldap_url', 'ldap_base_dn', 'ldap_bind_dn', 'ldap_bind_password', 'ldap_user_filter')
+        sections = []
+        for key in ldap_keys + misp_keys + syslog_keys:
             if key in data:
                 _set_setting(key, str(data[key]).strip())
+                if key in ldap_keys and 'LDAP' not in sections:
+                    sections.append('LDAP')
+                elif key in misp_keys and 'MISP' not in sections:
+                    sections.append('MISP')
+                elif key in syslog_keys and 'Syslog' not in sections:
+                    sections.append('Syslog')
         try:
             from utils.cef_logger import refresh_cef_udp_target
             udp_enabled = _get_setting('syslog_udp_enabled', 'false').lower() == 'true'
@@ -217,10 +225,30 @@ def save_settings():
             refresh_cef_udp_target(udp_host, udp_port)
         except Exception:
             pass
-        audit_log('admin_settings_update', f'by={current_user.username}')
+        detail = ','.join(sections) if sections else 'settings'
+        audit_log('admin_settings_update', f'{detail} by={current_user.username}')
         return _api_ok(message='Settings saved')
     except Exception as e:
         logging.exception('api_admin_save_settings failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/logs/tail')
+@admin_required
+def logs_tail():
+    """Return last N lines of CEF audit log (default 50)."""
+    _api_ok, _api_error, get_audit_log_path = _from_app('_api_ok', '_api_error', 'get_audit_log_path')
+    try:
+        lines = min(int(request.args.get('lines', 50)), 500)
+        log_path = get_audit_log_path()
+        if not os.path.isfile(log_path):
+            return _api_ok(data={'lines': [], 'path': log_path, 'message': 'Log file not found or empty.'})
+        with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            all_lines = f.readlines()
+        last = all_lines[-lines:] if len(all_lines) >= lines else all_lines
+        return _api_ok(data={'lines': [ln.rstrip('\n\r') for ln in last], 'path': log_path})
+    except Exception as e:
+        logging.exception('admin logs_tail failed')
         return _api_error(str(e), 500)
 
 

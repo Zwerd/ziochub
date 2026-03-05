@@ -82,7 +82,9 @@ class CEFAuditHandler(logging.Handler):
             backupCount=1,
             encoding='utf-8',
         )
-        self._file_handler.setFormatter(logging.Formatter('%(message)s'))
+        self._file_handler.setFormatter(
+            logging.Formatter('%(asctime)s %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        )
 
     def set_udp_target(self, host: str, port: int):
         """Update UDP target (call when settings change)."""

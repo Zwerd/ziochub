@@ -172,6 +172,11 @@ def _enforce_password_change():
 _cef_logger_inited = False
 
 
+def get_audit_log_path():
+    """Return path to CEF audit log file (for admin log viewer)."""
+    return os.path.join(_data_dir, 'audit_cef.log')
+
+
 def _api_error(message: str, status: int = 500):
     """Return a consistent JSON error response. Use for API endpoints."""
     return jsonify({'success': False, 'message': message}), status

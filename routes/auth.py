@@ -95,57 +95,65 @@ def login():
             user = admin_user
             logging.info('Dev mode: auto-login as %s', admin_user.username)
 
-    # Phase 3: Try LDAP first if enabled and auth_mode allows LDAP
-    if ldap_enabled and auth_mode in ('ldap', 'ldap_with_local_fallback'):
-        ldap_url = _get_setting('ldap_url', '').strip()
-        ldap_base_dn = _get_setting('ldap_base_dn', '').strip()
-        ldap_bind_dn = _get_setting('ldap_bind_dn', '').strip()
-        ldap_bind_password = _get_setting('ldap_bind_password', '').strip()
-        ldap_user_filter = _get_setting('ldap_user_filter', '(sAMAccountName=%(user)s)').strip()
-
-        ldap_ok = False
-        display_name = None
-        if ldap_url and ldap_base_dn:
-            ldap_ok, display_name = try_ldap_bind(
-                ldap_url, ldap_base_dn, ldap_bind_dn, ldap_bind_password,
-                ldap_user_filter, username, password,
-            )
-        if not ldap_ok:
-            ldap_ok, display_name = try_ldap_mock_dev(username, password)
-        if not ldap_ok and ldap_url and ldap_base_dn:
-            logging.warning('Phase 6.3: LDAP unreachable for %s; falling back to local if auth_mode allows', username)
-        if ldap_ok:
-            user = User.query.filter_by(username=username).first()
-            if user:
-                user.source = 'ldap'
-                user.password_hash = None
-                user.is_active = True
-            else:
-                user = User(
-                    username=username,
-                    password_hash=None,
-                    source='ldap',
-                    is_admin=False,
-                    is_active=True,
-                )
-                db.session.add(user)
-                _commit_with_retry()
-            profile = UserProfile.query.filter_by(user_id=user.id).first()
-            if profile:
-                profile.display_name = display_name or username
-            else:
-                db.session.add(UserProfile(user_id=user.id, display_name=display_name or username))
-            _commit_with_retry()
-
-    # Fallback to local auth
-    if user is None and auth_mode in ('local_only', 'ldap_with_local_fallback'):
+    # Phase 2: Try local first when auth_mode is local_only or local_with_ldap_fallback
+    if auth_mode in ('local_only', 'local_with_ldap_fallback'):
         local_user = User.query.filter_by(username=username, source='local', is_active=True).first()
         if local_user and verify_password(local_user.password_hash, password):
             user = local_user
-        elif ldap_enabled and auth_mode == 'ldap_with_local_fallback':
+
+    # Phase 3: Try LDAP if enabled and (user not found yet) and auth_mode allows LDAP
+    if user is None and ldap_enabled and auth_mode in ('ldap', 'ldap_with_local_fallback', 'local_with_ldap_fallback'):
+        try:
+            ldap_url = _get_setting('ldap_url', '').strip()
+            ldap_base_dn = _get_setting('ldap_base_dn', '').strip()
+            ldap_bind_dn = _get_setting('ldap_bind_dn', '').strip()
+            ldap_bind_password = _get_setting('ldap_bind_password', '').strip()
+            ldap_user_filter = _get_setting('ldap_user_filter', '(sAMAccountName=%(user)s)').strip()
+
+            ldap_ok = False
+            display_name = None
+            if ldap_url and ldap_base_dn:
+                ldap_ok, display_name = try_ldap_bind(
+                    ldap_url, ldap_base_dn, ldap_bind_dn, ldap_bind_password,
+                    ldap_user_filter, username, password,
+                )
+            if not ldap_ok:
+                ldap_ok, display_name = try_ldap_mock_dev(username, password)
+            if not ldap_ok and ldap_url and ldap_base_dn:
+                logging.warning('Phase 6.3: LDAP unreachable for %s; falling back to local if auth_mode allows', username)
+            if ldap_ok:
+                user = User.query.filter_by(username=username).first()
+                if user:
+                    user.source = 'ldap'
+                    user.password_hash = None
+                    user.is_active = True
+                else:
+                    user = User(
+                        username=username,
+                        password_hash=None,
+                        source='ldap',
+                        is_admin=False,
+                        is_active=True,
+                    )
+                    db.session.add(user)
+                    _commit_with_retry()
+                profile = UserProfile.query.filter_by(user_id=user.id).first()
+                if profile:
+                    profile.display_name = display_name or username
+                else:
+                    db.session.add(UserProfile(user_id=user.id, display_name=display_name or username))
+                _commit_with_retry()
+        except Exception as e:
+            logging.exception('LDAP login phase failed for %s: %s', username, e)
+            # Do not raise: continue so fallback to local can run or we return 401
+
+    # Fallback to local auth only for ldap_with_local_fallback (LDAP was tried first and failed)
+    if user is None and auth_mode == 'ldap_with_local_fallback':
+        local_user = User.query.filter_by(username=username, source='local', is_active=True).first()
+        if local_user and verify_password(local_user.password_hash, password):
+            user = local_user
+        elif ldap_enabled:
             logging.warning('LDAP auth failed for %s, falling back to local', username)
-        else:
-            pass
 
     if user is None:
         return render_template('login.html', error='Invalid username or password'), 401

@@ -386,6 +386,8 @@
   },
   "feedpulse": {
     "title": "Feed Pulse",
+    "type_label": "IOC Type:",
+    "hours_label": "Period:",
     "type_all": "All Types",
     "hours_24": "Last 24h",
     "hours_48": "Last 48h",

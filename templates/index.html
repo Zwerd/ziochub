@@ -104,7 +104,7 @@
                         <span id="authAvatarPlaceholder" class="analyst-avatar-placeholder w-14 h-14 rounded-full flex items-center justify-center text-xl">👤</span>
                         {% endif %}
                     </button>
-                    <a id="authAdmin" href="/admin" class="px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400 {% if not is_admin %}hidden{% endif %}" data-i18n="auth.admin_settings">Admin Settings</a>
+                    <a id="authAdmin" href="/admin" class="px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400 {% if not is_admin %}hidden{% endif %}" data-i18n="auth.admin">Admin</a>
                     <a id="authLogout" href="/logout" class="px-3 py-1 bg-tertiary rounded hover:border-red-400/70 transition text-sm text-red-400 {% if not authenticated %}hidden{% endif %}" data-i18n="auth.logout">Logout</a>
                 </div>
                 <div class="navbar-lang-theme flex flex-col gap-0.5">
@@ -846,16 +846,18 @@
                     <div class="flex-shrink-0 mb-3 flex flex-wrap items-center justify-between gap-3">
                         <h2 class="text-2xl font-bold accent-blue" data-i18n="feedpulse.title">Feed Pulse</h2>
                         <div class="flex flex-wrap items-center gap-2">
-                            <select id="feedPulseType" class="h-8 text-sm px-2 rounded bg-tertiary border border-white/10">
-                                <option value="all" data-i18n="feedpulse.type_all">All Types</option>
+                            <label for="feedPulseType" class="feed-pulse-select-label text-sm font-medium text-primary shrink-0" data-i18n="feedpulse.type_label">IOC Type:</label>
+                            <select id="feedPulseType" class="feed-pulse-select h-8 text-sm px-2 py-0.5 rounded bg-tertiary border border-white/10 text-primary min-w-[120px]" aria-label="IOC Type">
+                                <option value="all" selected data-i18n="feedpulse.type_all">All Types</option>
                                 <option value="IP">IP</option>
                                 <option value="Domain">Domain</option>
                                 <option value="URL">URL</option>
                                 <option value="Hash">Hash</option>
                                 <option value="Email">Email</option>
                             </select>
-                            <select id="feedPulseHours" class="h-8 text-sm px-2 rounded bg-tertiary border border-white/10">
-                                <option value="24" data-i18n="feedpulse.hours_24">Last 24h</option>
+                            <label for="feedPulseHours" class="feed-pulse-select-label text-sm font-medium text-primary shrink-0" data-i18n="feedpulse.hours_label">Period:</label>
+                            <select id="feedPulseHours" class="feed-pulse-select h-8 text-sm px-2 py-0.5 rounded bg-tertiary border border-white/10 text-primary min-w-[120px]" aria-label="Time period">
+                                <option value="24" selected data-i18n="feedpulse.hours_24">Last 24h</option>
                                 <option value="48" data-i18n="feedpulse.hours_48">Last 48h</option>
                                 <option value="72" data-i18n="feedpulse.hours_72">Last 72h</option>
                                 <option value="168" data-i18n="feedpulse.hours_168">Last 7 days</option>

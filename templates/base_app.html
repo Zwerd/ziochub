@@ -45,19 +45,32 @@
             <div class="navbar-right">
                 <div id="authBox" class="flex items-center gap-2 shrink-0">
                     {% if current_user.is_authenticated %}
-                    <a id="authProfile" href="{{ url_for('auth.profile_page') }}" class="flex items-center gap-2 px-2 py-1.5 rounded hover:border-accent-green transition text-sm" title="{{ current_user.username }}">
-                        {% if profile is defined and profile and profile.avatar_path %}<img id="authAvatar" class="w-7 h-7 rounded-full object-cover border border-slate-600" src="{{ url_for('static', filename=profile.avatar_path) }}" alt="">{% else %}<span class="w-7 h-7 rounded-full bg-slate-600/50 flex items-center justify-center text-sm">👤</span>{% endif %}
-                        <span id="authUser" class="accent-blue">{% if profile is defined and profile and profile.display_name %}{{ profile.display_name }}{% else %}{{ current_user.username }}{% endif %}</span>
+                    <a id="authProfile" href="{{ url_for('auth.profile_page') }}" class="analyst-avatar-btn flex items-center rounded-full transition-all duration-300" title="{{ display_name or current_user.username }}">
+                        {% if avatar_url %}
+                        <img id="authAvatar" class="analyst-avatar-img w-14 h-14 rounded-full object-cover" src="{{ avatar_url }}" alt="">
+                        <span id="authAvatarPlaceholder" class="analyst-avatar-placeholder hidden w-14 h-14 rounded-full flex items-center justify-center text-xl">👤</span>
+                        {% else %}
+                        <img id="authAvatar" class="analyst-avatar-img hidden w-14 h-14 rounded-full object-cover" src="" alt="">
+                        <span id="authAvatarPlaceholder" class="analyst-avatar-placeholder w-14 h-14 rounded-full flex items-center justify-center text-xl">👤</span>
+                        {% endif %}
                     </a>
                     {% if current_user.is_admin %}
-                    <a id="authAdmin" href="{{ url_for('admin_pages.admin_index') }}" class="px-3 py-1.5 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400">Admin Settings</a>
+                    <a id="authAdmin" href="{{ url_for('admin_pages.admin_index') }}" class="px-3 py-1.5 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400">Admin</a>
                     {% endif %}
                     <a id="authLogout" href="{{ url_for('auth.logout') }}" class="px-3 py-1.5 bg-tertiary rounded hover:border-red-400/70 transition text-sm text-red-400">Logout</a>
                     {% else %}
                     <a id="authLogin" href="{{ url_for('auth.login') }}" class="px-3 py-1.5 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400">Login</a>
                     {% endif %}
                 </div>
-                <a href="{{ url_for('index') }}" class="px-3 py-1.5 bg-tertiary rounded hover:border-accent-green transition text-sm">App</a>
+                <a href="{{ url_for('index') }}" class="px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm">App</a>
+                <div class="navbar-lang-theme flex flex-col gap-0.5">
+                    <button type="button" id="langToggle" class="w-8 h-7 flex items-center justify-center bg-tertiary rounded hover:border-accent-green transition text-xs">
+                        <span id="langIcon">EN</span>
+                    </button>
+                    <button type="button" id="themeToggle" class="w-8 h-7 flex items-center justify-center bg-tertiary rounded hover:border-accent-green transition text-sm">
+                        <span id="themeIcon">🌙</span>
+                    </button>
+                </div>
             </div>
         </div>
     </header>
@@ -79,6 +92,34 @@
         (function() {
             var theme = localStorage.getItem('theme') || 'dark';
             document.documentElement.setAttribute('data-theme', theme);
+            var themeIcon = document.getElementById('themeIcon');
+            if (themeIcon) themeIcon.textContent = theme === 'light' ? '☀️' : '🌙';
+            var lang = localStorage.getItem('lang') || 'en';
+            var langIcon = document.getElementById('langIcon');
+            if (langIcon) langIcon.textContent = lang === 'he' ? 'HE' : 'EN';
+        })();
+        (function() {
+            var themeToggle = document.getElementById('themeToggle');
+            if (themeToggle) {
+                themeToggle.addEventListener('click', function() {
+                    var root = document.documentElement;
+                    var next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+                    root.setAttribute('data-theme', next);
+                    localStorage.setItem('theme', next);
+                    var icon = document.getElementById('themeIcon');
+                    if (icon) icon.textContent = next === 'light' ? '☀️' : '🌙';
+                });
+            }
+            var langToggle = document.getElementById('langToggle');
+            if (langToggle) {
+                langToggle.addEventListener('click', function() {
+                    var next = (localStorage.getItem('lang') || 'en') === 'he' ? 'en' : 'he';
+                    localStorage.setItem('lang', next);
+                    var icon = document.getElementById('langIcon');
+                    if (icon) icon.textContent = next === 'he' ? 'HE' : 'EN';
+                    window.location.reload();
+                });
+            }
         })();
     </script>
     <script>

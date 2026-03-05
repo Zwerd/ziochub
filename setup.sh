@@ -91,6 +91,14 @@ VENV_DIR="${APP_DIR}/venv"
 # ── Fix permissions (ZIP extraction may strip +x from .sh files) ───────────
 chmod +x "${SCRIPT_DIR}/"*.sh 2>/dev/null || true
 
+# ── Must NOT run from installed dir (upgrade would copy old over old) ───────
+SCRIPT_CANON=$(readlink -f "${SCRIPT_DIR}" 2>/dev/null || realpath "${SCRIPT_DIR}" 2>/dev/null || echo "${SCRIPT_DIR}")
+APP_CANON=$(readlink -f "${APP_DIR}" 2>/dev/null || realpath "${APP_DIR}" 2>/dev/null || echo "${APP_DIR}")
+if [[ "${SCRIPT_CANON}" == "${APP_CANON}" ]] || [[ "${SCRIPT_DIR}" == "${APP_DIR}" ]]; then
+    fail "Do not run setup.sh from the installed directory (${APP_DIR})." \
+         "Extract the installer ZIP to a separate folder (e.g. threatgate_install), then run: cd threatgate_install && sudo ./setup.sh --upgrade --offline"
+fi
+
 # ════════════════════════════════════════════════════════════════════════════
 #  PRE-FLIGHT CHECKS — Verify all requirements before starting installation
 # ════════════════════════════════════════════════════════════════════════════
@@ -324,7 +332,7 @@ info "Setting up directories..."
 mkdir -p "${APP_DIR}" "${DATA_DIR}" "${DATA_DIR}/Main" "${DATA_DIR}/YARA" "${DATA_DIR}/YARA_pending" "${DATA_DIR}/backups"
 ok "Directories ready: ${APP_DIR}"
 
-# ── 3. Copy application files ──────────────────────────────────────────────
+# ── 3. Copy application files (overwrites existing on upgrade) ─────────────
 info "Copying application files..."
 
 cp "${SCRIPT_DIR}/app.py"           "${APP_DIR}/"
@@ -350,9 +358,16 @@ cp "${SCRIPT_DIR}/requirements.txt" "${APP_DIR}/"
 mkdir -p "${APP_DIR}/templates"
 cp -r "${SCRIPT_DIR}/templates/"* "${APP_DIR}/templates/"
 
-# Static assets
+# Static assets (full tree; ensure css/ and critical CSS files are present)
 mkdir -p "${APP_DIR}/static"
-cp -r "${SCRIPT_DIR}/static/"* "${APP_DIR}/static/"
+cp -r "${SCRIPT_DIR}/static/"* "${APP_DIR}/static/" 2>/dev/null || true
+[[ -d "${SCRIPT_DIR}/static/css" ]] && mkdir -p "${APP_DIR}/static/css" && cp -r "${SCRIPT_DIR}/static/css/"* "${APP_DIR}/static/css/" 2>/dev/null || true
+# Explicit copy of critical CSS so upgrade always gets them if present in installer
+[[ -f "${SCRIPT_DIR}/static/css/tailwind-built.css" ]] && cp "${SCRIPT_DIR}/static/css/tailwind-built.css" "${APP_DIR}/static/css/" && ok "tailwind-built.css copied."
+[[ -f "${SCRIPT_DIR}/static/css/style.css" ]]         && cp "${SCRIPT_DIR}/static/css/style.css" "${APP_DIR}/static/css/"         && ok "style.css copied."
+if [[ ! -f "${APP_DIR}/static/css/tailwind-built.css" ]]; then
+    warn "static/css/tailwind-built.css missing after copy. Build it (npm run build:css) and add to installer, or UI may look broken."
+fi
 
 # Backup script (offline-safe, local only)
 if [[ -f "${SCRIPT_DIR}/backup_threatgate.sh" ]]; then

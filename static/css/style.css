@@ -473,6 +473,8 @@ header h1 {
     height: 100% !important;
     align-self: stretch !important;
     min-height: 100%;
+    flex-shrink: 0; /* prevent tabs from shrinking so horizontal scroll is used instead */
+    max-width: 7rem; /* fixed width so text wraps inside tab without <br> */
     min-width: 0;
     opacity: 0.7;
 }
@@ -501,7 +503,7 @@ header h1 {
     text-shadow: 0 0 8px rgba(0, 255, 65, 0.5);
 }
 
-/* Span: allow text to wrap so it stays readable when page is narrow */
+/* Span: allow text to wrap inside each tab (no <br> needed) */
 .tab-button span,
 .tab-button > span {
     border: none !important;
@@ -601,6 +603,7 @@ nav:has(.tab-button) {
     padding-bottom: 0 !important;
     align-self: stretch;
     height: 100%;
+    min-width: 0; /* allow shrink so overflow-x scroll appears when zoomed/narrow */
 }
 
 .navbar-right {
@@ -681,18 +684,7 @@ header .navbar-tabs {
     overflow-y: hidden;
 }
 
-/* Responsive: if nav is too wide, allow scrolling */
-@media (max-width: 1400px) {
-    .navbar-tabs {
-        overflow-x: auto;
-        scrollbar-width: none;
-        -ms-overflow-style: none;
-    }
-    
-    .navbar-tabs::-webkit-scrollbar {
-        display: none;
-    }
-}
+/* Responsive: overflow-x already set on header .navbar-tabs; scrollbar visible when tabs overflow */
 
 /* Glowing underline ONLY for active tab - flush at very bottom of header */
 .tab-button.active::after {

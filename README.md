@@ -1,4 +1,4 @@
-# ZIoCHub v2.0 Beta - Commander Edition
+# ZIoCHub v2.0 Beta - IOC & YARA Hub
 
 ZIoCHub is a **modern IOC & YARA Management Platform** built for SOC operations. Analysts submit indicators, ZIoCHub stores them in a SQLite database, and security devices ingest **plain-text feeds** for enforcement. Designed for **air-gapped / offline** environments.
 

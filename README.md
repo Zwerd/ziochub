@@ -2,6 +2,28 @@
 
 ZIoCHub is a **modern IOC & YARA Management Platform** built for SOC operations. Analysts submit indicators, ZIoCHub stores them in a SQLite database, and security devices ingest **plain-text feeds** for enforcement. Designed for **air-gapped / offline** environments.
 
+### Open Source Projects Used
+
+ZIoCHub is built on the following open source projects:
+
+| Project | Purpose |
+|--------|---------|
+| [Flask](https://flask.palletsprojects.com/) | Web framework |
+| [Flask-Login](https://github.com/maxcountryman/flask-login) | User session & authentication |
+| [Flask-SQLAlchemy](https://flask-sqlalchemy.palletsprojects.com/) | ORM and database integration |
+| [Werkzeug](https://werkzeug.palletsprojects.com/) | WSGI utilities |
+| [SQLite](https://www.sqlite.org/) | Embedded database |
+| [geoip2](https://github.com/maxmind/GeoIP2-python) / [MaxMind](https://www.maxmind.com/) | GeoIP lookups (optional) |
+| [ldap3](https://github.com/cannatag/ldap3) | LDAP/AD authentication (optional) |
+| [PyMISP](https://github.com/MISP/PyMISP) | MISP API integration (optional) |
+| [Tailwind CSS](https://tailwindcss.com/) | UI styling (build step) |
+| [Chart.js](https://www.chartjs.org/) | Charts and dashboards |
+| [vis-network](https://visjs.org/) | Campaign & IOC graph visualization |
+| [jsPDF](https://github.com/parallax/jsPDF) | PDF export (Reports) |
+| [html2canvas](https://html2canvas.hertzen.com/) | Screenshot for PDF export |
+| [Prism](https://prismjs.com/) | YARA syntax highlighting |
+| [Flag Icons](https://github.com/lipis/flag-icons) | Country flags in UI |
+
 ---
 
 ## Features
@@ -28,6 +50,7 @@ ZIoCHub is a **modern IOC & YARA Management Platform** built for SOC operations.
 
 ## Table of Contents
 
+- [Open Source Projects Used](#open-source-projects-used)
 - [Installation](#installation)
 - [Ports & Network](#ports--network)
 - [Systemd Services](#systemd-services)
@@ -455,7 +478,7 @@ Vendor libraries (all local, no CDN): Tailwind, Chart.js, vis.js, marked, turndo
 
 ```
 templates/
-  index.html          Main SPA (Commander Edition)
+  index.html          Main SPA (IOC & YARA Hub)
   login.html          Login page
   change_password.html  Forced password change
   profile.html        User profile (display name, avatar, role, email)
@@ -568,6 +591,6 @@ sudo ./setup.sh --offline      # Fresh install
 
 ## Version
 
-**ZIoCHub v2.0 Beta - Commander Edition**  
+**ZIoCHub v2.0 Beta - IOC & YARA Hub**  
 Single source of version: `constants.py` → `VERSION` (used in UI and docs).  
 Last updated: **March 2026**

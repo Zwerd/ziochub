@@ -1,0 +1,53 @@
+{% extends "admin/base.html" %}
+{% block title %}Logs{% endblock %}
+
+{% block admin_content %}
+<div class="mb-4">
+    <p class="text-secondary text-sm">CEF audit log. Newest lines at the bottom.</p>
+</div>
+
+<div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-4xl">
+    <h3 class="text-lg font-semibold accent-blue mb-4">Audit Log (last 50 lines)</h3>
+    <div class="flex items-center gap-2 mb-3">
+        <button type="button" id="logsRefreshBtn" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition text-sm">Refresh</button>
+        <span id="logsPath" class="text-xs text-secondary"></span>
+    </div>
+    <pre id="logsContent" class="p-4 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-primary overflow-x-auto overflow-y-auto max-h-[70vh] whitespace-pre-wrap break-all">Loading...</pre>
+    <div id="logsError" class="mt-2 hidden text-sm text-red-400"></div>
+</div>
+
+<script>
+(function() {
+    function loadLogs() {
+        var pre = document.getElementById('logsContent');
+        var errEl = document.getElementById('logsError');
+        var pathEl = document.getElementById('logsPath');
+        if (!pre) return;
+        pre.textContent = 'Loading...';
+        if (errEl) errEl.classList.add('hidden');
+        if (pathEl) pathEl.textContent = '';
+        fetch('/api/admin/logs/tail?lines=50')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    var lines = data.lines || [];
+                    pre.textContent = lines.length ? lines.join('\n') : (data.message || 'No log entries.');
+                    if (pathEl && data.path) pathEl.textContent = 'File: ' + data.path;
+                } else {
+                    pre.textContent = data.message || 'Failed to load logs.';
+                }
+            })
+            .catch(function(err) {
+                pre.textContent = '';
+                if (errEl) {
+                    errEl.textContent = 'Error: ' + (err.message || 'Failed to load logs.');
+                    errEl.classList.remove('hidden');
+                }
+            });
+    }
+    var btn = document.getElementById('logsRefreshBtn');
+    if (btn) btn.addEventListener('click', loadLogs);
+    loadLogs();
+})();
+</script>
+{% endblock %}

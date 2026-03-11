@@ -47,3 +47,7 @@ def get_cached(key):
 
 def set_cached(key, value, ttl_seconds=120):
     _cache.set(key, value, ttl_seconds=ttl_seconds)
+
+
+def delete_cached(key):
+    _cache.delete(key)

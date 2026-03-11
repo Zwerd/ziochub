@@ -70,9 +70,7 @@ def get_stats_counts():
 # ---------------------------------------------------------------------------
 @stats_bp.route('/api/stats', methods=['GET'])
 def get_stats():
-    """Active IOC count per type (non-expired). YARA rules count, weighted total, campaign stats, and Threat Intelligence aggregates (countries, TLDs, email domains) from ALL active IOCs."""
-    (get_country_code,) = _from_app('get_country_code')
-
+    """Active IOC count per type (non-expired). YARA rules count, weighted total, campaign stats, and Threat Intelligence aggregates (countries, TLDs, email domains) computed in DB with GROUP BY."""
     stats = {'IP': 0, 'Domain': 0, 'Hash': 0, 'Email': 0, 'URL': 0}
     now = datetime.now()
     active_filter = db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
@@ -96,26 +94,29 @@ def get_stats():
         if row.name:
             campaign_stats[row.name] = row.cnt or 0
 
-    # Threat Intelligence aggregates from ALL active IOCs (not limited to 500)
+    # Threat Intelligence aggregates: compute in DB with GROUP BY (no full table load)
+    TOP_N = 20
     country_counts = {}
-    for row in IOC.query.filter(IOC.type == 'IP', active_filter).all():
-        cc = get_country_code(row.value)
+    country_rows = db.session.query(IOC.country_code, func.count(IOC.id)).filter(
+        IOC.type == 'IP', active_filter, IOC.country_code.isnot(None)
+    ).group_by(IOC.country_code).order_by(func.count(IOC.id).desc()).limit(TOP_N).all()
+    for cc, cnt in country_rows:
         if cc:
-            country_counts[cc] = country_counts.get(cc, 0) + 1
+            country_counts[cc] = cnt
     tld_counts = {}
-    for row in IOC.query.filter(IOC.type == 'Domain', active_filter).all():
-        val = (row.value or '').strip()
-        parts = val.split('.')
-        if len(parts) > 1:
-            tld = '.' + parts[-1].lower()
-            tld_counts[tld] = tld_counts.get(tld, 0) + 1
+    tld_rows = db.session.query(IOC.tld, func.count(IOC.id)).filter(
+        IOC.type == 'Domain', active_filter, IOC.tld.isnot(None)
+    ).group_by(IOC.tld).order_by(func.count(IOC.id).desc()).limit(TOP_N).all()
+    for tld, cnt in tld_rows:
+        if tld:
+            tld_counts['.' + tld.lower()] = cnt
     email_domain_counts = {}
-    for row in IOC.query.filter(IOC.type == 'Email', active_filter).all():
-        val = (row.value or '').strip()
-        parts = val.split('@')
-        if len(parts) > 1:
-            domain = parts[1].lower()
-            email_domain_counts[domain] = email_domain_counts.get(domain, 0) + 1
+    email_rows = db.session.query(IOC.email_domain, func.count(IOC.id)).filter(
+        IOC.type == 'Email', active_filter, IOC.email_domain.isnot(None)
+    ).group_by(IOC.email_domain).order_by(func.count(IOC.id).desc()).limit(TOP_N).all()
+    for domain, cnt in email_rows:
+        if domain:
+            email_domain_counts[domain.lower()] = cnt
 
     return jsonify({
         'success': True,

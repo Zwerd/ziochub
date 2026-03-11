@@ -30,7 +30,13 @@ async function openProfileModal() {
             document.getElementById('profileRoleDescription').value = data.role_description || '';
             profileUsername.textContent = data.username || 'User';
             profileSource.textContent = data.source || 'local';
-            
+            const muteSoundEl = document.getElementById('profileMuteSound');
+            const ambitionPopupEl = document.getElementById('profileAmbitionPopupDisabled');
+            const achievementPopupEl = document.getElementById('profileAchievementPopupDisabled');
+            if (muteSoundEl) muteSoundEl.checked = !!data.mute_sound;
+            if (ambitionPopupEl) ambitionPopupEl.checked = !!data.ambition_popup_disabled;
+            if (achievementPopupEl) achievementPopupEl.checked = !!data.achievement_popup_disabled;
+
             // Update avatar display
             if (data.avatar_url) {
                 profileAvatarImg.src = data.avatar_url + '?t=' + Date.now();
@@ -81,7 +87,10 @@ if (profileForm) {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     display_name: document.getElementById('profileDisplayName').value.trim(),
-                    role_description: document.getElementById('profileRoleDescription').value.trim()
+                    role_description: document.getElementById('profileRoleDescription').value.trim(),
+                    mute_sound: document.getElementById('profileMuteSound').checked,
+                    ambition_popup_disabled: document.getElementById('profileAmbitionPopupDisabled').checked,
+                    achievement_popup_disabled: document.getElementById('profileAchievementPopupDisabled').checked
                 })
             });
             const data = await response.json();
@@ -100,7 +109,10 @@ if (profileForm) {
                     authState.avatar_url = data.avatar_url;
                     updateAuthUI();
                 }
-                
+                document.body.setAttribute('data-mute-sound', data.mute_sound ? '1' : '0');
+                document.body.setAttribute('data-ambition-popup-disabled', data.ambition_popup_disabled ? '1' : '0');
+                document.body.setAttribute('data-achievement-popup-disabled', data.achievement_popup_disabled ? '1' : '0');
+
                 showToast('Profile saved', 'success');
             } else {
                 profileMessage.classList.add('text-red-400');

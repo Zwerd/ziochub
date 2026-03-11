@@ -145,7 +145,15 @@ def get_ioc_notes():
 @login_required
 def add_ioc_note():
     """Add an analyst note to an IOC (type+value)."""
-    audit_log, _log_champs_event = _from_app('audit_log', '_log_champs_event')
+    (
+        audit_log, _log_champs_event,
+        _capture_champs_before, _detect_champs_changes,
+        refresh_champ_score_for_user,
+    ) = _from_app(
+        'audit_log', '_log_champs_event',
+        '_capture_champs_before', '_detect_champs_changes',
+        'refresh_champ_score_for_user',
+    )
     data = request.get_json(silent=True) or {}
     ioc_type = (data.get('type') or '').strip()
     value = (data.get('value') or '').strip()
@@ -156,6 +164,9 @@ def add_ioc_note():
         return jsonify({'success': False, 'message': 'Note content is required'}), 400
     if len(content) > 2000:
         return jsonify({'success': False, 'message': 'Note too long (max 2000 chars)'}), 400
+
+    champs_before = _capture_champs_before(current_user.id, (current_user.username or '').lower())
+
     note = IocNote(
         ioc_type=ioc_type,
         ioc_value=value,
@@ -164,7 +175,7 @@ def add_ioc_note():
     )
     db.session.add(note)
     db.session.commit()
-    # Champs Smart Effort: reward rich notes as separate effort events
+    # Champs Smart Effort: reward rich notes as separate effort events (1-3 pts by length)
     try:
         _log_champs_event(
             'ioc_note_add',
@@ -175,19 +186,29 @@ def add_ioc_note():
                 'length': len(content),
             },
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning('Champs ioc_note_add event failed (note saved): %s', e)
+    try:
+        refresh_champ_score_for_user(current_user.id)
+    except Exception as e:
+        logger.warning('add_ioc_note: refresh_champ_score failed (note saved): %s', e)
+
     content_preview = (content[:150] + '...') if len(content) > 150 else content
     audit_log('IOC_NOTE_ADD', f'type={ioc_type} value={value[:80]} comment="{content_preview}"')
-    return jsonify({
+    response = {
         'success': True,
         'note': {
             'id': note.id,
             'username': current_user.username,
             'content': note.content,
             'created_at': note.created_at.isoformat() if note.created_at else None,
-        }
-    })
+        },
+    }
+    try:
+        response.update(_detect_champs_changes(champs_before, current_user.id, (current_user.username or '').lower()))
+    except Exception as e:
+        logger.warning('add_ioc_note: champs change detection failed (note saved): %s', e)
+    return jsonify(response)
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +224,8 @@ def search_ioc():
         '_deleted_history_matches', '_history_deleted_to_search_result')
     query = request.args.get('q', '').strip()
     filter_type = request.args.get('filter', 'all').strip().lower()
+    page = max(1, int(request.args.get('page', 1)))
+    per_page = min(max(1, int(request.args.get('per_page') or request.args.get('limit') or 100)), 1000)
     if not query:
         return jsonify({'success': False, 'message': 'Search query is required'}), 400
     query_lower = query.lower()
@@ -233,42 +256,42 @@ def search_ioc():
         elif query_lower in ('permanent', 'קבוע', 'permanent'):
             q = q.filter(IOC.expiration_date.is_(None))
         else:
-            rows_all = q.all()
+            rows_all = q.limit(1000).all()
             rows = [r for r in rows_all if _search_expiration_status_matches(r, query_lower)]
             results = [_ioc_row_to_search_result(r, r.type, query_lower, filter_type) for r in rows]
             return jsonify({
                 'success': True, 'query': query, 'filter': filter_type,
-                'results': results, 'count': len(results)
+                'results': results, 'count': len(results), 'total': len(results), 'page': 1, 'per_page': per_page
             })
     elif filter_type == 'tag':
         q = q.filter(IOC.tags.isnot(None), IOC.tags.contains(query_lower))
-        rows = q.all()
+        rows = q.limit(1000).all()
         rows = [r for r in rows if _tag_matches(r.tags, query_lower)]
         results = [_ioc_row_to_search_result(row, row.type, query_lower, filter_type) for row in rows]
         return jsonify({
             'success': True, 'query': query, 'filter': filter_type,
-            'results': results, 'count': len(results)
+            'results': results, 'count': len(results), 'total': len(results), 'page': 1, 'per_page': per_page
         })
     elif filter_type == 'note':
-        note_rows = IocNote.query.filter(func.lower(IocNote.content).contains(query_lower)).all()
+        note_rows = IocNote.query.filter(func.lower(IocNote.content).contains(query_lower)).limit(500).all()
         note_keys = {(n.ioc_type, n.ioc_value.lower()) for n in note_rows}
-        rows = q.all()
+        rows = q.limit(1000).all()
         rows = [r for r in rows if (r.type, (r.value or '').lower()) in note_keys]
         results = [_ioc_row_to_search_result(row, row.type, query_lower, filter_type) for row in rows]
         return jsonify({
             'success': True, 'query': query, 'filter': filter_type,
-            'results': results, 'count': len(results)
+            'results': results, 'count': len(results), 'total': len(results), 'page': 1, 'per_page': per_page
         })
     elif filter_type == 'date':
         q = q.filter(IOC.created_at.isnot(None))
-        rows_all = q.all()
+        rows_all = q.limit(1000).all()
         rows = [r for r in rows_all if query_lower in (r.created_at.isoformat() if r.created_at else '').lower()]
         return jsonify({
             'success': True,
             'query': query,
             'filter': filter_type,
             'results': [_ioc_row_to_search_result(r, r.type, query_lower, filter_type) for r in rows],
-            'count': len(rows)
+            'count': len(rows), 'total': len(rows), 'page': 1, 'per_page': per_page
         })
     elif filter_type == 'all':
         all_conditions = [
@@ -301,7 +324,8 @@ def search_ioc():
                 func.lower(IOC.comment).contains(query_lower)
             )
         )
-    rows = q.all()
+    total = q.count()
+    rows = q.offset((page - 1) * per_page).limit(per_page).all()
     if filter_type == 'all':
         seen_ids = set()
         deduped = []
@@ -390,7 +414,10 @@ def search_ioc():
         'query': query,
         'filter': filter_type,
         'results': results,
-        'count': len(results)
+        'count': len(results),
+        'total': total,
+        'page': page,
+        'per_page': per_page
     })
 
 
@@ -456,12 +483,15 @@ def export_iocs():
     if fmt not in ('csv', 'json'):
         return jsonify({'success': False, 'message': 'format must be csv or json'}), 400
     now = datetime.now()
+    export_limit = min(max(1, int(request.args.get('limit', 10000))), 100000)
     q = IOC.query.filter(IOC.type != 'YARA')
     if ioc_type:
         q = q.filter(IOC.type == ioc_type)
     if active_only:
         q = q.filter(db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now))
-    rows = q.order_by(IOC.created_at.desc()).all()
+    if tag_filter:
+        q = q.filter(IOC.tags.isnot(None), IOC.tags.contains(tag_filter))
+    rows = q.order_by(IOC.created_at.desc()).limit(export_limit).all()
     if tag_filter:
         rows = [r for r in rows if _tag_matches(getattr(r, 'tags', None), tag_filter)]
     if fmt == 'json':
@@ -510,8 +540,13 @@ def export_iocs():
 @login_required
 def revoke_ioc():
     """Remove an IOC from the database."""
-    (_commit_with_retry, _log_ioc_history, _log_champs_event, audit_log) = _from_app(
-        '_commit_with_retry', '_log_ioc_history', '_log_champs_event', 'audit_log')
+    (
+        _commit_with_retry, _log_ioc_history, _log_champs_event, audit_log,
+        _capture_champs_before, _detect_champs_changes, refresh_champ_score_for_user,
+    ) = _from_app(
+        '_commit_with_retry', '_log_ioc_history', '_log_champs_event', 'audit_log',
+        '_capture_champs_before', '_detect_champs_changes', 'refresh_champ_score_for_user',
+    )
     try:
         data = request.get_json(silent=True)
         if not data or not isinstance(data, dict):
@@ -528,6 +563,9 @@ def revoke_ioc():
         row = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.strip().lower()).first()
         if not row:
             return jsonify({'success': False, 'message': MSG_IOC_NOT_FOUND}), 404
+
+        champs_before = _capture_champs_before(current_user.id, (current_user.username or '').lower())
+
         was_expired = row.expiration_date is not None and row.expiration_date < datetime.now(timezone.utc).replace(tzinfo=None)
         analyst_name = (row.analyst or current_user.username if current_user.is_authenticated else None) or ''
         delete_payload = {'was_expired': was_expired, 'reason': reason}
@@ -541,7 +579,13 @@ def revoke_ioc():
             'type': ioc_type,
         })
         audit_log('IOC_DELETE', f'type={ioc_type} value={value[:80]} reason={reason[:100]}')
-        return jsonify({'success': True, 'message': f'{ioc_type} IOC revoked successfully'})
+        refresh_champ_score_for_user(current_user.id)
+        response = {'success': True, 'message': f'{ioc_type} IOC revoked successfully'}
+        try:
+            response.update(_detect_champs_changes(champs_before, current_user.id, (current_user.username or '').lower()))
+        except Exception as champs_err:
+            logger.warning('revoke_ioc: champs change detection failed (IOC revoked): %s', champs_err)
+        return jsonify(response)
     except Exception as e:
         db.session.rollback()
         logger.exception('revoke_ioc failed: %s', e)
@@ -556,8 +600,13 @@ def revoke_ioc():
 @login_required
 def edit_ioc():
     """Edit an IOC's metadata (comment, expiration, and optional campaign assignment)."""
-    (_commit_with_retry, _log_ioc_history, audit_log, _resolve_analyst_to_user) = _from_app(
-        '_commit_with_retry', '_log_ioc_history', 'audit_log', '_resolve_analyst_to_user')
+    (
+        _commit_with_retry, _log_ioc_history, audit_log, _resolve_analyst_to_user,
+        _capture_champs_before, _detect_champs_changes, _log_champs_event, refresh_champ_score_for_user,
+    ) = _from_app(
+        '_commit_with_retry', '_log_ioc_history', 'audit_log', '_resolve_analyst_to_user',
+        '_capture_champs_before', '_detect_champs_changes', '_log_champs_event', 'refresh_champ_score_for_user',
+    )
     try:
         data = request.get_json()
         ioc_type = data.get('type', '').strip()
@@ -582,6 +631,9 @@ def edit_ioc():
         row = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.strip().lower()).first()
         if not row:
             return jsonify({'success': False, 'message': MSG_IOC_NOT_FOUND}), 404
+
+        champs_before = _capture_champs_before(current_user.id, (current_user.username or '').lower())
+
         old_comment = (row.comment or '').strip()
         old_exp = 'Permanent' if row.expiration_date is None else (row.expiration_date.strftime('%Y-%m-%d') if row.expiration_date else '')
         old_ticket = (row.ticket_id or '').strip()
@@ -654,7 +706,36 @@ def edit_ioc():
         _commit_with_retry()
         changes_desc = '; '.join(f"{c['field']}: {c['old'][:30]}->{c['new'][:30]}" for c in edit_changes[:5])
         audit_log('IOC_EDIT', f'type={ioc_type} value={value[:80]} changes=[{changes_desc}]')
-        return jsonify({'success': True, 'message': f'{ioc_type} IOC updated successfully'})
+
+        # If IOC was linked to a campaign, log Champs event and return achievement data for popup
+        campaign_linked = (old_campaign != new_campaign_val) and bool(new_campaign_val)
+        if campaign_linked and row.campaign_id:
+            try:
+                _log_champs_event(
+                    'ioc_campaign_link',
+                    user_id=current_user.id,
+                    payload={
+                        'ioc_id': row.id,
+                        'value': value[:100],
+                        'type': row.type,
+                        'campaign_id': row.campaign_id,
+                        'had_campaign': bool(old_campaign),
+                    },
+                )
+            except Exception:
+                pass
+            try:
+                refresh_champ_score_for_user(current_user.id)
+            except Exception as e:
+                logger.warning('edit_ioc: refresh_champ_score failed (edit saved): %s', e)
+
+        response = {'success': True, 'message': f'{ioc_type} IOC updated successfully'}
+        if campaign_linked:
+            try:
+                response.update(_detect_champs_changes(champs_before, current_user.id, (current_user.username or '').lower()))
+            except Exception as e:
+                logger.warning('edit_ioc: champs change detection failed (edit saved): %s', e)
+        return jsonify(response)
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500

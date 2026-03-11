@@ -6,7 +6,7 @@ import json
 import re
 from datetime import date, datetime, timedelta
 from collections import defaultdict
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 # Points per action type (scaled: ~10k IOCs/year -> ~20k points instead of 100k+)
 IOC_DEFAULT = 2
@@ -107,6 +107,33 @@ def _to_date(val):
     if hasattr(val, 'date'):
         return val.date()
     return val
+
+
+def _format_date_display(val):
+    """Return 'YYYY-MM-DD' string for display. Handles date, datetime, or str (SQLite may return dates as string)."""
+    if val is None:
+        return 'N/A'
+    if hasattr(val, 'strftime'):
+        return val.strftime('%Y-%m-%d')
+    if isinstance(val, str):
+        return val[:10] if len(val) >= 10 else val
+    return 'N/A'
+
+
+def _ensure_date(val):
+    """Normalize to date for comparison/streak. SQLite may return datetime or string. Returns date or None."""
+    if val is None:
+        return None
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return val
+    if hasattr(val, 'date'):
+        return val.date()
+    if isinstance(val, str):
+        try:
+            return datetime.strptime(val[:10], '%Y-%m-%d').date()
+        except (ValueError, TypeError):
+            pass
+    return None
 
 
 def compute_ioc_points(ioc_type, campaign_id):
@@ -255,15 +282,17 @@ def compute_yara_quality_points(content):
     return max(YARA_MIN, min(YARA_MAX, score))
 
 
-def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_map=None, scoring_method='1', exclude_usernames=None, start_dt=None, end_dt=None):
+# Time window for Smart Effort (#8) when no date range given: avoid loading 1M+ IOCs into memory
+SMART_EFFORT_DAYS_LIMIT = 365
+
+
+def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=None, scoring_method='1', exclude_usernames=None, start_dt=None, end_dt=None):
     """
-    Compute weighted scores for all analysts using Champs 5.0 scoring.
-    Includes deletion points from ActivityEvent (event_type='ioc_deletion', payload was_expired=True).
-    scoring_method: '1'-'8' (admin setting). Smart Effort (#8) gives full YARA points only
-    for approved rules; pending rules receive YARA_MIN.
-    exclude_usernames: set of lowercase usernames to filter out (e.g. MISP sync user).
-    start_dt, end_dt: optional datetime range to filter IOCs/YARA by created_at/uploaded_at (for period reports).
+    Compute analyst scores using DB aggregation (GROUP BY) only. No full-table load.
+    Safe for 1M+ IOCs. Returns same structure as compute_analyst_scores.
+    Used for scoring_method 1-7; Smart (#8) uses simplified 2/3 pts per IOC here for leaderboard.
     """
+    from sqlalchemy import text
     _excluded = {u.lower() for u in (exclude_usernames or [])}
     today = date.today()
     analyst_daily = defaultdict(lambda: defaultdict(int))
@@ -274,8 +303,246 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
     analyst_last = {}
     analyst_user_id = {}
 
-    # IOC points - prefer user_id -> username so invalid analyst strings (e.g. "soc") count under real user
-    id_to_username = {u.id: (u.username or '').lower() for u in User.query.all() if u.username}
+    def _dt_filter(tbl, col, params):
+        if start_dt is not None and end_dt is not None:
+            return f" AND {tbl}.{col} >= :start_dt AND {tbl}.{col} <= :end_dt "
+        return ""
+
+    params = {}
+    if start_dt is not None:
+        params['start_dt'] = start_dt
+    if end_dt is not None:
+        params['end_dt'] = end_dt
+
+    # 1) IOC totals and last_created – attribute by ioc.analyst (assigned), not submitter (user_id)
+    ioc_where = _dt_filter('ioc', 'created_at', params)
+    q1 = text(f"""
+        SELECT LOWER(TRIM(ioc.analyst)) AS analyst,
+               MAX(u.id) AS user_id,
+               SUM(CASE WHEN ioc.campaign_id IS NOT NULL THEN :ioc_campaign ELSE :ioc_default END) AS ioc_points,
+               COUNT(*) AS ioc_count,
+               MAX(ioc.created_at) AS last_created
+        FROM iocs ioc
+        LEFT JOIN users u ON LOWER(TRIM(u.username)) = LOWER(TRIM(ioc.analyst))
+        WHERE ioc.analyst IS NOT NULL AND TRIM(ioc.analyst) != '' {ioc_where}
+        GROUP BY LOWER(TRIM(ioc.analyst))
+    """)
+    params['ioc_campaign'] = IOC_WITH_CAMPAIGN
+    params['ioc_default'] = IOC_DEFAULT
+    rows1 = db.session.execute(q1, params).fetchall()
+    for r in rows1:
+        a = (r[0] or '').strip().lower()
+        if not a:
+            continue
+        analyst_iocs[a] = r[3] or 0
+        analyst_user_id[a] = r[1]
+        if r[4]:
+            d = _ensure_date(_to_date(r[4]))
+            if d:
+                prev = analyst_last.get(a)
+                prev_d = _ensure_date(prev) if prev is not None else d
+                analyst_last[a] = max(prev_d, d)
+        # add to daily later via query 2
+
+    # 2) IOC daily points (for streak and base score) – attribute by ioc.analyst
+    q2 = text(f"""
+        SELECT LOWER(TRIM(ioc.analyst)) AS analyst,
+               DATE(ioc.created_at) AS d,
+               SUM(CASE WHEN ioc.campaign_id IS NOT NULL THEN :ioc_campaign2 ELSE :ioc_default2 END) AS day_pts
+        FROM iocs ioc
+        WHERE ioc.analyst IS NOT NULL AND TRIM(ioc.analyst) != '' AND ioc.created_at IS NOT NULL {_dt_filter('ioc', 'created_at', params)}
+        GROUP BY LOWER(TRIM(ioc.analyst)), DATE(ioc.created_at)
+    """)
+    params['ioc_campaign2'] = IOC_WITH_CAMPAIGN
+    params['ioc_default2'] = IOC_DEFAULT
+    rows2 = db.session.execute(q2, params).fetchall()
+    for r in rows2:
+        a = (r[0] or '').strip().lower()
+        day_key = _ensure_date(r[1]) if r[1] else None
+        if not a or day_key is None:
+            continue
+        analyst_daily[a][day_key] = analyst_daily[a].get(day_key, 0) + (r[2] or 0)
+
+    # 3) YARA: totals and daily points (10-50 per rule)
+    yara_where = _dt_filter('yr', 'uploaded_at', params)
+    yara_pending_min = str(YARA_MIN) if scoring_method == SCORING_SMART else str(YARA_DEFAULT)
+    q3 = text(f"""
+        SELECT LOWER(yr.analyst) AS analyst,
+               SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE {yara_pending_min} END) AS yara_points,
+               COUNT(*) AS yara_count,
+               MAX(yr.uploaded_at) AS last_yara
+        FROM yara_rules yr
+        WHERE 1=1 {yara_where}
+        GROUP BY LOWER(yr.analyst)
+    """)
+    rows3 = db.session.execute(q3, params).fetchall()
+    for r in rows3:
+        a = (r[0] or '').strip().lower()
+        if not a:
+            continue
+        analyst_yara[a] = r[2] or 0
+        if r[3]:
+            d = _ensure_date(_to_date(r[3]))
+            if d:
+                prev = analyst_last.get(a)
+                prev_d = _ensure_date(prev) if prev is not None else d
+                analyst_last[a] = max(prev_d, d)
+
+    # 3b) YARA daily (for streak and base score)
+    q3b = text(f"""
+        SELECT LOWER(yr.analyst) AS analyst,
+               DATE(yr.uploaded_at) AS d,
+               SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE {yara_pending_min} END) AS day_pts
+        FROM yara_rules yr
+        WHERE yr.uploaded_at IS NOT NULL {yara_where}
+        GROUP BY LOWER(yr.analyst), DATE(yr.uploaded_at)
+    """)
+    rows3b = db.session.execute(q3b, params).fetchall()
+    for r in rows3b:
+        a = (r[0] or '').strip().lower()
+        day_key = _ensure_date(r[1]) if r[1] else None
+        if not a or day_key is None:
+            continue
+        analyst_daily[a][day_key] = analyst_daily[a].get(day_key, 0) + (r[2] or 0)
+
+    # 4) Deletions: deleter gets +1 per deletion (any); expired count kept for display/badges
+    del_where = _dt_filter('ae', 'created_at', params)
+    q4 = text(f"""
+        SELECT LOWER(u.username) AS analyst, ae.user_id,
+               COUNT(*) AS total,
+               SUM(CASE WHEN json_extract(ae.payload,'$.was_expired') IN (1, 'true', 1.0) THEN 1 ELSE 0 END) AS expired
+        FROM activity_events ae
+        JOIN users u ON ae.user_id = u.id
+        WHERE ae.event_type = 'ioc_deletion' {del_where}
+        GROUP BY ae.user_id
+    """)
+    rows4 = db.session.execute(q4, params).fetchall()
+    for r in rows4:
+        a = (r[0] or '').strip().lower()
+        if not a:
+            continue
+        analyst_deletions_total[a] = r[2] or 0
+        analyst_deletions[a] = int(r[3] or 0)
+        analyst_user_id[a] = r[1]
+
+    # 4b) Deletion events per day so deleter gets +1 per deletion and last_activity/streak update
+    q4b = text(f"""
+        SELECT ae.user_id, LOWER(TRIM(u.username)) AS analyst, DATE(ae.created_at) AS d
+        FROM activity_events ae
+        JOIN users u ON ae.user_id = u.id
+        WHERE ae.event_type = 'ioc_deletion' {del_where}
+    """)
+    rows4b = db.session.execute(q4b, params).fetchall()
+    for r in rows4b:
+        uid, a, d = r[0], (r[1] or '').strip().lower(), _ensure_date(r[2]) if r[2] else None
+        if not a or not d:
+            continue
+        analyst_daily[a][d] = analyst_daily[a].get(d, 0) + DELETION
+        prev_last = analyst_last.get(a)
+        analyst_last[a] = max(prev_last, d) if prev_last else d
+        analyst_user_id[a] = uid
+
+    # 5) Campaign create + IOC campaign link: 1 pt each (so creator/linker gets points in all scoring methods)
+    evt_where = _dt_filter('ae', 'created_at', params)
+    q5 = text(f"""
+        SELECT ae.user_id, LOWER(TRIM(u.username)) AS analyst, DATE(ae.created_at) AS d
+        FROM activity_events ae
+        JOIN users u ON ae.user_id = u.id
+        WHERE ae.event_type IN ('campaign_create', 'ioc_campaign_link') {evt_where}
+    """)
+    rows5 = db.session.execute(q5, params).fetchall()
+    for r in rows5:
+        uid, a, d = r[0], (r[1] or '').strip().lower(), _ensure_date(r[2]) if r[2] else None
+        if not a or not d:
+            continue
+        analyst_daily[a][d] = analyst_daily[a].get(d, 0) + 1
+        prev_last = analyst_last.get(a)
+        analyst_last[a] = max(prev_last, d) if prev_last else d
+        analyst_user_id[a] = uid
+
+    # Build result list (same format as compute_analyst_scores)
+    user_id_map = {u.username.lower(): u.id for u in User.query.all() if u.username}
+    for a in analyst_yara:
+        if a not in analyst_user_id and a in user_id_map:
+            analyst_user_id[a] = user_id_map[a]
+    for a in analyst_deletions_total:
+        if a not in analyst_user_id and a in user_id_map:
+            analyst_user_id[a] = user_id_map[a]
+
+    streak_ref = end_dt.date() if end_dt else today
+    result = []
+    all_analysts = set(analyst_daily.keys()) | set(analyst_deletions.keys()) | set(analyst_deletions_total.keys()) | set(analyst_iocs.keys()) | set(analyst_yara.keys())
+    if _excluded:
+        all_analysts -= _excluded
+    for analyst in all_analysts:
+        daily = analyst_daily.get(analyst, {})
+        base_score = sum(daily.values())
+        streak = 0
+        d = streak_ref
+        for _ in range(90):
+            if d in daily and daily[d] > 0:
+                streak += 1
+                d = d - timedelta(days=1)
+            else:
+                break
+        streak_bonus = int(base_score * STREAK_BONUS_PERCENT / 100) if streak >= STREAK_DAYS else 0
+        total_score = base_score + streak_bonus
+        last_d = analyst_last.get(analyst)
+        last_str = _format_date_display(last_d)
+        result.append({
+            'analyst': analyst,
+            'user_id': analyst_user_id.get(analyst),
+            'score': total_score,
+            'total_iocs': analyst_iocs.get(analyst, 0),
+            'yara_count': analyst_yara.get(analyst, 0),
+            'deletion_count': analyst_deletions_total.get(analyst, 0),
+            'last_activity': last_str,
+            'streak_days': streak,
+            'streak_bonus_applied': streak_bonus,
+        })
+    result.sort(key=lambda x: x['score'], reverse=True)
+    for idx, r in enumerate(result, 1):
+        r['rank'] = idx
+    return result
+
+
+def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_map=None, scoring_method='1', exclude_usernames=None, start_dt=None, end_dt=None):
+    """
+    Compute weighted scores for all analysts using Champs 5.0 scoring.
+    Includes deletion: deleter gets +1 per ioc_deletion; assigned analyst loses points when IOC is removed.
+    scoring_method: '1'-'8' (admin setting). Smart Effort (#8) gives full YARA points only
+    for approved rules; pending rules receive YARA_MIN.
+    exclude_usernames: set of lowercase usernames to filter out (e.g. MISP sync user).
+    start_dt, end_dt: optional datetime range to filter IOCs/YARA by created_at/uploaded_at (for period reports).
+    For 1M+ IOCs: uses DB aggregation (no full load) when method != 8 and no date filter; Smart (#8) limited to last SMART_EFFORT_DAYS_LIMIT days when no date filter.
+    """
+    # Use aggregated path (no full table load) for non-Smart when no date range
+    if scoring_method != SCORING_SMART and start_dt is None and end_dt is None:
+        return compute_analyst_scores_aggregated(
+            db, IOC, YaraRule, User, ActivityEvent,
+            scoring_method=scoring_method, exclude_usernames=exclude_usernames,
+            start_dt=start_dt, end_dt=end_dt,
+        )
+    # Smart Effort: limit to last N days when no date filter to avoid loading 1M rows
+    if scoring_method == SCORING_SMART and start_dt is None and end_dt is None:
+        from datetime import timezone as tz
+        _end = datetime.now(tz.utc).replace(tzinfo=None)
+        _start = _end - timedelta(days=SMART_EFFORT_DAYS_LIMIT)
+        start_dt = _start
+        end_dt = _end
+
+    _excluded = {u.lower() for u in (exclude_usernames or [])}
+    today = date.today()
+    analyst_daily = defaultdict(lambda: defaultdict(int))
+    analyst_iocs = defaultdict(int)
+    analyst_yara = defaultdict(int)
+    analyst_deletions = defaultdict(int)
+    analyst_deletions_total = defaultdict(int)
+    analyst_last = {}
+    analyst_user_id = {}
+
+    # IOC points – attribute by assigned analyst (ioc.analyst), not submitter (user_id)
+    username_to_id = {(u.username or '').strip().lower(): u.id for u in User.query.all() if (u.username or '').strip()}
     smart = scoring_method == SCORING_SMART
     ioc_cols = [IOC.analyst, IOC.type, IOC.campaign_id, IOC.user_id, IOC.created_at]
     if smart:
@@ -291,10 +558,11 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
         col_names += ['comment', 'submission_method', 'tags']
     ioc_dicts = [dict(zip(col_names, r)) for r in raw_rows]
 
-    # Resolve analyst via user_id -> username mapping
+    # Use assigned analyst (ioc.analyst) for attribution; resolve to user_id for display
     for rd in ioc_dicts:
-        uid = rd.get('user_id')
-        rd['analyst'] = (id_to_username.get(uid) if uid else None) or (rd['analyst'] or 'unknown')
+        a = (rd.get('analyst') or '').strip() or 'unknown'
+        rd['analyst'] = a
+        rd['user_id'] = username_to_id.get(a.lower())
 
     comment_counts = _build_smart_comment_counts(ioc_dicts) if smart else {}
     scored = _score_ioc_rows(ioc_dicts, scoring_method, comment_counts)
@@ -324,13 +592,13 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
         analyst_yara[a] = analyst_yara[a] + 1
 
     # Deletion and activity points (ActivityEvent)
-    # - ioc_deletion: points only for expired IOCs (cleanup/hygiene)
+    # - ioc_deletion: deleter gets +1 per deletion (any); assigned analyst loses points because IOC is removed from table
     # - ioc_note_add (Smart Effort only): reward rich, non-trivial notes
     # - ioc_campaign_link (Smart Effort only): reward linking IOCs to campaigns (first link)
     if ActivityEvent:
         users = {u.id: u.username.lower() for u in User.query.all() if u.username}
 
-        # Deletions
+        # Deletions: deleter gets +1 per deletion (any); expired count kept for display/badges
         del_q = db.session.query(
             ActivityEvent.user_id,
             ActivityEvent.payload,
@@ -351,57 +619,57 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
             analyst_deletions_total[a] = analyst_deletions_total.get(a, 0) + 1
             if was_expired:
                 analyst_deletions[a] = analyst_deletions.get(a, 0) + 1
-                d = _to_date(created_at)
-                if d:
-                    analyst_daily[a][d] = analyst_daily[a].get(d, 0) + DELETION
-                    analyst_last[a] = max(analyst_last.get(a, d), d) if analyst_last.get(a) else d
+            d = _to_date(created_at)
+            if d:
+                analyst_daily[a][d] = analyst_daily[a].get(d, 0) + DELETION
+                analyst_last[a] = max(analyst_last.get(a, d), d) if analyst_last.get(a) else d
             if uid:
                 analyst_user_id[a] = uid
 
-        # Smart Effort only: reward rich notes and campaign links as separate actions
-        if smart:
-            evt_q = db.session.query(
-                ActivityEvent.user_id,
-                ActivityEvent.event_type,
-                ActivityEvent.payload,
-                ActivityEvent.created_at,
-            ).filter(ActivityEvent.event_type.in_(['ioc_note_add', 'ioc_campaign_link']))
-            if start_dt is not None:
-                evt_q = evt_q.filter(ActivityEvent.created_at >= start_dt)
-            if end_dt is not None:
-                evt_q = evt_q.filter(ActivityEvent.created_at <= end_dt)
-            evt_rows = evt_q.all()
-            for uid, event_type, payload, created_at in evt_rows:
-                a = users.get(uid, 'unknown')
-                d = _to_date(created_at)
-                try:
-                    p = json.loads(payload or '{}')
-                except (json.JSONDecodeError, TypeError):
-                    p = {}
+        # Reward notes (Smart only), campaign link and campaign create (all methods)
+        evt_q = db.session.query(
+            ActivityEvent.user_id,
+            ActivityEvent.event_type,
+            ActivityEvent.payload,
+            ActivityEvent.created_at,
+        ).filter(ActivityEvent.event_type.in_(['ioc_note_add', 'ioc_campaign_link', 'campaign_create']))
+        if start_dt is not None:
+            evt_q = evt_q.filter(ActivityEvent.created_at >= start_dt)
+        if end_dt is not None:
+            evt_q = evt_q.filter(ActivityEvent.created_at <= end_dt)
+        evt_rows = evt_q.all()
+        for uid, event_type, payload, created_at in evt_rows:
+            a = users.get(uid, 'unknown')
+            d = _to_date(created_at)
+            try:
+                p = json.loads(payload or '{}')
+            except (json.JSONDecodeError, TypeError):
+                p = {}
 
-                pts_extra = 0
-                if event_type == 'ioc_note_add':
-                    length = int(p.get('length') or 0)
-                    if length >= SMART_COMMENT_MIN_LEN:
-                        if length < 100:
-                            pts_extra = 1
-                        elif length < 300:
-                            pts_extra = 2
-                        else:
-                            pts_extra = 3
-                    else:
-                        pts_extra = 1  # minimal effort still counts
-                elif event_type == 'ioc_campaign_link':
-                    # Give at least 1 point when IOC is linked to a campaign for the first time
-                    had_campaign = bool(p.get('had_campaign'))
-                    if not had_campaign:
+            pts_extra = 0
+            if event_type == 'ioc_note_add' and smart:
+                length = int(p.get('length') or 0)
+                if length >= SMART_COMMENT_MIN_LEN:
+                    if length < 100:
                         pts_extra = 1
+                    elif length < 300:
+                        pts_extra = 2
+                    else:
+                        pts_extra = 3
+                else:
+                    pts_extra = 1  # minimal effort still counts
+            elif event_type == 'ioc_campaign_link':
+                had_campaign = bool(p.get('had_campaign'))
+                if not had_campaign:
+                    pts_extra = 1
+            elif event_type == 'campaign_create':
+                pts_extra = 1
 
-                if pts_extra and d:
-                    analyst_daily[a][d] = analyst_daily[a].get(d, 0) + pts_extra
-                    analyst_last[a] = max(analyst_last.get(a, d), d) if analyst_last.get(a) else d
-                if uid:
-                    analyst_user_id[a] = uid
+            if pts_extra and d:
+                analyst_daily[a][d] = analyst_daily[a].get(d, 0) + pts_extra
+                analyst_last[a] = max(analyst_last.get(a, d), d) if analyst_last.get(a) else d
+            if uid:
+                analyst_user_id[a] = uid
 
     # Map analyst -> user_id
     if user_id_map is None:
@@ -437,7 +705,7 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
         total_score = base_score + streak_bonus
 
         last_d = analyst_last.get(analyst)
-        last_str = last_d.strftime('%Y-%m-%d') if last_d else 'N/A'
+        last_str = _format_date_display(last_d)
 
         result.append({
             'analyst': analyst,
@@ -473,13 +741,15 @@ def get_rank_trend(db, ChampRankSnapshot, user_id, current_rank):
     return 0, 'same'
 
 
-def save_daily_rank_snapshots(db, IOC, YaraRule, User, ChampRankSnapshot, ActivityEvent=None, scoring_method='1', exclude_usernames=None):
+def save_daily_rank_snapshots(db, IOC, YaraRule, User, ChampRankSnapshot, ActivityEvent=None, scoring_method='1', exclude_usernames=None, rows=None):
     """Save today's rank snapshot for each analyst. Idempotent (skip if already saved).
-    Returns (did_save: bool, rows: list or None). If did_save, rows are the computed scores; else rows is None."""
+    If rows is provided, use it (e.g. from ChampScore); otherwise compute via compute_analyst_scores.
+    Returns (did_save: bool, rows: list or None). If did_save, rows are the scores used; else rows is None."""
     today = date.today()
     if ChampRankSnapshot.query.filter_by(snapshot_date=today).first():
-        return False, None  # already saved today
-    rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=scoring_method, exclude_usernames=exclude_usernames)
+        return False, rows  # already saved today; return rows if caller needs them
+    if rows is None:
+        rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=scoring_method, exclude_usernames=exclude_usernames)
     for r in rows:
         uid = r.get('user_id')
         if not uid:
@@ -565,15 +835,30 @@ def _get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id, analys
     last_ioc = db.session.query(func.max(IOC.created_at)).filter(
         func.lower(IOC.analyst) == analyst_lower
     ).scalar()
+    def _as_date(val):
+        """Normalize to date; SQLite may return datetime or string."""
+        if val is None:
+            return None
+        if isinstance(val, date) and not isinstance(val, datetime):
+            return val
+        if hasattr(val, 'date'):
+            return val.date()
+        if isinstance(val, str):
+            try:
+                return datetime.strptime(val[:10], '%Y-%m-%d').date()
+            except (ValueError, TypeError):
+                pass
+        return None
+
     if last_ioc:
-        d = _to_date(last_ioc)
+        d = _as_date(_to_date(last_ioc))
         if d and (last_activity_date is None or d > last_activity_date):
             last_activity_date = d
     last_yara = db.session.query(func.max(YaraRule.uploaded_at)).filter(
         func.lower(YaraRule.analyst) == analyst_lower
     ).scalar()
     if last_yara:
-        d = _to_date(last_yara)
+        d = _as_date(_to_date(last_yara))
         if d and (last_activity_date is None or d > last_activity_date):
             last_activity_date = d
     if user_id and ActivityEvent:
@@ -581,10 +866,14 @@ def _get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id, analys
             ActivityEvent.event_type == 'ioc_deletion', ActivityEvent.user_id == user_id
         ).scalar()
         if last_del:
-            d = _to_date(last_del)
+            d = _as_date(_to_date(last_del))
             if d and (last_activity_date is None or d > last_activity_date):
                 last_activity_date = d
 
+    if last_activity_date is None:
+        return []
+    if not isinstance(last_activity_date, date):
+        last_activity_date = _as_date(last_activity_date)
     if last_activity_date is None:
         return []
     days_since_last = (today - last_activity_date).days
@@ -618,45 +907,34 @@ def _get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id, analys
     if streak >= 3 and streak < 5:
         add_badge('warm_streak')
 
-    night_hours = {0, 1, 2, 3, 4, 22, 23}
-    early_hours = {5, 6, 7}
-    has_night = False
-    has_early = False
-    has_weekend = False
-    ioc_rows = db.session.query(IOC.created_at, IOC.type, IOC.campaign_id).filter(
-        func.lower(IOC.analyst) == analyst_lower
-    ).all()
+    # Type counts and campaign_linked – by assigned analyst (ioc.analyst), not submitter
     type_counts = defaultdict(int)
-    campaign_linked = 0
-    for created_at, ioc_type, campaign_id in ioc_rows:
-        if ioc_type:
-            type_counts[ioc_type] += 1
-        if campaign_id:
-            campaign_linked += 1
-        if created_at:
-            if getattr(created_at, 'hour', None) in night_hours:
-                has_night = True
-            if getattr(created_at, 'hour', None) in early_hours:
-                has_early = True
-            wd = getattr(created_at, 'weekday', lambda: None)()
-            if wd is not None and wd in (4, 5):  # Friday, Saturday
-                has_weekend = True
-    yara_rows = db.session.query(YaraRule.uploaded_at).filter(func.lower(YaraRule.analyst) == analyst_lower).all()
-    for (t,) in yara_rows:
+    type_rows = db.session.query(IOC.type, func.count()).filter(func.lower(IOC.analyst) == analyst_lower).group_by(IOC.type).all()
+    campaign_linked = db.session.query(func.count()).filter(func.lower(IOC.analyst) == analyst_lower, IOC.campaign_id.isnot(None), IOC.campaign_id != '').scalar() or 0
+    for (t, cnt) in type_rows:
         if t:
-            if getattr(t, 'hour', None) in night_hours:
-                has_night = True
-            if getattr(t, 'hour', None) in early_hours:
-                has_early = True
-            if getattr(t, 'weekday', lambda: None)() in (4, 5):  # Friday, Saturday
-                has_weekend = True
-    if user_id and ActivityEvent:
-        for (t,) in db.session.query(ActivityEvent.created_at).filter(
-            ActivityEvent.event_type == 'ioc_deletion', ActivityEvent.user_id == user_id
-        ).all():
-            if t and getattr(t, 'hour', None) in night_hours:
-                has_night = True
-                break
+            type_counts[t] = type_counts.get(t, 0) + (cnt or 0)
+
+    # Time-of-day / weekend badges: EXISTS-style checks (no full row load)
+    night_h = ['0', '1', '2', '3', '4', '22', '23']
+    early_h = ['5', '6', '7']
+    ioc_filter = func.lower(IOC.analyst) == analyst_lower
+    has_night = db.session.query(IOC.id).filter(ioc_filter, func.strftime('%H', IOC.created_at).in_(night_h)).first() is not None
+    has_early = db.session.query(IOC.id).filter(ioc_filter, func.strftime('%H', IOC.created_at).in_(early_h)).first() is not None
+    has_weekend = db.session.query(IOC.id).filter(ioc_filter, func.strftime('%w', IOC.created_at).in_(['5', '6'])).first() is not None
+    if not has_night or not has_early or not has_weekend:
+        yr_filter = func.lower(YaraRule.analyst) == analyst_lower
+        if not has_night:
+            has_night = db.session.query(YaraRule.id).filter(yr_filter, func.strftime('%H', YaraRule.uploaded_at).in_(night_h)).first() is not None
+        if not has_early:
+            has_early = db.session.query(YaraRule.id).filter(yr_filter, func.strftime('%H', YaraRule.uploaded_at).in_(early_h)).first() is not None
+        if not has_weekend:
+            has_weekend = db.session.query(YaraRule.id).filter(yr_filter, func.strftime('%w', YaraRule.uploaded_at).in_(['5', '6'])).first() is not None
+    if user_id and ActivityEvent and not has_night:
+        has_night = db.session.query(ActivityEvent.id).filter(
+            ActivityEvent.event_type == 'ioc_deletion', ActivityEvent.user_id == user_id,
+            func.strftime('%H', ActivityEvent.created_at).in_(night_h)
+        ).first() is not None
     if has_night:
         add_badge('night_owl')
     if has_early:
@@ -665,11 +943,8 @@ def _get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id, analys
         add_badge('weekend_warrior')
 
     total_iocs = sum(type_counts.values())
-    # Rare Find: first-ever in system (new country GEO, new TLD, or new email domain)
-    if user_id:
-        has_rare = db.session.query(IOC).filter(IOC.user_id == user_id, IOC.rare_find_type.isnot(None)).first() is not None
-    else:
-        has_rare = db.session.query(IOC).filter(func.lower(IOC.analyst) == analyst_lower, IOC.rare_find_type.isnot(None)).first() is not None
+    # Rare Find: first-ever in system (new country GEO, new TLD, or new email domain) – by analyst
+    has_rare = db.session.query(IOC).filter(func.lower(IOC.analyst) == analyst_lower, IOC.rare_find_type.isnot(None)).first() is not None
     if has_rare:
         add_badge('rare_find')
     if total_iocs >= 30:
@@ -725,47 +1000,72 @@ def _get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id, analys
 
 
 def _compute_team_daily_totals(db, IOC, YaraRule, ActivityEvent, today, days_back=30, scoring_method='1'):
-    """Return dict date -> total points (all analysts) for last days_back days. Used for team average in Spotlight."""
+    """Return dict date -> total points (all analysts) for last days_back days. Used for team average in Spotlight.
+    Uses DB aggregation for IOCs (no full load) so it scales to 1M+ IOCs. Smart scoring uses 2/3 pts approximation here.
+    """
     team_daily = defaultdict(int)
     start = today - timedelta(days=days_back)
-    smart = scoring_method == SCORING_SMART
-    ioc_team_cols = [IOC.created_at, IOC.type, IOC.campaign_id]
-    if smart:
-        ioc_team_cols += [IOC.analyst, IOC.comment, IOC.submission_method]
-    raw_rows = db.session.query(*ioc_team_cols).filter(
-        IOC.created_at >= datetime.combine(start, datetime.min.time())
-    ).all()
-    col_names = ['created_at', 'type', 'campaign_id']
-    if smart:
-        col_names += ['analyst', 'comment', 'submission_method']
-    ioc_dicts = [dict(zip(col_names, r)) for r in raw_rows]
-
-    comment_counts = _build_smart_comment_counts(ioc_dicts) if smart else {}
-    scored = _score_ioc_rows(ioc_dicts, scoring_method, comment_counts)
-    for _analyst, d, pts, _uid in scored:
+    start_dt = datetime.combine(start, datetime.min.time())
+    # IOCs: aggregated by date (2/3 pts) – no row load
+    q_ioc = text("""
+        SELECT DATE(created_at) AS d,
+               SUM(CASE WHEN campaign_id IS NOT NULL AND TRIM(COALESCE(campaign_id,'')) != '' THEN :ioc_campaign ELSE :ioc_default END) AS day_pts
+        FROM iocs
+        WHERE created_at >= :start_dt AND created_at IS NOT NULL
+        GROUP BY DATE(created_at)
+    """)
+    params = {'start_dt': start_dt, 'ioc_campaign': IOC_WITH_CAMPAIGN, 'ioc_default': IOC_DEFAULT}
+    for row in db.session.execute(q_ioc, params).fetchall():
+        d = _ensure_date(row[0])
         if d:
-            team_daily[d] = team_daily.get(d, 0) + pts
+            team_daily[d] = team_daily.get(d, 0) + (row[1] or 0)
 
     yara_rows = db.session.query(YaraRule.uploaded_at, YaraRule.quality_points, YaraRule.status).filter(
-        YaraRule.uploaded_at >= datetime.combine(start, datetime.min.time())
+        YaraRule.uploaded_at >= start_dt
     ).all()
     for uploaded_at, qp, status in yara_rows:
-        d = _to_date(uploaded_at)
+        d = _ensure_date(uploaded_at)
         if d:
             team_daily[d] = team_daily.get(d, 0) + _compute_yara_points(qp, status, scoring_method)
     if ActivityEvent:
         del_rows = db.session.query(ActivityEvent.created_at, ActivityEvent.payload).filter(
             ActivityEvent.event_type == 'ioc_deletion',
-            ActivityEvent.created_at >= datetime.combine(start, datetime.min.time())
+            ActivityEvent.created_at >= start_dt
         ).all()
         for created_at, payload in del_rows:
             try:
                 if json.loads(payload or '{}').get('was_expired'):
-                    d = _to_date(created_at)
+                    d = _ensure_date(created_at)
                     if d:
                         team_daily[d] = team_daily.get(d, 0) + DELETION
             except (json.JSONDecodeError, TypeError):
                 pass
+    return dict(team_daily)
+
+
+def _compute_team_daily_counts(db, IOC, YaraRule, today, days_back=30):
+    """Return dict date -> total submission count (IOC + YARA) per day, all analysts. For chart: show count not points."""
+    team_daily = defaultdict(int)
+    start = today - timedelta(days=days_back)
+    start_dt = datetime.combine(start, datetime.min.time())
+    q_ioc = text("""
+        SELECT DATE(created_at) AS d, COUNT(*) AS cnt
+        FROM iocs WHERE created_at >= :start_dt AND created_at IS NOT NULL
+        GROUP BY DATE(created_at)
+    """)
+    for row in db.session.execute(q_ioc, {'start_dt': start_dt}).fetchall():
+        d = _ensure_date(row[0])
+        if d:
+            team_daily[d] = team_daily.get(d, 0) + (row[1] or 0)
+    q_yara = text("""
+        SELECT DATE(uploaded_at) AS d, COUNT(*) AS cnt
+        FROM yara_rules WHERE uploaded_at >= :start_dt AND uploaded_at IS NOT NULL
+        GROUP BY DATE(uploaded_at)
+    """)
+    for row in db.session.execute(q_yara, {'start_dt': start_dt}).fetchall():
+        d = _ensure_date(row[0])
+        if d:
+            team_daily[d] = team_daily.get(d, 0) + (row[1] or 0)
     return dict(team_daily)
 
 
@@ -786,14 +1086,11 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
     if not row:
         return None
 
-    # IOC type breakdown for nickname
+    # IOC type breakdown for nickname – by assigned analyst (same as leaderboard)
     ioc_type_counts = defaultdict(int)
-    if user_id:
-        iocs = db.session.query(IOC.type).filter(IOC.user_id == user_id).all()
-    else:
-        iocs = db.session.query(IOC.type).filter(func.lower(IOC.analyst) == analyst_lower).all()
-    for (t,) in iocs:
-        ioc_type_counts[t or 'Unknown'] = ioc_type_counts.get(t, 0) + 1
+    type_rows = db.session.query(IOC.type, func.count()).filter(func.lower(IOC.analyst) == analyst_lower).group_by(IOC.type).all()
+    for (t, cnt) in type_rows:
+        ioc_type_counts[t or 'Unknown'] = ioc_type_counts.get(t or 'Unknown', 0) + (cnt or 0)
     # Add YARA
     yara_count = row.get('yara_count', 0)
     if yara_count:
@@ -802,62 +1099,97 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
     emoji, nickname = _get_nickname(dict(ioc_type_counts))
     level, xp_in_level, xp_to_next, level_width = _get_level_and_xp(row['score'])
 
-    # Activity per day (last 30 days)
+    # Activity per day (last 30 days). Use aggregation when possible so 1M+ IOCs don't load.
+    today = date.today()
+    days_back = 30
+    start = today - timedelta(days=days_back)
+    start_dt = datetime.combine(start, datetime.min.time())
     analyst_daily = defaultdict(int)
     smart = scoring_method == SCORING_SMART
-    ioc_detail_cols = [IOC.created_at, IOC.type, IOC.campaign_id]
+
     if smart:
-        ioc_detail_cols += [IOC.comment, IOC.submission_method]
-    raw_rows = db.session.query(*ioc_detail_cols).filter(
-        func.lower(IOC.analyst) == analyst_lower
+        # Smart: need comment/submission_method – load only last 30 days for this analyst
+        ioc_detail_cols = [IOC.created_at, IOC.type, IOC.campaign_id, IOC.comment, IOC.submission_method]
+        raw_rows = db.session.query(*ioc_detail_cols).filter(
+            func.lower(IOC.analyst) == analyst_lower,
+            IOC.created_at >= start_dt
+        ).all()
+        col_names = ['created_at', 'type', 'campaign_id', 'comment', 'submission_method']
+        ioc_dicts = [dict(zip(col_names, r)) for r in raw_rows]
+        for rd in ioc_dicts:
+            rd['analyst'] = analyst_lower
+        comment_counts = _build_smart_comment_counts(ioc_dicts)
+        scored = _score_ioc_rows(ioc_dicts, scoring_method, comment_counts)
+        for _a, d, pts, _uid in scored:
+            day_key = _ensure_date(d)
+            if day_key:
+                analyst_daily[day_key] = analyst_daily.get(day_key, 0) + pts
+    else:
+        # Non-Smart: aggregate by date (2/3 pts) – by assigned analyst
+        q = text("""
+            SELECT DATE(created_at) AS d,
+                   SUM(CASE WHEN campaign_id IS NOT NULL AND TRIM(COALESCE(campaign_id,'')) != '' THEN :ioc_campaign ELSE :ioc_default END) AS day_pts
+            FROM iocs WHERE LOWER(TRIM(analyst)) = :analyst AND created_at >= :start_dt AND created_at IS NOT NULL
+            GROUP BY DATE(created_at)
+        """)
+        params = {'analyst': analyst_lower, 'start_dt': start_dt, 'ioc_campaign': IOC_WITH_CAMPAIGN, 'ioc_default': IOC_DEFAULT}
+        for agg_row in db.session.execute(q, params).fetchall():
+            d = _ensure_date(agg_row[0])
+            if d:
+                analyst_daily[d] = analyst_daily.get(d, 0) + (agg_row[1] or 0)
+
+    yara_rows = db.session.query(YaraRule.uploaded_at, YaraRule.quality_points, YaraRule.status).filter(
+        func.lower(YaraRule.analyst) == analyst_lower,
+        YaraRule.uploaded_at >= start_dt
     ).all()
-    col_names = ['created_at', 'type', 'campaign_id']
-    if smart:
-        col_names += ['comment', 'submission_method']
-    ioc_dicts = [dict(zip(col_names, r)) for r in raw_rows]
-    for rd in ioc_dicts:
-        rd['analyst'] = analyst_lower
-
-    comment_counts = _build_smart_comment_counts(ioc_dicts) if smart else {}
-    scored = _score_ioc_rows(ioc_dicts, scoring_method, comment_counts)
-    for _a, d, pts, _uid in scored:
-        if d:
-            analyst_daily[d] = analyst_daily.get(d, 0) + pts
-
-    yara_rows = db.session.query(YaraRule.uploaded_at, YaraRule.quality_points, YaraRule.status).filter(func.lower(YaraRule.analyst) == analyst_lower).all()
     for uploaded_at, qp, status in yara_rows:
-        d = _to_date(uploaded_at)
+        d = _ensure_date(uploaded_at)
         if d:
             analyst_daily[d] = analyst_daily.get(d, 0) + _compute_yara_points(qp, status, scoring_method)
     if ActivityEvent and user_id:
         del_evts = db.session.query(ActivityEvent.created_at, ActivityEvent.payload).filter(
-            ActivityEvent.event_type == 'ioc_deletion', ActivityEvent.user_id == user_id
+            ActivityEvent.event_type == 'ioc_deletion',
+            ActivityEvent.user_id == user_id,
+            ActivityEvent.created_at >= start_dt
         ).all()
         for created_at, payload in del_evts:
-            try:
-                p = json.loads(payload or '{}')
-                if p.get('was_expired'):
-                    d = _to_date(created_at)
-                    if d:
-                        analyst_daily[d] = analyst_daily.get(d, 0) + DELETION
-            except (json.JSONDecodeError, TypeError):
-                pass
+            d = _ensure_date(created_at)
+            if d:
+                analyst_daily[d] = analyst_daily.get(d, 0) + DELETION
 
-    today = date.today()
-    days_back = 30
+    # Chart: show submission counts (IOC + YARA per day) by analyst name so admin-submitted-on-behalf count
+    analyst_daily_count = defaultdict(int)
+    qc = text("""
+        SELECT DATE(created_at) AS d, COUNT(*) AS cnt
+        FROM iocs WHERE LOWER(analyst) = :analyst AND created_at >= :start_dt AND created_at IS NOT NULL
+        GROUP BY DATE(created_at)
+    """)
+    for r in db.session.execute(qc, {'analyst': analyst_lower, 'start_dt': start_dt}).fetchall():
+        d = _ensure_date(r[0])
+        if d:
+            analyst_daily_count[d] = analyst_daily_count.get(d, 0) + (r[1] or 0)
+    yara_count_q = db.session.query(func.date(YaraRule.uploaded_at), func.count()).filter(
+        func.lower(YaraRule.analyst) == analyst_lower,
+        YaraRule.uploaded_at >= start_dt
+    ).group_by(func.date(YaraRule.uploaded_at)).all()
+    for (d, cnt) in yara_count_q:
+        day = _ensure_date(d)
+        if day:
+            analyst_daily_count[day] = analyst_daily_count.get(day, 0) + (cnt or 0)
+
     activity_per_day = []
     for i in range(days_back - 1, -1, -1):
         d = today - timedelta(days=i)
-        activity_per_day.append({'date': d.strftime('%Y-%m-%d'), 'points': analyst_daily.get(d, 0)})
+        activity_per_day.append({'date': d.strftime('%Y-%m-%d'), 'points': analyst_daily_count.get(d, 0)})
 
-    # Team average per day (for Spotlight chart overlay)
-    team_totals = _compute_team_daily_totals(db, IOC, YaraRule, ActivityEvent, today, days_back, scoring_method=scoring_method)
+    # Team average per day: average submission count (IOC + YARA) per analyst, for chart
+    team_counts = _compute_team_daily_counts(db, IOC, YaraRule, today, days_back)
     num_analysts = max(1, len(rows))
     team_avg_per_day = []
     for i in range(days_back - 1, -1, -1):
         d = today - timedelta(days=i)
-        total = team_totals.get(d, 0)
-        team_avg_per_day.append({'date': d.strftime('%Y-%m-%d'), 'points': round(total / num_analysts, 1)})
+        total_count = team_counts.get(d, 0)
+        team_avg_per_day.append({'date': d.strftime('%Y-%m-%d'), 'points': round(total_count / num_analysts, 1)})
 
     analyst_deletions = {analyst_lower: row.get('deletion_count', 0)}
     badges = _get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id, {analyst_lower: dict(analyst_daily)}, analyst_deletions, scoring_method=scoring_method)
@@ -865,16 +1197,15 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
     misp_per_day = None
     if misp_sync_username:
         misp_lower = misp_sync_username.lower()
-        start = today - timedelta(days=days_back)
         misp_daily = defaultdict(int)
-        misp_ioc_rows = db.session.query(IOC.created_at).filter(
+        misp_rows = db.session.query(func.date(IOC.created_at), func.count()).filter(
             func.lower(IOC.analyst) == misp_lower,
-            IOC.created_at >= datetime.combine(start, datetime.min.time()),
-        ).all()
-        for (created_at,) in misp_ioc_rows:
-            d = _to_date(created_at)
-            if d:
-                misp_daily[d] = misp_daily.get(d, 0) + 1
+            IOC.created_at >= start_dt,
+        ).group_by(func.date(IOC.created_at)).all()
+        for (d, cnt) in misp_rows:
+            day = _ensure_date(d)
+            if day:
+                misp_daily[day] = misp_daily.get(day, 0) + (cnt or 0)
         misp_per_day = []
         for i in range(days_back - 1, -1, -1):
             d = today - timedelta(days=i)

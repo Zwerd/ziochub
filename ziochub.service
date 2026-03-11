@@ -10,6 +10,7 @@ WorkingDirectory=/opt/ziochub
 ExecStart=/bin/bash /opt/ziochub/start.sh
 Restart=always
 RestartSec=5
+EnvironmentFile=-/opt/ziochub/data/ziochub.env
 Environment="PATH=/opt/ziochub/venv/bin:/usr/bin:/bin"
 
 # Hardening (service runs as ziochub; data dir writable)

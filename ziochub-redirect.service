@@ -9,8 +9,8 @@ User=ziochub
 Group=ziochub
 WorkingDirectory=/opt/ziochub
 ExecStart=/opt/ziochub/venv/bin/python /opt/ziochub/http_redirect.py
+EnvironmentFile=-/opt/ziochub/data/ziochub.env
 Environment="REDIRECT_HTTP_PORT=8080"
-Environment="REDIRECT_HTTPS_PORT=8443"
 Restart=always
 RestartSec=5
 

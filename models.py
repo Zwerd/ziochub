@@ -53,7 +53,7 @@ class SystemSetting(db.Model):
 
 
 class UserProfile(db.Model):
-    """User display info: avatar, role description."""
+    """User display info: avatar, role description, preferences."""
     __tablename__ = 'user_profiles'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), unique=True, nullable=False)
@@ -61,6 +61,9 @@ class UserProfile(db.Model):
     role_description = db.Column(db.Text, nullable=True)
     avatar_path = db.Column(db.String(512), nullable=True)
     email = db.Column(db.String(255), nullable=True)
+    mute_sound = db.Column(db.Boolean, default=False, nullable=False)
+    ambition_popup_disabled = db.Column(db.Boolean, default=False, nullable=False)
+    achievement_popup_disabled = db.Column(db.Boolean, default=False, nullable=False)
 
 
 class UserSession(db.Model):
@@ -111,7 +114,11 @@ class IocHistory(db.Model):
     username = db.Column(db.String(255), nullable=True)
     at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     payload = db.Column(db.Text, nullable=True)  # JSON: e.g. {"expiration_date": "...", "comment": "..."}
-    __table_args__ = (Index('ix_ioc_history_at', 'at'), Index('ix_ioc_history_at_event_type', 'at', 'event_type'),)
+    __table_args__ = (
+        Index('ix_ioc_history_at', 'at'),
+        Index('ix_ioc_history_at_event_type', 'at', 'event_type'),
+        Index('ix_ioc_history_type_value', 'ioc_type', 'ioc_value'),
+    )
 
 
 class IocNote(db.Model):
@@ -123,6 +130,7 @@ class IocNote(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     content = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow)
+    __table_args__ = (Index('ix_ioc_notes_type_value', 'ioc_type', 'ioc_value'),)
 
 
 class SanityExclusion(db.Model):
@@ -190,3 +198,16 @@ class ChampRankSnapshot(db.Model):
     score = db.Column(db.Integer, nullable=False)
     snapshot_date = db.Column(db.Date, nullable=False)  # date only for daily comparison
     __table_args__ = (UniqueConstraint('user_id', 'snapshot_date', name='u_champ_snapshot_user_date'),)
+
+
+class ChampScore(db.Model):
+    """Materialized per-user Champs score (efficient leaderboard for 1M+ IOCs). Updated on IOC/YARA add/delete."""
+    __tablename__ = 'champ_scores'
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
+    score = db.Column(db.Integer, nullable=False, default=0)
+    total_iocs = db.Column(db.Integer, nullable=False, default=0)
+    yara_count = db.Column(db.Integer, nullable=False, default=0)
+    deletion_count = db.Column(db.Integer, nullable=False, default=0)
+    streak_days = db.Column(db.Integer, nullable=False, default=0)
+    last_activity = db.Column(db.Date, nullable=True)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)

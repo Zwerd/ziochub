@@ -3028,6 +3028,47 @@ button:focus-visible {
     background: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(99, 102, 241, 0.08) 100%);
     border: 1px solid rgba(59, 130, 246, 0.3);
 }
+.achievement-points-section {
+    background: linear-gradient(135deg, rgba(234, 179, 8, 0.15) 0%, rgba(245, 158, 11, 0.08) 100%);
+    border: 1px solid rgba(234, 179, 8, 0.3);
+}
+.achievement-nickname-section {
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.15) 0%, rgba(139, 92, 246, 0.08) 100%);
+    border: 1px solid rgba(168, 85, 247, 0.3);
+}
+.achievement-gauge-section {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1.25rem;
+    border-radius: 0.75rem;
+    margin-bottom: 0.25rem;
+    animation: achievementSlide 0.5s ease-out both;
+    background: linear-gradient(135deg, rgba(100, 116, 139, 0.12) 0%, rgba(71, 85, 105, 0.08) 100%);
+    border: 1px solid rgba(100, 116, 139, 0.25);
+}
+.achievement-gauge-wrap {
+    flex: 1;
+    min-width: 0;
+}
+.achievement-gauge-header {
+    color: #94a3b8;
+}
+.achievement-gauge-track {
+    height: 8px;
+    border-radius: 4px;
+    background: rgba(15, 23, 42, 0.6);
+    overflow: hidden;
+}
+.achievement-gauge-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #22c55e, #4ade80);
+    transition: width 0.4s ease-out;
+}
+.achievement-gauge-next {
+    color: #64748b;
+}
 .achievement-icon {
     font-size: 1.5rem;
     flex-shrink: 0;
@@ -3048,6 +3089,14 @@ button:focus-visible {
     color: #3b82f6;
     text-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
 }
+.achievement-highlight-points {
+    color: #eab308;
+    text-shadow: 0 0 8px rgba(234, 179, 8, 0.4);
+}
+.achievement-highlight-nickname {
+    color: #a78bfa;
+    text-shadow: 0 0 8px rgba(168, 85, 247, 0.4);
+}
 [data-theme="light"] .achievement-text {
     color: #1e293b;
 }
@@ -3066,6 +3115,22 @@ button:focus-visible {
 [data-theme="light"] .achievement-rank-section {
     background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(99, 102, 241, 0.05) 100%);
     border-color: rgba(59, 130, 246, 0.25);
+}
+[data-theme="light"] .achievement-points-section {
+    background: linear-gradient(135deg, rgba(234, 179, 8, 0.1) 0%, rgba(245, 158, 11, 0.05) 100%);
+    border-color: rgba(234, 179, 8, 0.25);
+}
+[data-theme="light"] .achievement-highlight-points {
+    color: #ca8a04;
+    text-shadow: none;
+}
+[data-theme="light"] .achievement-nickname-section {
+    background: linear-gradient(135deg, rgba(168, 85, 247, 0.1) 0%, rgba(139, 92, 246, 0.05) 100%);
+    border-color: rgba(168, 85, 247, 0.25);
+}
+[data-theme="light"] .achievement-highlight-nickname {
+    color: #7c3aed;
+    text-shadow: none;
 }
 
 /* MISP toggle button in Champs spotlight chart */

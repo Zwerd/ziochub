@@ -446,33 +446,110 @@ function showToast(message, type = 'success') {
 }
 
 // ---------------------------------------------------------------------------
-// Achievement modal
+// Achievement modal - short pleasant chime when popup opens
 // ---------------------------------------------------------------------------
+function playAchievementSound() {
+    if (document.body.getAttribute('data-mute-sound') === '1') return;
+    try {
+        var C = window.AudioContext || window.webkitAudioContext;
+        if (!C) return;
+        var ctx = new C();
+        function playTones() {
+            var gain = ctx.createGain();
+            gain.connect(ctx.destination);
+            gain.gain.setValueAtTime(0.25, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
+            function tone(freq, start, dur) {
+                var o = ctx.createOscillator();
+                o.type = 'sine';
+                o.frequency.setValueAtTime(freq, start);
+                o.connect(gain);
+                o.start(start);
+                o.stop(start + dur);
+            }
+            tone(523.25, ctx.currentTime, 0.12);       // C5
+            tone(659.25, ctx.currentTime + 0.08, 0.2); // E5
+        }
+        if (ctx.state === 'suspended') {
+            ctx.resume().then(playTones);
+        } else {
+            playTones();
+        }
+    } catch (e) { /* ignore if audio blocked or unsupported */ }
+}
+
 function showAchievementModal(result) {
+    if (document.body.getAttribute('data-achievement-popup-disabled') === '1') return;
     var badges = result.new_badges;
     var levelUp = result.level_up;
     var rankUp = result.rank_up;
-    if ((!badges || badges.length === 0) && !levelUp && !rankUp) return;
+    var pointsEarned = result.points_earned;
+    var levelInfo = result.level_info;
+    var newNickname = result.new_nickname;
+    var hasAny = (badges && badges.length > 0) || levelUp || rankUp || (pointsEarned !== undefined) || levelInfo || newNickname;
+    if (!hasAny) return;
     var modal = document.getElementById('badgeEarnedModal');
     var list = document.getElementById('badgeEarnedList');
     var titleEl = document.getElementById('badgeEarnedTitle');
+    var pointsEl = document.getElementById('achievementPointsEarned');
+    var gaugeEl = document.getElementById('achievementLevelGauge');
     var levelEl = document.getElementById('achievementLevelUp');
     var rankEl = document.getElementById('achievementRankUp');
+    var nicknameEl = document.getElementById('achievementNewNickname');
     if (!modal || !list) return;
     list.innerHTML = '';
-    levelEl.classList.add('hidden');
-    levelEl.innerHTML = '';
-    rankEl.classList.add('hidden');
-    rankEl.innerHTML = '';
+    if (pointsEl) { pointsEl.classList.add('hidden'); pointsEl.innerHTML = ''; }
+    if (gaugeEl) { gaugeEl.classList.add('hidden'); gaugeEl.innerHTML = ''; }
+    if (levelEl) { levelEl.classList.add('hidden'); levelEl.innerHTML = ''; }
+    if (rankEl) { rankEl.classList.add('hidden'); rankEl.innerHTML = ''; }
+    if (nicknameEl) { nicknameEl.classList.add('hidden'); nicknameEl.innerHTML = ''; }
 
     var parts = [];
+    if (pointsEarned !== undefined && pointsEarned > 0) parts.push('+' + pointsEarned + ' pts');
     if (levelUp) parts.push('Level Up!');
     if (rankUp) parts.push('Rank Up!');
+    if (newNickname && newNickname.label) parts.push('New Title!');
     if (badges && badges.length === 1) parts.push('New Badge!');
     else if (badges && badges.length > 1) parts.push(badges.length + ' New Badges!');
-    titleEl.textContent = parts.length > 0 ? parts.join(' + ') : 'Achievement Unlocked!';
+    titleEl.textContent = parts.length > 0 ? parts.join(' • ') : 'Achievement Unlocked!';
 
-    if (levelUp) {
+    if (pointsEl) {
+        var ptsText = '';
+        if (pointsEarned !== undefined && pointsEarned > 0) {
+            ptsText = '+' + pointsEarned + ' points';
+        } else if (levelInfo && levelInfo.score !== undefined && levelInfo.score !== null) {
+            var total = Number(levelInfo.score);
+            if (!isNaN(total)) ptsText = total + ' points total';
+        }
+        if (ptsText) {
+            pointsEl.classList.remove('hidden');
+            pointsEl.innerHTML = '<div class="achievement-section achievement-points-section">'
+                + '<span class="achievement-icon">⭐</span>'
+                + '<span class="achievement-text"><strong class="achievement-highlight-points">' + ptsText + '</strong></span>'
+                + '</div>';
+        }
+    }
+
+    if (levelInfo && gaugeEl) {
+        var lvl = Number(levelInfo.level) || 1;
+        var xpIn = Number(levelInfo.xp_in_level) || 0;
+        var xpTo = Number(levelInfo.xp_to_next) || 0;
+        var width = Number(levelInfo.level_width) || 1;
+        var scoreTotal = levelInfo.score !== undefined ? Number(levelInfo.score) : null;
+        var pct = width > 0 ? Math.min(100, Math.round((xpIn / width) * 100)) : 0;
+        gaugeEl.classList.remove('hidden');
+        var headerText = 'Level ' + lvl + ' &nbsp; ' + xpIn + ' / ' + width + ' XP';
+        if (scoreTotal !== null && !isNaN(scoreTotal)) headerText = scoreTotal + ' pts &nbsp; · &nbsp; ' + headerText;
+        gaugeEl.innerHTML = '<div class="achievement-section achievement-gauge-section">'
+            + '<span class="achievement-icon">📊</span>'
+            + '<div class="achievement-gauge-wrap w-full">'
+            + '<div class="achievement-gauge-header text-sm text-slate-400 mb-1">' + headerText + '</div>'
+            + '<div class="achievement-gauge-track"><div class="achievement-gauge-fill" style="width:' + pct + '%"></div></div>'
+            + '<div class="achievement-gauge-next text-xs text-slate-500 mt-0.5">' + xpTo + ' XP to next level</div>'
+            + '</div></div>';
+    }
+
+    if (levelUp && levelEl) {
         levelEl.classList.remove('hidden');
         levelEl.innerHTML = '<div class="achievement-section achievement-level-section">'
             + '<span class="achievement-icon">⬆️</span>'
@@ -482,13 +559,22 @@ function showAchievementModal(result) {
             + '</div>';
     }
 
-    if (rankUp) {
+    if (rankUp && rankEl) {
         rankEl.classList.remove('hidden');
         rankEl.innerHTML = '<div class="achievement-section achievement-rank-section">'
             + '<span class="achievement-icon">🏅</span>'
             + '<span class="achievement-text"><strong>#' + rankUp.old_rank + '</strong>'
             + ' <span class="achievement-arrow">→</span> '
             + '<strong class="achievement-highlight-rank">#' + rankUp.new_rank + '</strong></span>'
+            + '</div>';
+    }
+
+    if (newNickname && newNickname.label && nicknameEl) {
+        nicknameEl.classList.remove('hidden');
+        var emoji = newNickname.emoji || '🎯';
+        nicknameEl.innerHTML = '<div class="achievement-section achievement-nickname-section">'
+            + '<span class="achievement-icon">' + emoji + '</span>'
+            + '<span class="achievement-text"><strong class="achievement-highlight-nickname">' + emoji + ' ' + (newNickname.label || 'Threat Hunter') + '</strong></span>'
             + '</div>';
     }
 
@@ -512,6 +598,9 @@ function showAchievementModal(result) {
         });
     }
     modal.classList.remove('hidden');
+    playAchievementSound();
+    // Refresh Champs/LAVAL so points and ladder show updated score
+    if (typeof window.loadChampsAnalysis === 'function') window.loadChampsAnalysis();
 }
 
 document.getElementById('badgeEarnedClose').addEventListener('click', function () {

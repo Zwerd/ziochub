@@ -362,6 +362,10 @@
             }
             if (result.success) {
                 showToast(result.message, 'success');
+                // On revoke, only show achievement popup when something positive happened (no "0 points" popup)
+                if (typeof showAchievementModal === 'function' && (result.new_badges || result.level_up || result.rank_up || result.new_nickname || (result.points_earned !== undefined && result.points_earned > 0))) {
+                    showAchievementModal(result);
+                }
                 performSearch();
                 if (typeof loadStats === 'function') loadStats();
                 if (typeof loadLiveFeed === 'function') loadLiveFeed();
@@ -467,6 +471,9 @@
 
                 if (result.success) {
                     showToast(result.message, 'success');
+                    if (typeof showAchievementModal === 'function' && (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname)) {
+                        showAchievementModal(result);
+                    }
                     editModal.classList.add('hidden');
                     performSearch();
                     if (typeof loadStats === 'function') loadStats();
@@ -619,6 +626,9 @@
             if (j.success) {
                 addNoteModal.classList.add('hidden');
                 showToast((typeof t === 'function' && t('notes.added')) ? t('notes.added') : 'Note added', 'success');
+                if (typeof showAchievementModal === 'function' && (j.new_badges || j.level_up || j.rank_up || j.points_earned !== undefined || j.level_info || j.new_nickname)) {
+                    showAchievementModal(j);
+                }
             } else {
                 showToast((j.message || 'Failed to add note'), 'error');
             }

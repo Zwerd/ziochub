@@ -85,7 +85,13 @@ def list_campaigns():
 @login_required
 def create_campaign():
     """Create a new campaign."""
-    _commit_with_retry, audit_log = _from_app('_commit_with_retry', 'audit_log')
+    (
+        _commit_with_retry, audit_log, _log_champs_event,
+        _capture_champs_before, _detect_champs_changes, refresh_champ_score_for_user,
+    ) = _from_app(
+        '_commit_with_retry', 'audit_log', '_log_champs_event',
+        '_capture_champs_before', '_detect_champs_changes', 'refresh_champ_score_for_user',
+    )
     try:
         data = request.get_json() or {}
         name = (data.get('name') or '').strip()
@@ -95,16 +101,35 @@ def create_campaign():
             dir_val = 'ltr'
         if not name:
             return jsonify({'success': False, 'message': 'Campaign name is required'}), 400
+
+        champs_before = _capture_champs_before(current_user.id, (current_user.username or '').lower()) if current_user and current_user.is_authenticated else None
+
         created_by = current_user.id if current_user and current_user.is_authenticated else None
         db.session.add(Campaign(name=name, description=description, dir=dir_val, created_by=created_by))
         _commit_with_retry()
         audit_log('CAMPAIGN_CREATE', f'name={name}')
         c = Campaign.query.filter_by(name=name).first()
-        return jsonify({
+
+        try:
+            _log_champs_event('campaign_create', user_id=current_user.id if current_user and current_user.is_authenticated else None, payload={'campaign_id': c.id, 'name': name[:100]})
+        except Exception:
+            pass
+        try:
+            refresh_champ_score_for_user(current_user.id)
+        except Exception as e:
+            logging.warning('create_campaign: refresh_champ_score failed (campaign saved): %s', e)
+
+        response = {
             'success': True,
             'message': 'Campaign created',
             'campaign': {'id': c.id, 'name': c.name, 'description': c.description, 'dir': c.dir or 'ltr', 'created_at': c.created_at.isoformat() if c.created_at else None}
-        }), 201
+        }
+        if champs_before and current_user and current_user.is_authenticated:
+            try:
+                response.update(_detect_champs_changes(champs_before, current_user.id, (current_user.username or '').lower()))
+            except Exception as e:
+                logging.warning('create_campaign: champs change detection failed (campaign saved): %s', e)
+        return jsonify(response), 201
     except IntegrityError:
         db.session.rollback()
         return jsonify({'success': False, 'message': 'Campaign name already exists'}), 409
@@ -118,7 +143,13 @@ def create_campaign():
 def link_ioc_to_campaign():
     """Link an existing IOC to a campaign by value. Expects {ioc_value, campaign_id}."""
     from utils.validation_messages import MSG_IOC_NOT_FOUND
-    _commit_with_retry, audit_log, _log_champs_event = _from_app('_commit_with_retry', 'audit_log', '_log_champs_event')
+    (
+        _commit_with_retry, audit_log, _log_champs_event,
+        _capture_champs_before, _detect_champs_changes, refresh_champ_score_for_user,
+    ) = _from_app(
+        '_commit_with_retry', 'audit_log', '_log_champs_event',
+        '_capture_champs_before', '_detect_champs_changes', 'refresh_champ_score_for_user',
+    )
     try:
         data = request.get_json() or {}
         ioc_value = (data.get('ioc_value') or '').strip()
@@ -133,6 +164,9 @@ def link_ioc_to_campaign():
         ioc = IOC.query.filter(IOC.value == ioc_value).first()
         if not ioc:
             return jsonify({'success': False, 'message': MSG_IOC_NOT_FOUND}), 404
+
+        champs_before = _capture_champs_before(current_user.id, (current_user.username or '').lower()) if current_user and current_user.is_authenticated else None
+
         had_campaign = bool(ioc.campaign_id)
         ioc.campaign_id = campaign_id
         _commit_with_retry()
@@ -152,12 +186,23 @@ def link_ioc_to_campaign():
             )
         except Exception:
             pass
-        return jsonify({
+        try:
+            refresh_champ_score_for_user(current_user.id)
+        except Exception as e:
+            logging.warning('link_ioc_to_campaign: refresh_champ_score failed (link saved): %s', e)
+
+        response = {
             'success': True,
             'message': f'IOC linked to campaign "{campaign.name}"',
             'ioc_id': ioc.id,
-            'campaign_id': campaign_id
-        })
+            'campaign_id': campaign_id,
+        }
+        if champs_before and current_user and current_user.is_authenticated:
+            try:
+                response.update(_detect_champs_changes(champs_before, current_user.id, (current_user.username or '').lower()))
+            except Exception as e:
+                logging.warning('link_ioc_to_campaign: champs change detection failed (link saved): %s', e)
+        return jsonify(response)
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500

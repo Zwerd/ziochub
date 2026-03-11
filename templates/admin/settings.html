@@ -3,7 +3,7 @@
 
 {% block admin_content %}
 <div class="mb-4">
-    <p class="text-secondary text-sm">System configuration: LDAP, MISP, Syslog, and audit log viewer.</p>
+    <p class="text-secondary text-sm">System configuration: LDAP, MISP, and Syslog.</p>
 </div>
 
 <!-- Settings tab strip -->
@@ -11,7 +11,6 @@
     <button type="button" class="settings-tab-btn px-4 py-2 rounded-lg font-medium text-sm transition active bg-cyan-600 text-white" data-tab="ldap">LDAP</button>
     <button type="button" class="settings-tab-btn px-4 py-2 rounded-lg font-medium text-sm transition bg-tertiary text-primary" data-tab="misp">MISP</button>
     <button type="button" class="settings-tab-btn px-4 py-2 rounded-lg font-medium text-sm transition bg-tertiary text-primary" data-tab="syslog">Syslog</button>
-    <button type="button" class="settings-tab-btn px-4 py-2 rounded-lg font-medium text-sm transition bg-tertiary text-primary" data-tab="logs">Logs</button>
 </nav>
 
 <!-- Tab: LDAP -->
@@ -222,20 +221,6 @@
     </div>
 </div>
 
-<!-- Tab: Logs (last 50 lines) -->
-<div id="settings-tab-logs" class="settings-tab-pane hidden">
-    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-4xl">
-        <h3 class="text-lg font-semibold accent-blue mb-4">Audit Log (last 50 lines)</h3>
-        <p class="text-secondary text-sm mb-4">CEF audit log file. Newest lines at the bottom.</p>
-        <div class="flex items-center gap-2 mb-3">
-            <button type="button" id="logsRefreshBtn" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition text-sm">Refresh</button>
-            <span id="logsPath" class="text-xs text-secondary"></span>
-        </div>
-        <pre id="logsContent" class="p-4 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-primary overflow-x-auto overflow-y-auto max-h-[70vh] whitespace-pre-wrap break-all">Loading...</pre>
-        <div id="logsError" class="mt-2 hidden text-sm text-red-400"></div>
-    </div>
-</div>
-
 <script>
 /* ---------- Settings tabs ---------- */
 document.querySelectorAll('.settings-tab-btn').forEach(function(btn) {
@@ -247,7 +232,6 @@ document.querySelectorAll('.settings-tab-btn').forEach(function(btn) {
         document.querySelectorAll('.settings-tab-pane').forEach(function(p) { p.classList.add('hidden'); });
         var pane = document.getElementById('settings-tab-' + tab);
         if (pane) pane.classList.remove('hidden');
-        if (tab === 'logs') loadLogs();
     });
 });
 
@@ -546,31 +530,5 @@ document.getElementById('mispSyncBtn').addEventListener('click', async function(
     btn.disabled = false;
 });
 
-/* ---------- Logs tab: fetch last 50 lines ---------- */
-function loadLogs() {
-    var pre = document.getElementById('logsContent');
-    var errEl = document.getElementById('logsError');
-    var pathEl = document.getElementById('logsPath');
-    pre.textContent = 'Loading...';
-    errEl.classList.add('hidden');
-    pathEl.textContent = '';
-    fetch('/api/admin/logs/tail?lines=50')
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            if (data.success) {
-                var lines = data.lines || [];
-                pre.textContent = lines.length ? lines.join('\n') : (data.message || 'No log entries.');
-                pathEl.textContent = data.path ? 'File: ' + data.path : '';
-            } else {
-                pre.textContent = data.message || 'Failed to load logs.';
-            }
-        })
-        .catch(function(err) {
-            pre.textContent = '';
-            errEl.textContent = 'Error: ' + (err.message || 'Failed to load logs.');
-            errEl.classList.remove('hidden');
-        });
-}
-document.getElementById('logsRefreshBtn').addEventListener('click', loadLogs);
 </script>
 {% endblock %}

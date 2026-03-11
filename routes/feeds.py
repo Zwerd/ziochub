@@ -34,13 +34,20 @@ def _yara_safe_path(filename):
     return yara_safe_path(filename, _get_data_yara())
 
 
-def _feed_ioc_rows(ioc_type, hash_length=None):
-    """Return list of active (non-expired) IOC rows for the given type. Optionally filter Hash by length."""
+# Max rows per feed type to avoid loading unbounded data (e.g. 50k IPs)
+FEED_IOC_MAX_ROWS = 50000
+
+
+def _feed_ioc_rows(ioc_type, hash_length=None, max_rows=None):
+    """Return list of active (non-expired) IOC rows for the given type. Optionally filter Hash by length. Capped at max_rows (default FEED_IOC_MAX_ROWS) for efficiency."""
+    if max_rows is None:
+        max_rows = FEED_IOC_MAX_ROWS
     now = datetime.now()
-    rows = IOC.query.filter(
+    q = IOC.query.filter(
         IOC.type == ioc_type,
         db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).all()
+    )
+    rows = q.limit(max_rows).all()
     if hash_length is not None:
         rows = [r for r in rows if len((r.value or '').strip()) == hash_length]
     return rows

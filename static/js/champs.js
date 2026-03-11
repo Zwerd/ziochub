@@ -361,7 +361,7 @@
         content.classList.remove('hidden');
         content.innerHTML = '<div class="text-secondary">Loading...</div>';
         const uid = data.user_id;
-        if (uid) {
+        if (uid != null && uid !== '') {
             try {
                 const r = await fetch('/api/champs/analyst/' + uid);
                 const j = await r.json();
@@ -453,7 +453,7 @@
                 : '';
             chartHtml = '<div class="champs-activity-block flex-1 min-h-0 flex flex-col mt-4 p-4 rounded-xl bg-black/20 border border-white/5">'
                 + '<div class="flex items-center justify-between mb-3 flex-shrink-0">'
-                + '<h4 class="text-xs font-bold text-secondary uppercase tracking-wider">Activity (30 days) - ' + escapeHtml(analystChartName) + ' vs team avg</h4>'
+                + '<h4 class="text-xs font-bold text-secondary uppercase tracking-wider">Activity (30 days) - Submissions (IOC + YARA) - ' + escapeHtml(analystChartName) + ' vs team avg</h4>'
                 + mispBtnHtml
                 + '</div>'
                 + '<div class="champs-spotlight-chart-wrap flex-1 min-h-[260px]"><canvas id="champsSpotlightChart"></canvas></div></div>';
@@ -472,11 +472,12 @@
                         </div>
                     </div>
                 </div>
-                <div class="champs-stats-grid grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 flex-shrink-0">
-                    <div class="champs-stat-card rounded-lg p-4 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-1">IOCs</span><span class="font-mono text-xl font-bold accent-green">${a.total_iocs || 0}</span></div>
-                    <div class="champs-stat-card rounded-lg p-4 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-1">YARA</span><span class="font-mono text-xl font-bold text-amber-400">${a.yara_count || 0}</span></div>
-                    <div class="champs-stat-card rounded-lg p-4 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-1">Deletions</span><span class="font-mono text-xl font-bold">${a.deletion_count || 0}</span></div>
-                    <div class="champs-stat-card rounded-lg p-4 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-1">Streak</span><span class="font-mono text-xl font-bold">${a.streak_days || 0} days</span></div>
+                <div class="flex flex-nowrap gap-2 mb-4 min-w-0">
+                    <div class="champs-stat-card flex-1 min-w-0 rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">Points</span><span class="font-mono text-lg font-bold text-cyan-400 truncate block">${a.score != null ? a.score : 0}</span></div>
+                    <div class="champs-stat-card flex-1 min-w-0 rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">IOCs</span><span class="font-mono text-lg font-bold accent-green truncate block">${a.total_iocs || 0}</span></div>
+                    <div class="champs-stat-card flex-1 min-w-0 rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">YARA</span><span class="font-mono text-lg font-bold text-amber-400 truncate block">${a.yara_count || 0}</span></div>
+                    <div class="champs-stat-card flex-1 min-w-0 rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">Deletions</span><span class="font-mono text-lg font-bold truncate block">${a.deletion_count || 0}</span></div>
+                    <div class="champs-stat-card flex-1 min-w-0 rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">Streak</span><span class="font-mono text-lg font-bold truncate block">${a.streak_days || 0}d</span></div>
                 </div>
                 ${chartHtml}`;
         if (chartHtml && a.activity_per_day && typeof Chart !== 'undefined') {

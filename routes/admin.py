@@ -679,3 +679,10 @@ def admin_certificate():
     _certificate_status, = _from_app('_certificate_status')
     status = _certificate_status()
     return render_template('admin/certificate.html', cert_status=status)
+
+
+@pages_bp.route('/logs')
+@admin_required_page
+def admin_logs():
+    """Admin audit log viewer (CEF log, last 50 lines)."""
+    return render_template('admin/logs.html')

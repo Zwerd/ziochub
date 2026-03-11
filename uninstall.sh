@@ -16,6 +16,8 @@
 #  Post-removal reinstall:
 #    sudo ./setup.sh                  # Online
 #    sudo ./setup.sh --offline        # Offline (from installer ZIP)
+#
+#  Updated: 2025-03
 # ============================================================================
 set -euo pipefail
 
@@ -58,6 +60,7 @@ show_help() {
     echo "    - IOC files (data/Main/)"
     echo "    - YARA rules (data/YARA/, data/YARA_pending/)"
     echo "    - SSL certificates (data/ssl/)"
+    echo "    - Port config (data/ziochub.env)"
     echo "    - Backups (data/backups/)"
     echo "    - CEF audit logs (data/audit_cef.log)"
     echo "    - Config files (allowlist.txt, org_domains.txt, GeoIP DB)"
@@ -309,6 +312,7 @@ echo "    - ${DATA_DIR}/ziochub.db (SQLite database)"
 echo "    - ${DATA_DIR}/Main/ (IOC files)"
 echo "    - ${DATA_DIR}/YARA/ and YARA_pending/ (YARA rules)"
 echo "    - ${DATA_DIR}/ssl/ (SSL certificates)"
+echo "    - ${DATA_DIR}/ziochub.env (HTTPS port config)"
 echo "    - ${DATA_DIR}/backups/ (local backups)"
 echo "    - ${DATA_DIR}/audit_cef.log (CEF audit logs, if present)"
 echo "    - User: ${APP_USER}  |  Group: ${APP_GROUP}"

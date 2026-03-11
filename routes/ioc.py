@@ -229,6 +229,28 @@ def _parse_date_from_staging(date_str):
     return None
 
 
+def _staging_date_display(val):
+    """Return ISO-style date string for staging 'date' field. Handles datetime or str (no strftime on str)."""
+    if val is None:
+        return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+    if hasattr(val, 'strftime'):
+        return val.strftime('%Y-%m-%dT%H:%M:%S')
+    if isinstance(val, str):
+        return val[:19] if len(val) >= 19 else (val or datetime.now().strftime('%Y-%m-%dT%H:%M:%S'))
+    return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+
+
+def _format_expiration_display(exp_dt):
+    """Return expiration string for UI. Handles datetime or str (avoid strftime on str)."""
+    if exp_dt is None:
+        return 'Permanent'
+    if hasattr(exp_dt, 'strftime'):
+        return exp_dt.strftime('%Y-%m-%d')
+    if isinstance(exp_dt, str):
+        return exp_dt[:10] if len(exp_dt) >= 10 else exp_dt
+    return 'Permanent'
+
+
 def _parse_txt_metadata(metadata_raw):
     """
     Parse metadata string per spec: Date (end) -> User 'by X' (end) -> Ticket ID 'N -' (start) -> Comment (remainder).
@@ -439,6 +461,8 @@ def submit_ioc():
         comment_preview = (cmt[:80] + '...') if len(cmt) > 80 else cmt
         audit_log('IOC_CREATE', f'type={ioc_type} value={value[:80]} comment="{comment_preview}" campaign={campaign_name or "-"}')
         _log_champs_event('ioc_submit', user_id=user_id, payload={'type': ioc_type, 'value': value[:100]})
+        refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
+        refresh_champ_score_for_user(user_id)
         response = {'success': True, 'message': f'{ioc_type} IOC submitted successfully'}
         if was_changed:
             response['auto_corrected'] = True
@@ -535,6 +559,9 @@ def ingest_ioc():
             _commit_with_retry()
             cmt = (comment or '').strip()[:80]
             audit_log('IOC_INGEST', f'type={ioc_type} value={value[:80]} comment="{cmt}" analyst={username}')
+            if user_id_ingest:
+                refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
+                refresh_champ_score_for_user(user_id_ingest)
             return jsonify({
                 'success': True,
                 'message': f'{ioc_type} IOC ingested successfully',
@@ -692,15 +719,16 @@ def bulk_csv():
                         payload_hist['expiration_date'] = exp_date.isoformat()
                     _log_ioc_history(ioc_type, value, 'created', username, payload_hist)
                     new_count += 1
-            try:
-                _commit_with_retry()
-            except Exception:
-                db.session.rollback()
-                raise
             summary[ioc_type] = {'updated': updated_count, 'new': new_count}
             total_updated += updated_count
             total_new += new_count
-        
+
+        try:
+            _commit_with_retry()
+        except Exception:
+            db.session.rollback()
+            raise
+
         # Build summary message
         summary_parts = []
         for ioc_type, counts in summary.items():
@@ -716,7 +744,8 @@ def bulk_csv():
         fn = (file.filename or '')[:60]
         cmt = (global_comment or '')[:60]
         audit_log('BULK_CSV', f'file={fn} analyst={username} new={total_new} updated={total_updated} comment="{cmt}"')
-        
+        refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
+        refresh_champ_score_for_user(current_user.id)
         return jsonify({
             'success': True,
             'message': message,
@@ -758,7 +787,7 @@ def preview_csv():
             expiration_display = 'Permanent'
         else:
             exp_dt = calculate_expiration_date(ttl)
-            expiration_display = exp_dt.strftime('%Y-%m-%d') if exp_dt else 'Permanent'
+            expiration_display = _format_expiration_display(exp_dt)
 
         stream = io.StringIO(file.read().decode('utf-8'))
         csv_reader = csv.reader(stream)
@@ -870,7 +899,7 @@ def preview_txt():
             expiration_display = 'Permanent'
         else:
             exp_dt = calculate_expiration_date(default_ttl)
-            expiration_display = exp_dt.strftime('%Y-%m-%d') if exp_dt else 'Permanent'
+            expiration_display = _format_expiration_display(exp_dt)
 
         content = file.read().decode('utf-8')
         lines = content.split('\n')
@@ -943,7 +972,7 @@ def preview_txt():
                     'type': ioc_type,
                     'ticket_id': ticket_id or '',
                     'analyst': analyst,
-                    'date': created_at.strftime('%Y-%m-%dT%H:%M:%S'),
+                    'date': _staging_date_display(created_at),
                     'comment': comment,
                     'expiration': expiration_display,
                     'existing_permanent': existing_permanent,
@@ -985,7 +1014,7 @@ def preview_paste():
             expiration_display = 'Permanent'
         else:
             exp_dt = calculate_expiration_date(default_ttl)
-            expiration_display = exp_dt.strftime('%Y-%m-%d') if exp_dt else 'Permanent'
+            expiration_display = _format_expiration_display(exp_dt)
 
         text_expanded = prepare_text_for_ioc_extraction(text)
         extracted = _extract_iocs_from_text(text_expanded)
@@ -1104,8 +1133,9 @@ def preview_single():
             expiration_display = 'Permanent'
         else:
             exp_dt = calculate_expiration_date(ttl)
-            expiration_display = exp_dt.strftime('%Y-%m-%d') if exp_dt else 'Permanent'
-        username = current_user.username.lower()
+            expiration_display = _format_expiration_display(exp_dt)
+        assign_to = (data.get('assign_to') or data.get('analyst') or '').strip()
+        username = assign_to.lower() if assign_to else current_user.username.lower()
         existing_permanent = False
         existing_analyst = ''
         existing_comment = ''
@@ -1176,7 +1206,11 @@ def submit_staging():
             if c:
                 campaign_id = c.id
 
-        champs_before = _capture_champs_before(current_user.id, current_user.username.lower())
+        try:
+            champs_before = _capture_champs_before(current_user.id, current_user.username.lower())
+        except Exception as cap_err:
+            logging.warning('submit_staging: capture champs before failed: %s', cap_err)
+            champs_before = {'scoring_method': '1', 'badges': set(), 'level': 0, 'rank': 0, 'score': 0}
         fallback_ticket = _auto_ticket_id(current_user.id)
         summary = {}
         total_updated = 0
@@ -1200,14 +1234,17 @@ def submit_staging():
             analyst_raw = (raw.get('analyst') or '').strip() or 'unknown'
             resolved_user = _resolve_analyst_to_user(analyst_raw)
             if resolved_user:
-                user_id, analyst = resolved_user
+                _assigned_id, analyst = resolved_user
             else:
-                # User not in system: save under current user so Champs shows one entry per analyst
-                user_id, analyst = current_user.id, current_user.username.lower()
+                analyst = current_user.username.lower()
+            # Always store submitter as user_id (for history/audit); analyst = who gets Champs credit
+            user_id = current_user.id
             ticket_id = (raw.get('ticket_id') or '').strip() or fallback_ticket
             comment = sanitize_comment(raw.get('comment') or '') or None
             date_str = (raw.get('date') or '').strip()
             created_at = _parse_date_from_staging(date_str) or datetime.now()
+            if not hasattr(created_at, 'strftime'):
+                created_at = datetime.now()
             # Per-item tags override "tags for all"
             item_tags_raw = raw.get('tags')
             if isinstance(item_tags_raw, list) and item_tags_raw:
@@ -1257,7 +1294,7 @@ def submit_staging():
                     'assigned_to': analyst,
                 }
                 if exp_date:
-                    payload_hist['expiration_date'] = exp_date.isoformat()
+                    payload_hist['expiration_date'] = exp_date.isoformat() if hasattr(exp_date, 'isoformat') else str(exp_date)[:10]
                 _log_ioc_history(ioc_type, ioc_value, 'created', analyst, payload_hist)
                 total_new += 1
                 summary[ioc_type] = summary.get(ioc_type, {'updated': 0, 'new': 0})
@@ -1280,9 +1317,17 @@ def submit_staging():
                 summary_parts.append(f"{ioc_type}s ({', '.join(parts)})")
         message = f"Imported: {', '.join(summary_parts)}" if summary_parts else "No items imported"
         audit_log('IOC_STAGING_SUBMIT', f'source={submission_source} new={total_new} updated={total_updated} campaign={campaign_name or "-"}')
+        try:
+            refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
+            refresh_champ_score_for_user(current_user.id)
+        except Exception as refresh_err:
+            logging.warning('submit_staging: refresh_champ_score failed (data saved): %s', refresh_err)
         resp = {'success': True, 'message': message, 'summary': summary, 'total': total_new + total_updated}
         if total_new > 0:
-            resp.update(_detect_champs_changes(champs_before, current_user.id, current_user.username.lower()))
+            try:
+                resp.update(_detect_champs_changes(champs_before, current_user.id, current_user.username.lower()))
+            except Exception as champs_err:
+                logging.warning('submit_staging: champs change detection failed (data saved): %s', champs_err)
         return jsonify(resp)
     except Exception as e:
         db.session.rollback()
@@ -1431,15 +1476,16 @@ def upload_txt():
                         payload_hist['expiration_date'] = exp_date.isoformat()
                     _log_ioc_history(ioc_type, value, 'created', store_analyst, payload_hist)
                     new_count += 1
-            try:
-                _commit_with_retry()
-            except Exception:
-                db.session.rollback()
-                raise
             summary[ioc_type] = {'updated': updated_count, 'new': new_count}
             total_updated += updated_count
             total_new += new_count
-        
+
+        try:
+            _commit_with_retry()
+        except Exception:
+            db.session.rollback()
+            raise
+
         # Build summary message
         summary_parts = []
         for ioc_type, counts in summary.items():
@@ -1454,7 +1500,8 @@ def upload_txt():
         message = f"Processed TXT: {', '.join(summary_parts)}" if summary_parts else "No valid IOCs found in TXT"
         fn = (file.filename or '')[:60]
         audit_log('BULK_TXT', f'file={fn} analyst={username} new={total_new} updated={total_updated}')
-        
+        refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
+        refresh_champ_score_for_user(current_user.id)
         resp = {
             'success': True,
             'message': message,

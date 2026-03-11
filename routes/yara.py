@@ -12,8 +12,9 @@ from flask import Blueprint, request, jsonify, current_app
 from flask_login import current_user
 from sqlalchemy.exc import IntegrityError
 
+from sqlalchemy import func
 from extensions import db
-from models import YaraRule, Campaign
+from models import YaraRule, Campaign, User
 from utils.yara_utils import yara_safe_path
 from utils.decorators import login_required, admin_required
 from utils.refanger import sanitize_comment
@@ -118,6 +119,8 @@ def upload_yara():
         cmt = (comment or '')[:60]
         audit_log('YARA_UPLOAD', f'file={safe_filename} analyst={username} status=pending comment="{cmt}"')
         _log_champs_event('yara_upload', user_id=current_user.id, payload={'filename': safe_filename})
+        refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
+        refresh_champ_score_for_user(current_user.id)
         message = f'YARA rule uploaded and pending approval: {safe_filename}'
         if ticket_id:
             message += f' (Ticket: {ticket_id})'
@@ -355,7 +358,7 @@ def view_yara_pending_content(filename):
 @admin_required
 def approve_yara():
     """Move pending rule to approved dir and set status=approved (admin only)."""
-    _commit_with_retry, audit_log = _from_app('_commit_with_retry', 'audit_log')
+    _commit_with_retry, audit_log, refresh_champ_score_for_user = _from_app('_commit_with_retry', 'audit_log', 'refresh_champ_score_for_user')
     try:
         data = request.get_json() or {}
         filename = (data.get('filename') or '').strip()
@@ -383,6 +386,15 @@ def approve_yara():
         rule.status = 'approved'
         _commit_with_retry()
         audit_log('YARA_APPROVE', f'file={safe_pending}')
+        # Refresh Champs score for the rule owner (analyst) so they get full YARA points
+        analyst_username = (rule.analyst or '').strip()
+        if analyst_username:
+            owner = User.query.filter(func.lower(User.username) == analyst_username.lower()).first()
+            if owner:
+                try:
+                    refresh_champ_score_for_user(owner.id)
+                except Exception as e:
+                    logging.warning('YARA approve: refresh_champ_score for analyst %s failed: %s', analyst_username, e)
         return jsonify({'success': True, 'message': f'Approved: {safe_pending}'})
     except Exception as e:
         db.session.rollback()

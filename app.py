@@ -393,6 +393,7 @@ from utils.champs import (
     _week_start,
     _get_badges,
     _get_level_and_xp,
+    _get_nickname,
     _to_date,
     YARA_DEFAULT, YARA_MIN, YARA_MAX, DELETION,
 )
@@ -472,8 +473,25 @@ def _detect_new_badges(old_badges, new_badges):
     return [{'key': k, **BADGE_META.get(k, {'emoji': '🏅', 'label': k, 'description': ''})} for k in earned]
 
 
+def _get_user_nickname(analyst_lower):
+    """Return current nickname dict {emoji, label} for analyst from IOC type counts."""
+    if not analyst_lower:
+        return {'emoji': '🎯', 'label': 'Threat Hunter'}
+    type_rows = db.session.query(IOC.type, func.count(IOC.id)).filter(
+        func.lower(IOC.analyst) == analyst_lower
+    ).group_by(IOC.type).all()
+    type_counts = {t or 'Unknown': (c or 0) for t, c in type_rows}
+    yara_count = db.session.query(func.count(YaraRule.id)).filter(
+        func.lower(YaraRule.analyst) == analyst_lower
+    ).scalar() or 0
+    if yara_count:
+        type_counts['YARA'] = type_counts.get('YARA', 0) + yara_count
+    emoji, label = _get_nickname(type_counts)
+    return {'emoji': emoji, 'label': label}
+
+
 def _capture_champs_before(user_id, username):
-    """Snapshot badges, level, and rank before IOC submission."""
+    """Snapshot badges, level, rank, score, and nickname before IOC submission."""
     scoring_method = _get_setting('champs_scoring_method', '1')
     badges = _compute_user_badges(user_id, username, scoring_method)
     rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=scoring_method)
@@ -485,7 +503,11 @@ def _capture_champs_before(user_id, username):
             rank = r['rank']
             break
     level = _get_level_and_xp(score)[0]
-    return {'badges': badges, 'level': level, 'rank': rank, 'score': score, 'scoring_method': scoring_method}
+    nickname = _get_user_nickname(analyst_lower)
+    return {
+        'badges': badges, 'level': level, 'rank': rank, 'score': score,
+        'scoring_method': scoring_method, 'nickname': nickname,
+    }
 
 
 def _detect_champs_changes(before, user_id, username):
@@ -500,8 +522,17 @@ def _detect_champs_changes(before, user_id, username):
             score = r['score']
             rank = r['rank']
             break
-    level = _get_level_and_xp(score)[0]
+    level, xp_in_level, xp_to_next, level_width = _get_level_and_xp(score)
     result = {}
+    points_earned = max(0, score - before.get('score', 0))
+    result['points_earned'] = points_earned
+    result['level_info'] = {
+        'level': level,
+        'score': score,
+        'xp_in_level': xp_in_level,
+        'xp_to_next': xp_to_next,
+        'level_width': level_width,
+    }
     new_badges = _detect_new_badges(before['badges'], after_badges)
     if new_badges:
         result['new_badges'] = new_badges
@@ -509,6 +540,10 @@ def _detect_champs_changes(before, user_id, username):
         result['level_up'] = {'old_level': before['level'], 'new_level': level}
     if 0 < rank < before['rank']:
         result['rank_up'] = {'old_rank': before['rank'], 'new_rank': rank}
+    after_nickname = _get_user_nickname(analyst_lower)
+    before_nickname = before.get('nickname') or {}
+    if after_nickname.get('label') != before_nickname.get('label'):
+        result['new_nickname'] = after_nickname
     return result
 
 
@@ -686,6 +721,29 @@ def _set_setting(key: str, value: str) -> None:
             pass
 
 
+def _champs_excluded_usernames():
+    """Usernames to exclude from Champs (e.g. MISP sync). Used by refresh_champ_score_for_user and champs routes."""
+    excluded = set()
+    if _get_setting('misp_exclude_from_champs', 'true').lower() == 'true':
+        sync_user = (_get_setting('misp_sync_user', 'misp_sync') or 'misp_sync').strip()
+        if sync_user:
+            excluded.add(sync_user.lower())
+    return excluded or None
+
+
+def refresh_champ_score_for_user(user_id):
+    """Invalidate Champs cache so next leaderboard/analyst load is fresh. Call after IOC submit/revoke or YARA upload."""
+    if not user_id:
+        return
+    try:
+        from utils.cache import delete_cached
+        method = _get_setting('champs_scoring_method', '1')
+        delete_cached(f'champs_leaderboard_{method}')
+        delete_cached(f'champs_analyst_{user_id}_{method}')
+    except Exception:
+        pass
+
+
 def _certificate_status():
     """Return dict: cert_present, key_present, ca_present, expiry_iso, expiry_message, error."""
     out = {'cert_present': False, 'key_present': False, 'ca_present': False, 'expiry_iso': None, 'expiry_message': None, 'error': None}
@@ -717,18 +775,43 @@ def index():
     profile = None
     display_name = None
     avatar_url = None
+    mute_sound = False
+    ambition_popup_disabled = False
+    achievement_popup_disabled = False
     if authenticated:
         profile = UserProfile.query.filter_by(user_id=current_user.id).first()
         display_name = (profile and profile.display_name) or current_user.username
         if profile and profile.avatar_path:
             avatar_url = url_for('static', filename=profile.avatar_path)
+        if profile:
+            mute_sound = getattr(profile, 'mute_sound', False)
+            ambition_popup_disabled = getattr(profile, 'ambition_popup_disabled', False)
+            achievement_popup_disabled = getattr(profile, 'achievement_popup_disabled', False)
+    user_id = current_user.id if authenticated else None
     return render_template(
         'index.html',
         authenticated=authenticated,
         is_admin=is_admin,
         display_name=display_name,
         avatar_url=avatar_url,
+        mute_sound=mute_sound,
+        ambition_popup_disabled=ambition_popup_disabled,
+        achievement_popup_disabled=achievement_popup_disabled,
+        user_id=user_id,
     )
+
+
+@app.route('/api/ambition-message', methods=['GET'])
+@login_required
+def ambition_message():
+    """Return one ambition message for the current user (popup on login). English only."""
+    try:
+        from utils.ambition import get_ambition_message_for_user
+        msg_id, message = get_ambition_message_for_user(current_user.id, current_user.username)
+        return jsonify({'success': True, 'message': message, 'message_id': msg_id})
+    except Exception as e:
+        logging.warning('ambition_message failed: %s', e)
+        return jsonify({'success': False, 'message': None, 'message_id': 0}), 200
 
 
 @app.route('/favicon.ico')
@@ -1273,6 +1356,46 @@ def _ensure_system_settings_table():
         print(f"[Migration] system_settings: {e}")
 
 
+def _ensure_ioc_history_type_value_index():
+    """Create index on ioc_history (ioc_type, ioc_value) for fast history lookup by IOC."""
+    try:
+        db.session.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_ioc_history_type_value ON ioc_history(ioc_type, ioc_value)"
+        ))
+        _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] ioc_history type_value index: {e}")
+
+
+def _ensure_ioc_notes_type_value_index():
+    """Create index on ioc_notes (ioc_type, ioc_value) for fast notes lookup by IOC."""
+    try:
+        db.session.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_ioc_notes_type_value ON ioc_notes(ioc_type, ioc_value)"
+        ))
+        _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] ioc_notes type_value index: {e}")
+
+
+def _ensure_champ_scores_streak_days_column():
+    """Add streak_days to champ_scores if missing (e.g. table created before column was added)."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(champ_scores)"))
+        rows = result.fetchall()
+        if not rows:
+            return
+        has_col = any((row[1] == 'streak_days' for row in rows))
+        if not has_col:
+            db.session.execute(text("ALTER TABLE champ_scores ADD COLUMN streak_days INTEGER NOT NULL DEFAULT 0"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] champ_scores streak_days: {e}")
+
+
 def _ensure_user_last_login_column():
     """Add last_login_at to users if missing."""
     try:
@@ -1351,6 +1474,28 @@ def _ensure_team_goal_description_column():
         print(f"[Migration] team_goals description: {e}")
 
 
+def _ensure_user_profile_preferences_columns():
+    """Add mute_sound, ambition_popup_disabled, achievement_popup_disabled to user_profiles if missing."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(user_profiles)"))
+        rows = result.fetchall()
+        if not rows:
+            return
+        names = [row[1] for row in rows]
+        if 'mute_sound' not in names:
+            db.session.execute(text("ALTER TABLE user_profiles ADD COLUMN mute_sound BOOLEAN NOT NULL DEFAULT 0"))
+            _commit_with_retry()
+        if 'ambition_popup_disabled' not in names:
+            db.session.execute(text("ALTER TABLE user_profiles ADD COLUMN ambition_popup_disabled BOOLEAN NOT NULL DEFAULT 0"))
+            _commit_with_retry()
+        if 'achievement_popup_disabled' not in names:
+            db.session.execute(text("ALTER TABLE user_profiles ADD COLUMN achievement_popup_disabled BOOLEAN NOT NULL DEFAULT 0"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] user_profiles preferences: {e}")
+
+
 def _ensure_campaign_dir_column():
     """Add dir (ltr/rtl) to campaigns if missing."""
     try:
@@ -1387,6 +1532,12 @@ def _init_db():
     """Create tables and run legacy migration if DB is empty."""
     with app.app_context():
         db.create_all()
+        # Enable WAL for better concurrent read/write (fewer locks, faster bulk writes)
+        try:
+            db.session.execute(text("PRAGMA journal_mode=WAL"))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
         _ensure_yara_campaign_id_column()
         _ensure_yara_quality_points_column()
         _ensure_yara_status_column()
@@ -1402,6 +1553,10 @@ def _init_db():
         _ensure_team_goal_description_column()
         _ensure_campaign_dir_column()
         _ensure_campaign_created_by_column()
+        _ensure_ioc_history_type_value_index()
+        _ensure_ioc_notes_type_value_index()
+        _ensure_champ_scores_streak_days_column()
+        _ensure_user_profile_preferences_columns()
         migrate_legacy_data()
 
 

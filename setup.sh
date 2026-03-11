@@ -14,6 +14,9 @@
 #  Installs to /opt/ziochub with data in /opt/ziochub/data/
 #  Creates systemd services for the app, HTTP redirect, cleaner, backup, MISP.
 #  Auto-generates a self-signed SSL certificate if openssl is available.
+#  HTTPS port: 8443 (default), 443, or custom — chosen at install; stored in data/ziochub.env.
+#
+#  Updated: 2025-03
 # ============================================================================
 set -euo pipefail
 
@@ -51,12 +54,17 @@ show_help() {
     echo "  4. Creates Python venv and installs dependencies"
     echo "  5. Initializes the SQLite database"
     echo "  6. Generates a self-signed SSL certificate (requires openssl)"
-    echo "  7. Installs and enables systemd services:"
-    echo "       - ziochub.service           (main app on port 8443)"
-    echo "       - ziochub-redirect.service   (HTTP redirect on port 8080)"
-    echo "       - ziochub-cleaner.timer      (daily expired IOC cleanup)"
-    echo "       - ziochub-backup.timer       (daily database backup)"
-    echo "       - ziochub-misp-sync.timer    (MISP IOC pull, if configured)"
+    echo "  7. Asks which HTTPS port to use (8443 default, 443, or custom)"
+    echo "  8. Installs and enables systemd services (8 units):"
+    echo "       - ziochub.service, ziochub-redirect.service"
+    echo "       - ziochub-cleaner.service, ziochub-cleaner.timer"
+    echo "       - ziochub-backup.service, ziochub-backup.timer"
+    echo "       - ziochub-misp-sync.service, ziochub-misp-sync.timer"
+    echo ""
+    echo "HTTPS port:"
+    echo "  During install you can choose: 8443 (default), 443, or a custom port."
+    echo "  If 443 is already in use, the script will warn and suggest 8443 or a reverse proxy."
+    echo "  Port is stored in /opt/ziochub/data/ziochub.env (ZIOCHUB_PORT, REDIRECT_HTTPS_PORT)."
     echo ""
     echo "Paths:"
     echo "  Application   /opt/ziochub"
@@ -64,6 +72,7 @@ show_help() {
     echo "  IOC files     /opt/ziochub/data/Main/"
     echo "  YARA rules    /opt/ziochub/data/YARA/"
     echo "  SSL certs     /opt/ziochub/data/ssl/"
+    echo "  Port config   /opt/ziochub/data/ziochub.env"
     echo "  Backups       /opt/ziochub/data/backups/"
     echo ""
     exit 0
@@ -489,7 +498,7 @@ if [[ ${#MISSING_MODULES[@]} -gt 0 ]]; then
 fi
 
 # Verify utils submodules (Reports, Admin Settings, CEF logging, etc.)
-REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "misp_sync" "cef_logger" "mentorship")
+REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "misp_sync" "cef_logger" "mentorship" "ambition")
 MISSING_UTILS=()
 
 for util in "${REQUIRED_UTILS[@]}"; do
@@ -559,7 +568,7 @@ else
         echo -e "${RED}╔══════════════════════════════════════════════════════════╗${NC}"
         echo -e "${RED}║  WARNING: openssl is not installed                      ║${NC}"
         echo -e "${RED}║  SSL certificate was NOT generated.                     ║${NC}"
-        echo -e "${RED}║  ZIoCHub will run on plain HTTP (port 8443).         ║${NC}"
+        echo -e "${RED}║  ZIoCHub will run on plain HTTP (port from ziochub.env). ║${NC}"
         echo -e "${RED}║                                                         ║${NC}"
         echo -e "${RED}║  To enable HTTPS later:                                 ║${NC}"
         echo -e "${RED}║    1. Install openssl:  apt install openssl             ║${NC}"
@@ -575,6 +584,124 @@ else
 fi
 
 chown -R "${APP_USER}:${APP_GROUP}" "${SSL_DIR}" 2>/dev/null || true
+
+# ── 5e. HTTPS port selection ───────────────────────────────────────────────
+# On upgrade: preserve port from env file if present; otherwise default 8443 (no prompt)
+HTTPS_PORT=""
+if $UPGRADE; then
+    if [[ -f "${DATA_DIR}/ziochub.env" ]] && grep -q '^ZIOCHUB_PORT=' "${DATA_DIR}/ziochub.env" 2>/dev/null; then
+        HTTPS_PORT=$(grep '^ZIOCHUB_PORT=' "${DATA_DIR}/ziochub.env" | cut -d= -f2- | tr -d '\r\n' | head -1)
+        if [[ -n "${HTTPS_PORT}" ]] && [[ "${HTTPS_PORT}" =~ ^[0-9]+$ ]]; then
+            ok "HTTPS port preserved from previous install: ${HTTPS_PORT}"
+        else
+            HTTPS_PORT="8443"
+        fi
+    else
+        HTTPS_PORT="8443"
+        ok "Using default HTTPS port 8443 (edit ${DATA_DIR}/ziochub.env to change)"
+    fi
+fi
+
+_port_in_use() {
+    local p="$1"
+    ss -tlnp 2>/dev/null | grep -q ":${p} " || true
+}
+
+_port_usage_info() {
+    local p="$1"
+    echo ""
+    info "Port ${p} appears to be in use. Example check:"
+    ss -tlnp 2>/dev/null | grep ":${p} " || true
+    if command -v lsof &>/dev/null; then
+        lsof -i ":${p}" 2>/dev/null || true
+    fi
+}
+
+if [[ -z "${HTTPS_PORT}" ]]; then
+    echo ""
+    info "On which port should ZIoCHub listen for HTTPS?"
+    echo "    [1] 8443 (default, recommended if 443 is used by another service)"
+    echo "    [2] 443  (standard HTTPS; may need to free the port first)"
+    echo "    [3] Other (enter a port number)"
+    echo ""
+    read -p "Choice [1/2/3] (default: 1): " -r PORT_CHOICE
+    PORT_CHOICE="${PORT_CHOICE:-1}"
+
+    case "${PORT_CHOICE}" in
+        1) HTTPS_PORT="8443" ;;
+        2)
+            HTTPS_PORT="443"
+            if _port_in_use 443; then
+                echo ""
+                warn "Port 443 is already in use on this system."
+                _port_usage_info 443
+                echo ""
+                info "Options:"
+                echo "  - Use port 8443 and put ZIoCHub behind a reverse proxy (e.g. nginx) on 443"
+                echo "  - Stop the service currently using 443, then run setup again"
+                echo "  - Choose another port (e.g. 8443) for ZIoCHub"
+                echo ""
+                read -p "Continue with 443 anyway? [y/N] " -n 1 -r
+                echo ""
+                if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                    info "Using port 8443 instead."
+                    HTTPS_PORT="8443"
+                fi
+            fi
+            ;;
+        3)
+            read -p "Enter HTTPS port (1-65535): " -r CUSTOM_PORT
+            if [[ -z "${CUSTOM_PORT}" ]] || [[ ! "${CUSTOM_PORT}" =~ ^[0-9]+$ ]] || [[ "${CUSTOM_PORT}" -lt 1 ]] || [[ "${CUSTOM_PORT}" -gt 65535 ]]; then
+                warn "Invalid port; using 8443."
+                HTTPS_PORT="8443"
+            else
+                HTTPS_PORT="${CUSTOM_PORT}"
+                if [[ "${CUSTOM_PORT}" -lt 1024 ]]; then
+                    warn "Ports below 1024 require extra capabilities (e.g. setcap) when not running as root."
+                fi
+                if _port_in_use "${HTTPS_PORT}"; then
+                    echo ""
+                    warn "Port ${HTTPS_PORT} is already in use."
+                    _port_usage_info "${HTTPS_PORT}"
+                    read -p "Use this port anyway? [y/N] " -n 1 -r
+                    echo ""
+                    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+                        info "Using port 8443 instead."
+                        HTTPS_PORT="8443"
+                    fi
+                fi
+            fi
+            ;;
+        *)
+            warn "Unknown choice; using 8443."
+            HTTPS_PORT="8443"
+            ;;
+    esac
+    ok "HTTPS port set to: ${HTTPS_PORT}"
+fi
+
+# Write env file so systemd units can use it (both app and redirect)
+mkdir -p "${DATA_DIR}"
+ENV_FILE="${DATA_DIR}/ziochub.env"
+echo "# ZIoCHub HTTPS port (generated by setup.sh)" > "${ENV_FILE}"
+echo "ZIOCHUB_PORT=${HTTPS_PORT}" >> "${ENV_FILE}"
+echo "REDIRECT_HTTPS_PORT=${HTTPS_PORT}" >> "${ENV_FILE}"
+chown "${APP_USER}:${APP_GROUP}" "${ENV_FILE}"
+chmod 640 "${ENV_FILE}"
+ok "Port configuration written to ${ENV_FILE}"
+
+# Allow binding to port 443 (or other <1024) as non-root
+if [[ "${HTTPS_PORT}" =~ ^[0-9]+$ ]] && [[ "${HTTPS_PORT}" -lt 1024 ]]; then
+    if command -v setcap &>/dev/null; then
+        if setcap 'cap_net_bind_service=+ep' "${VENV_DIR}/bin/gunicorn" 2>/dev/null; then
+            ok "gunicorn can bind to port ${HTTPS_PORT} (setcap cap_net_bind_service)"
+        else
+            warn "Could not set cap_net_bind_service on gunicorn. To use port ${HTTPS_PORT}, run as root or use a reverse proxy."
+        fi
+    else
+        warn "setcap not found. To use port ${HTTPS_PORT}, install libcap2-bin or use a reverse proxy."
+    fi
+fi
 
 # ── 6. Systemd services ────────────────────────────────────────────────────
 info "Installing systemd units..."
@@ -656,11 +783,12 @@ systemctl --no-pager status ziochub.service || true
 
 echo ""
 SERVER_IP="$(hostname -I | awk '{print $1}')"
+DISPLAY_PORT="${HTTPS_PORT:-8443}"
 if [[ -f "${APP_DIR}/data/ssl/cert.pem" && -f "${APP_DIR}/data/ssl/key.pem" ]]; then
-    info "Web UI available at: https://${SERVER_IP}:8443"
-    info "HTTP redirect active: http://${SERVER_IP}:8080 -> https://${SERVER_IP}:8443"
+    info "Web UI available at: https://${SERVER_IP}:${DISPLAY_PORT}"
+    info "HTTP redirect active: http://${SERVER_IP}:8080 -> https://${SERVER_IP}:${DISPLAY_PORT}"
 else
-    info "Web UI available at: http://${SERVER_IP}:8443"
+    info "Web UI available at: http://${SERVER_IP}:${DISPLAY_PORT}"
     info "Upload an SSL certificate via Admin > Certificate to enable HTTPS"
     info "HTTP redirect will be available on port 8080 after HTTPS is configured"
 fi

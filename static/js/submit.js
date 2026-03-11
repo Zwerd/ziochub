@@ -213,7 +213,7 @@ if (privateConfirmYes) {
                 if (result.success) {
                     showToast(result.message, 'success');
                     if (result.auto_corrected) showToast(t('toast.auto_corrected'), 'warning');
-                    if (result.new_badges || result.level_up || result.rank_up) showAchievementModal(result);
+                    if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
                     document.getElementById('iocForm').reset();
                     loadStats();
                     loadLiveFeed();
@@ -247,7 +247,7 @@ async function doSubmitIoc(data) {
             if (result.warnings && result.warnings.length) {
                 result.warnings.forEach(w => showToast(w, 'warning'));
             }
-            if (result.new_badges || result.level_up || result.rank_up) showAchievementModal(result);
+            if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
             document.getElementById('iocForm').reset();
             loadStats();
             loadLiveFeed();
@@ -303,7 +303,15 @@ async function addSingleToStaging() {
         const res = await fetch('/api/preview-single', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ type, value, ticket_id: ticket_id || undefined, ttl: expiration, comment, tags: tagsStr ? tagsStr.split(',').map(s => s.trim()).filter(Boolean) : undefined })
+            body: JSON.stringify({
+                type,
+                value,
+                ticket_id: ticket_id || undefined,
+                ttl: expiration,
+                comment,
+                tags: tagsStr ? tagsStr.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+                assign_to: username || undefined
+            })
         });
         const result = await res.json();
         if (!result.success || !result.item) {
@@ -461,7 +469,7 @@ function attachStagingRowActionsForRow(tr, ttlSelectId, campaignSelectId, source
                     const result = await response.json().catch(() => ({}));
                     if (result.success) {
                         showToast(t('toast.item_imported'), 'success');
-                        if (result.new_badges || result.level_up || result.rank_up) showAchievementModal(result);
+                        if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
                         row.remove();
                         const n = tbody ? tbody.querySelectorAll('tr').length : 0;
                         const countEl = document.getElementById('singleStagingCount');
@@ -531,7 +539,7 @@ function attachStagingRowActions(tbody, ttlSelectId, campaignSelectId, source, t
                 const result = await response.json().catch(() => ({}));
                 if (result.success) {
                     showToast(t('toast.item_imported'), 'success');
-                    if (result.new_badges || result.level_up || result.rank_up) showAchievementModal(result);
+                    if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
                     tr.style.opacity = '0';
                     tr.style.transition = 'opacity 0.25s ease';
                     setTimeout(() => { tr.remove(); }, 250);
@@ -675,7 +683,7 @@ document.getElementById('csvApproveAllBtn').addEventListener('click', async () =
         const result = await response.json().catch(() => ({}));
         if (result.success) {
             showToast(result.message || 'Import complete', 'success');
-            if (result.new_badges || result.level_up || result.rank_up) showAchievementModal(result);
+            if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
             tbody.innerHTML = '';
             document.getElementById('csvStagingArea').classList.add('hidden');
             loadStats();
@@ -727,7 +735,7 @@ document.getElementById('singleApproveAllBtn').addEventListener('click', async (
         const result = await response.json().catch(() => ({}));
         if (result.success) {
             showToast(result.message || 'Import complete', 'success');
-            if (result.new_badges || result.level_up || result.rank_up) showAchievementModal(result);
+            if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
             tbody.innerHTML = '';
             document.getElementById('singleStagingArea').classList.add('hidden');
             document.getElementById('singleStagingCount').textContent = t('bulk.found_items');
@@ -878,7 +886,7 @@ document.getElementById('txtApproveAllBtn').addEventListener('click', async () =
         const result = await response.json().catch(() => ({}));
         if (result.success) {
             showToast(result.message || 'Import complete', 'success');
-            if (result.new_badges || result.level_up || result.rank_up) showAchievementModal(result);
+            if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
             tbody.innerHTML = '';
             document.getElementById('txtStagingArea').classList.add('hidden');
             loadStats();
@@ -1002,7 +1010,7 @@ document.getElementById('pasteApproveAllBtn').addEventListener('click', async ()
         const result = await response.json().catch(() => ({}));
         if (result.success) {
             showToast(result.message || 'Import complete', 'success');
-            if (result.new_badges || result.level_up || result.rank_up) showAchievementModal(result);
+            if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
             tbody.innerHTML = '';
             document.getElementById('pasteStagingArea').classList.add('hidden');
             loadStats();

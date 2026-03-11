@@ -10,12 +10,13 @@ Usage:
     python create_lab_users.py --help              # show all options
     python create_lab_users.py                     # interactive, current dir (dev)
     python create_lab_users.py --env dev           # same: use script dir as base (port 5000 dev)
-    python create_lab_users.py --env prod          # production: use /opt/ziochub (port 8443)
+    python create_lab_users.py --env prod          # production: use /opt/ziochub
     python create_lab_users.py --password P@ss     # non-interactive
     python create_lab_users.py --env prod -p P@ss  # production, non-interactive
 
   Dev (port 5000):  run from project root, or use --env dev. Uses ./data/ziochub.db.
-  Prod (port 8443): run from /opt/ziochub, or use --env prod. Uses /opt/ziochub/data/ziochub.db.
+  Prod:             run from /opt/ziochub, or use --env prod. Uses /opt/ziochub/data/ziochub.db.
+                    HTTPS port is from data/ziochub.env (default 8443).
 
 Users are defined in users/users.json. Each user can have:
   - username, display_name, is_admin
@@ -124,6 +125,21 @@ def utcnow_str():
     return datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y-%m-%d %H:%M:%S')
 
 
+def _ensure_champ_scores_rows(conn, user_ids, now):
+    """Ensure champ_scores has a row for each user (0 points) so they appear on the leaderboard."""
+    if not user_ids:
+        return
+    try:
+        for uid in user_ids:
+            conn.execute(
+                "INSERT OR REPLACE INTO champ_scores (user_id, score, total_iocs, yara_count, deletion_count, streak_days, last_activity, updated_at) "
+                "VALUES (?, 0, 0, 0, 0, 0, NULL, ?)",
+                (uid, now),
+            )
+    except sqlite3.OperationalError:
+        pass  # champ_scores table may not exist yet (run app once to create)
+
+
 def create_users(db_path, password, users_list):
     pw_hash = generate_password_hash(password, method='scrypt')
     conn = sqlite3.connect(db_path)
@@ -131,12 +147,14 @@ def create_users(db_path, password, users_list):
 
     created = 0
     updated = 0
+    touched_user_ids = []
 
     # Reset admin password (admin user must already exist from app startup)
     admin_row = conn.execute(
         "SELECT id FROM users WHERE username = 'admin'", ()
     ).fetchone()
     if admin_row:
+        touched_user_ids.append(admin_row[0])
         conn.execute(
             "UPDATE users SET password_hash = ?, source = 'local', must_change_password = 0, updated_at = ? WHERE id = ?",
             (pw_hash, now, admin_row[0]),
@@ -157,7 +175,7 @@ def create_users(db_path, password, users_list):
                 )
             else:
                 conn.execute(
-                    "INSERT INTO user_profiles (user_id, display_name, role_description, avatar_path) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO user_profiles (user_id, display_name, role_description, avatar_path, mute_sound, ambition_popup_disabled, achievement_popup_disabled) VALUES (?, ?, ?, ?, 0, 0, 0)",
                     (admin_id, disp, desc, avatar_path),
                 )
         else:
@@ -165,7 +183,10 @@ def create_users(db_path, password, users_list):
             if prof:
                 conn.execute("UPDATE user_profiles SET display_name = ? WHERE user_id = ?", ('Administrator', admin_id))
             else:
-                conn.execute("INSERT INTO user_profiles (user_id, display_name) VALUES (?, ?)", (admin_id, 'Administrator'))
+                conn.execute(
+                    "INSERT INTO user_profiles (user_id, display_name, mute_sound, ambition_popup_disabled, achievement_popup_disabled) VALUES (?, ?, 0, 0, 0)",
+                    (admin_id, 'Administrator'),
+                )
         print(f"  {c('~', 'yellow')} {'admin':<12} {'Administrator':<22} {'Admin':<6}  (password reset)")
     else:
         print(f"  {c('!', 'red')} {'admin':<12} {'Administrator':<22} {'Admin':<6}  (NOT FOUND — run the app once first)")
@@ -186,6 +207,7 @@ def create_users(db_path, password, users_list):
 
         if row:
             user_id = row[0]
+            touched_user_ids.append(user_id)
             conn.execute(
                 "UPDATE users SET password_hash = ?, source = 'local', is_admin = ?, is_active = 1, must_change_password = 0, updated_at = ? WHERE id = ?",
                 (pw_hash, int(is_admin), now, user_id),
@@ -201,7 +223,7 @@ def create_users(db_path, password, users_list):
                 )
             else:
                 conn.execute(
-                    "INSERT INTO user_profiles (user_id, display_name, role_description, avatar_path) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO user_profiles (user_id, display_name, role_description, avatar_path, mute_sound, ambition_popup_disabled, achievement_popup_disabled) VALUES (?, ?, ?, ?, 0, 0, 0)",
                     (user_id, display_name, description, avatar_path),
                 )
             updated += 1
@@ -215,12 +237,14 @@ def create_users(db_path, password, users_list):
             user_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
             avatar_path = copy_avatar_to_static(image, user_id, username)
             conn.execute(
-                "INSERT INTO user_profiles (user_id, display_name, role_description, avatar_path) VALUES (?, ?, ?, ?)",
+                "INSERT INTO user_profiles (user_id, display_name, role_description, avatar_path, mute_sound, ambition_popup_disabled, achievement_popup_disabled) VALUES (?, ?, ?, ?, 0, 0, 0)",
                 (user_id, display_name, description, avatar_path),
             )
+            touched_user_ids.append(user_id)
             created += 1
             print(f"  {c('+', 'green')} {username:<12} {display_name:<22} {'Admin' if is_admin else '-':<6}  (created)")
 
+    _ensure_champ_scores_rows(conn, touched_user_ids, now)
     conn.commit()
     conn.close()
     return created, updated
@@ -231,7 +255,7 @@ def main():
     parser = argparse.ArgumentParser(description='ZIoCHub - Create lab/production users from users/users.json')
     parser.add_argument('--password', '-p', help='Password for all users (prompted if omitted)')
     parser.add_argument('--env', choices=('dev', 'prod'), default='dev',
-                        help='dev = script directory and ./data (port 5000); prod = /opt/ziochub (port 8443). Default: dev')
+                        help='dev = script dir and ./data (port 5000); prod = /opt/ziochub (port from ziochub.env). Default: dev')
     args = parser.parse_args()
 
     if args.env == 'prod':
@@ -243,7 +267,7 @@ def main():
         _avatars_dir = os.path.join(_base_dir, 'static', 'avatars')
 
     print(f"\n{c('=== ZIoCHub Lab Users Setup ===', 'bold')}")
-    print(f"  Env:      {args.env} ({'production / port 8443' if args.env == 'prod' else 'development / port 5000'})")
+    print(f"  Env:      {args.env} ({'production /opt/ziochub' if args.env == 'prod' else 'development / port 5000'})")
     print(f"  Database: {_db_path}")
     print(f"  Users:    {_users_json}")
 

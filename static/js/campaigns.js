@@ -326,6 +326,9 @@
             const data = await res.json().catch(() => ({}));
             if (data.success) {
                 showToast(data.message || 'Campaign created', 'success');
+                if (typeof showAchievementModal === 'function' && (data.new_badges || data.level_up || data.rank_up || data.points_earned !== undefined || data.level_info || data.new_nickname)) {
+                    showAchievementModal(data);
+                }
                 document.getElementById('campaignName').value = '';
                 document.getElementById('campaignDesc').value = '';
                 if (dirSel) dirSel.value = 'ltr';
@@ -357,6 +360,9 @@
             const data = await res.json().catch(() => ({}));
             if (data.success) {
                 showToast(data.message || 'IOC linked', 'success');
+                if (typeof showAchievementModal === 'function' && (data.new_badges || data.level_up || data.rank_up || data.points_earned !== undefined || data.level_info || data.new_nickname)) {
+                    showAchievementModal(data);
+                }
                 document.getElementById('linkIocValue').value = '';
                 const cid = document.getElementById('linkCampaignSelect').value;
                 if (cid && campaignNetwork) renderGraph(parseInt(cid, 10));

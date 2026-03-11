@@ -5,6 +5,7 @@ import os
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for
 from flask_login import login_user, logout_user, current_user
 
+from sqlalchemy import func
 from extensions import db
 from models import User, UserProfile, UserSession, _utcnow
 from utils.auth import hash_password, verify_password
@@ -96,13 +97,14 @@ def login():
             logging.info('Dev mode: auto-login as %s', admin_user.username)
 
     # Phase 2: Try local first when auth_mode is local_only or local_with_ldap_fallback
+    # Username lookup is case-insensitive so "Admin" and "admin" both work
     if auth_mode in ('local_only', 'local_with_ldap_fallback'):
-        local_user = User.query.filter_by(username=username, source='local', is_active=True).first()
+        local_user = User.query.filter(func.lower(User.username) == username, User.source == 'local', User.is_active == True).first()
         if local_user and verify_password(local_user.password_hash, password):
             user = local_user
         # Fallback: user may have source='ldap' after a prior LDAP login; if they have a stored hash and it matches, allow local login
         if user is None:
-            any_user = User.query.filter_by(username=username, is_active=True).first()
+            any_user = User.query.filter(func.lower(User.username) == username, User.is_active == True).first()
             if any_user and any_user.password_hash and verify_password(any_user.password_hash, password):
                 user = any_user
                 if user.source != 'local':
@@ -131,7 +133,7 @@ def login():
             if not ldap_ok and ldap_url and ldap_base_dn:
                 logging.warning('Phase 6.3: LDAP unreachable for %s; falling back to local if auth_mode allows', username)
             if ldap_ok:
-                user = User.query.filter_by(username=username).first()
+                user = User.query.filter(func.lower(User.username) == username).first()
                 if user:
                     user.source = 'ldap'
                     user.password_hash = None
@@ -158,7 +160,7 @@ def login():
 
     # Fallback to local auth only for ldap_with_local_fallback (LDAP was tried first and failed)
     if user is None and auth_mode == 'ldap_with_local_fallback':
-        local_user = User.query.filter_by(username=username, source='local', is_active=True).first()
+        local_user = User.query.filter(func.lower(User.username) == username, User.source == 'local', User.is_active == True).first()
         if local_user and verify_password(local_user.password_hash, password):
             user = local_user
         elif ldap_enabled:
@@ -259,6 +261,9 @@ def api_profile_get():
         'display_name': (profile and profile.display_name) or current_user.username,
         'role_description': (profile and profile.role_description) or '',
         'avatar_url': _avatar_url(profile),
+        'mute_sound': getattr(profile, 'mute_sound', False) if profile else False,
+        'ambition_popup_disabled': getattr(profile, 'ambition_popup_disabled', False) if profile else False,
+        'achievement_popup_disabled': getattr(profile, 'achievement_popup_disabled', False) if profile else False,
     })
 
 
@@ -277,6 +282,12 @@ def api_profile_update():
             profile.display_name = (str(data['display_name']).strip() or current_user.username)[:255]
         if 'role_description' in data:
             profile.role_description = (str(data['role_description']).strip() or None)
+        if 'mute_sound' in data:
+            profile.mute_sound = bool(data.get('mute_sound'))
+        if 'ambition_popup_disabled' in data:
+            profile.ambition_popup_disabled = bool(data.get('ambition_popup_disabled'))
+        if 'achievement_popup_disabled' in data:
+            profile.achievement_popup_disabled = bool(data.get('achievement_popup_disabled'))
         _commit_with_retry()
         audit_log('profile_update', f'user={current_user.username}')
         return jsonify({
@@ -284,6 +295,9 @@ def api_profile_update():
             'message': 'Profile updated',
             'display_name': profile.display_name,
             'avatar_url': _avatar_url(profile),
+            'mute_sound': profile.mute_sound,
+            'ambition_popup_disabled': profile.ambition_popup_disabled,
+            'achievement_popup_disabled': profile.achievement_popup_disabled,
         })
     except Exception as e:
         logging.exception('api_profile_update failed')

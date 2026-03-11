@@ -14,6 +14,7 @@ from extensions import db
 from models import User, UserProfile, UserSession, IOC, YaraRule, ActivityEvent, TeamGoal, ChampRankSnapshot
 from utils.champs import (
     compute_analyst_scores,
+    compute_analyst_scores_aggregated,
     get_rank_trend,
     get_rank_change_events,
     save_daily_rank_snapshots,
@@ -23,12 +24,13 @@ from utils.champs import (
     _week_start,
 )
 from utils.decorators import login_required, admin_required
-from utils.cache import get_cached, set_cached
+from utils.cache import get_cached, set_cached, delete_cached
 
 
 bp = Blueprint('champs_api', __name__, url_prefix='/api')
 
-CHAMPS_CACHE_TTL = 120  # seconds
+CHAMPS_CACHE_TTL = 600   # 10 minutes for leaderboard (extreme-scale friendly)
+CHAMPS_ANALYST_CACHE_TTL = 300  # 5 minutes for analyst detail
 
 CHAMPS_SCORING = {
     'ioc_default': 10,
@@ -191,18 +193,29 @@ def get_champs_config():
     })
 
 
+def _format_last_activity(val):
+    """Format last_activity for display. Handles date, datetime, or str (SQLite may return DATE as string)."""
+    if val is None:
+        return 'N/A'
+    if hasattr(val, 'strftime'):
+        return val.strftime('%Y-%m-%d')
+    if isinstance(val, str):
+        return val[:10] if len(val) >= 10 else val
+    return 'N/A'
+
+
 @bp.route('/champs/leaderboard', methods=['GET'])
 def get_champs_leaderboard():
-    """Champs 5.0 Ladder: analysts with rank, avatar, display_name, score, trend, medal."""
+    """Champs 5.0 Ladder: analysts with rank, avatar, display_name, score, trend, medal. Always from computed scores so all analysts appear."""
     method = _get_setting('champs_scoring_method', '1')
     cache_key = f'champs_leaderboard_{method}'
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
     excluded = _champs_excluded_usernames()
-    did_save, rows = save_daily_rank_snapshots(db, IOC, YaraRule, User, ChampRankSnapshot, ActivityEvent, scoring_method=method, exclude_usernames=excluded)
-    if not rows:
-        rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=method, exclude_usernames=excluded)
+    # Always build leaderboard from computed scores (aggregated when no date filter) so every analyst with IOCs appears
+    rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=method, exclude_usernames=excluded)
+    did_save, _ = save_daily_rank_snapshots(db, IOC, YaraRule, User, ChampRankSnapshot, ActivityEvent, scoring_method=method, exclude_usernames=excluded, rows=rows)
     if did_save and rows:
         users_by_id = {u.id: u for u in User.query.all()}
         profiles = {p.user_id: p for p in UserProfile.query.all()}
@@ -274,11 +287,14 @@ def get_champs_team_goal():
         last_week_end = this_week_start - timedelta(days=1)
         target_value = compute_team_goal_for_week(db, goal, IOC, YaraRule, ActivityEvent, last_week_start, last_week_end)
         current = compute_team_goal_for_week(db, goal, IOC, YaraRule, ActivityEvent, this_week_start, today)
-        percent = int(round(100 * current / target_value)) if target_value else 0
+        if target_value and target_value > 0:
+            percent = min(100, int(round(100 * current / target_value)))
+        else:
+            percent = 100 if current > 0 else 0
     else:
         current = compute_team_goal_current(db, goal, IOC, YaraRule, ActivityEvent)
         target_value = goal.target_value
-        percent = min(100, int(100 * current / target_value)) if target_value else 0
+        percent = min(100, int(100 * current / target_value)) if target_value else (100 if current > 0 else 0)
     for milestone in (25, 50, 75, 80, 100):
         if percent >= milestone and not _goal_milestone_already_logged(goal.id, milestone):
             _log_champs_event('goal_progress', user_id=None, payload={
@@ -336,6 +352,7 @@ def set_champs_team_goal():
         )
         db.session.add(goal)
         _commit_with_retry()
+        delete_cached('champs_team_goal')
         _log_champs_event('goal_created', user_id=current_user.id, payload={'goal_id': goal.id, 'title': title})
         return jsonify({'success': True, 'message': 'Team goal set', 'goal_id': goal.id})
     except (ValueError, TypeError) as e:
@@ -457,11 +474,15 @@ def set_champs_ticker_messages():
 @bp.route('/champs/analyst/<int:user_id>', methods=['GET'])
 def get_champs_analyst(user_id):
     """Full analyst detail for Spotlight: nickname, level, XP, badges, activity chart data."""
+    method = _get_setting('champs_scoring_method', '1')
+    cache_key = f'champs_analyst_{user_id}_{method}'
+    cached = get_cached(cache_key)
+    if cached is not None:
+        return jsonify(cached)
     user = db.session.get(User, user_id)
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
     profile = UserProfile.query.filter_by(user_id=user_id).first()
-    method = _get_setting('champs_scoring_method', '1')
     misp_user = (_get_setting('misp_sync_user', 'misp_sync') or 'misp_sync').strip() or None
     detail = get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user_id, user.username, scoring_method=method, misp_sync_username=misp_user)
     if not detail:
@@ -489,4 +510,6 @@ def get_champs_analyst(user_id):
     detail['display_name'] = (profile.display_name if profile and profile.display_name else None) or user.username
     detail['avatar_url'] = _avatar_url_for_user(profile, user_id)
     detail['role_description'] = (profile.role_description if profile and profile.role_description else None) or ''
-    return jsonify({'success': True, 'analyst': detail})
+    payload = {'success': True, 'analyst': detail}
+    set_cached(cache_key, payload, ttl_seconds=CHAMPS_ANALYST_CACHE_TTL)
+    return jsonify(payload)

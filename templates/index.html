@@ -1331,11 +1331,11 @@
         </div>
     </div>
 
-    <!-- IOC History modal (read-only timeline) -->
+    <!-- IOC History modal (read-only timeline) - max height + scroll inside list -->
     <div id="iocHistoryModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-secondary rounded-lg p-6 max-w-lg w-full mx-4 max-h-[80vh] flex flex-col border border-white/10 min-w-0 overflow-hidden">
+        <div class="bg-secondary rounded-lg p-6 max-w-lg w-full mx-4 max-h-[90vh] flex flex-col border border-white/10 min-w-0 overflow-hidden">
             <h3 id="iocHistoryTitle" class="text-xl font-bold accent-blue mb-3 flex-shrink-0 min-w-0 break-all">History</h3>
-            <div id="iocHistoryList" class="overflow-y-auto overflow-x-hidden flex-1 min-h-0 min-w-0 text-sm space-y-2 mb-2 break-all"></div>
+            <div id="iocHistoryList" class="history-modal-scroll overflow-y-auto overflow-x-hidden flex-1 min-h-0 min-w-0 text-sm space-y-2 mb-2 break-all"></div>
             <div id="iocHistoryNotesSection" class="border-t border-white/10 pt-3 mt-1 flex-shrink-0">
                 <h4 class="text-sm font-semibold text-amber-300 mb-2" data-i18n="notes.title">Analyst Notes</h4>
                 <div id="iocNotesList" class="max-h-48 overflow-y-auto text-sm space-y-2"></div>
@@ -1795,23 +1795,25 @@
         </div>
     </div>
 
-    <!-- Achievement Modal (badges, level-up, rank-up) -->
-    <div id="badgeEarnedModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity">
-        <div class="badge-earned-card relative w-full max-w-sm mx-4 rounded-2xl border border-white/15 bg-[#0f172a] shadow-2xl overflow-hidden">
-            <div class="badge-earned-glow absolute inset-0 pointer-events-none"></div>
-            <div class="relative px-6 pt-8 pb-6 flex flex-col items-center text-center gap-4">
-                <div id="badgeEarnedTitle" class="text-3xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-300 animate-pulse">
-                    Achievement Unlocked!
+    <!-- Achievement Modal: points, level gauge, badges - professional UI -->
+    <div id="badgeEarnedModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4 achievement-modal-overlay">
+        <div class="badge-earned-card relative w-full max-w-md mx-auto rounded-2xl overflow-hidden flex flex-col max-h-[90vh] achievement-modal-card">
+            <div class="badge-earned-glow absolute inset-0 pointer-events-none" aria-hidden="true"></div>
+            <div class="achievement-modal-inner relative flex flex-col min-h-0 flex-1">
+                <div class="achievement-modal-header">
+                    <h3 id="badgeEarnedTitle" class="achievement-modal-title">Achievement Unlocked!</h3>
                 </div>
-                <div id="achievementPointsEarned" class="hidden achievement-points-earned w-full"></div>
-                <div id="achievementLevelGauge" class="hidden achievement-level-gauge w-full"></div>
-                <div id="achievementLevelUp" class="hidden achievement-level-up w-full"></div>
-                <div id="achievementRankUp" class="hidden achievement-rank-up w-full"></div>
-                <div id="achievementNewNickname" class="hidden achievement-new-nickname w-full"></div>
-                <div id="badgeEarnedList" class="flex flex-wrap justify-center gap-5 mt-2"></div>
-                <button id="badgeEarnedClose" type="button" class="mt-4 px-8 py-2.5 rounded-xl font-bold text-sm uppercase tracking-wider bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white shadow-lg shadow-cyan-500/25 transition-all duration-200 hover:scale-105 focus:outline-none focus:ring-2 focus:ring-cyan-400/50">
-                    Close
-                </button>
+                <div class="achievement-modal-body">
+                    <div id="achievementPointsEarned" class="hidden achievement-points-earned"></div>
+                    <div id="achievementLevelGauge" class="hidden achievement-level-gauge achievement-gauge-block"></div>
+                    <div id="achievementLevelUp" class="hidden achievement-level-up achievement-milestone"></div>
+                    <div id="achievementRankUp" class="hidden achievement-rank-up achievement-milestone"></div>
+                    <div id="achievementNewNickname" class="hidden achievement-new-nickname achievement-milestone"></div>
+                    <div id="badgeEarnedList" class="badge-earned-list"></div>
+                </div>
+                <div class="achievement-modal-footer">
+                    <button id="badgeEarnedClose" type="button" class="achievement-modal-btn-close" data-i18n="modal.close">Close</button>
+                </div>
             </div>
         </div>
     </div>

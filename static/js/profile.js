@@ -16,10 +16,17 @@ const profileMessage = document.getElementById('profileMessage');
 const profileUsername = document.getElementById('profileUsername');
 const profileSource = document.getElementById('profileSource');
 
+const profileRoleDescriptionEl = document.getElementById('profileRoleDescription');
+if (profileRoleDescriptionEl && typeof window.detectDir === 'function') {
+    profileRoleDescriptionEl.addEventListener('input', function () { this.setAttribute('dir', window.detectDir(this.value)); });
+    profileRoleDescriptionEl.addEventListener('keyup', function () { this.setAttribute('dir', window.detectDir(this.value)); });
+}
+
 async function openProfileModal() {
     if (!profileModal || !authState.authenticated) return;
     profileModal.classList.remove('hidden');
     profileMessage.classList.add('hidden');
+    if (profileRoleDescriptionEl) profileRoleDescriptionEl.setAttribute('dir', window.detectDir ? window.detectDir(profileRoleDescriptionEl.value) : 'ltr');
     
     // Load profile data
     try {
@@ -27,7 +34,11 @@ async function openProfileModal() {
         const data = await response.json();
         if (data.success) {
             document.getElementById('profileDisplayName').value = data.display_name || data.username || '';
-            document.getElementById('profileRoleDescription').value = data.role_description || '';
+            const roleDescEl = document.getElementById('profileRoleDescription');
+            if (roleDescEl) {
+                roleDescEl.value = data.role_description || '';
+                if (typeof window.detectDir === 'function') roleDescEl.setAttribute('dir', window.detectDir(roleDescEl.value));
+            }
             profileUsername.textContent = data.username || 'User';
             profileSource.textContent = data.source || 'local';
             const muteSoundEl = document.getElementById('profileMuteSound');

@@ -18,6 +18,7 @@ from utils.champs import (
     compute_analyst_scores,
     compute_analyst_scores_aggregated,
     get_rank_trend,
+    get_rank_trend_from_events_24h,
     get_rank_change_events,
     save_daily_rank_snapshots,
     compute_team_goal_current,
@@ -116,7 +117,7 @@ def _active_goal_current_percent():
     else:
         current = compute_team_goal_current(db, goal, IOC, YaraRule, ActivityEvent)
         target_value = goal.target_value
-        percent = min(100, int(100 * current / target_value)) if target_value else 0
+        percent = int(100 * current / target_value) if target_value else 0
     return goal.title, percent
 
 
@@ -219,11 +220,25 @@ def get_champs_leaderboard():
     except Exception:
         pass
     cached = get_cached(cache_key)
+    # Ensure today's rank snapshot exists so tomorrow's trend arrows work; invalidate cache if not
+    try:
+        today = date.today()
+        if ChampRankSnapshot.query.filter_by(snapshot_date=today).first() is None:
+            delete_cached(cache_key)
+            cached = None
+    except Exception:
+        pass
     if cached is not None:
         return jsonify(cached)
     excluded = _champs_excluded_usernames()
     # Always build leaderboard from computed scores (aggregated when no date filter) so every analyst with IOCs appears
     rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=method, exclude_usernames=excluded)
+    # Today's snapshot (before we update it) = "previous rank" for same-day trend (e.g. after user added IOCs)
+    today = date.today()
+    today_snapshot_ranks = {
+        s.user_id: s.rank
+        for s in ChampRankSnapshot.query.filter_by(snapshot_date=today).all()
+    }
     did_save, _ = save_daily_rank_snapshots(db, IOC, YaraRule, User, ChampRankSnapshot, ActivityEvent, scoring_method=method, exclude_usernames=excluded, rows=rows)
     if did_save and rows:
         users_by_id = {u.id: u for u in User.query.all()}
@@ -241,6 +256,10 @@ def get_champs_leaderboard():
                 'new_rank': ev['new_rank'],
                 'old_rank': ev['old_rank'],
             })
+            _log_champs_event('rank_change', user_id=ev['overtaken_user_id'], payload={
+                'old_rank': ev['new_rank'],
+                'new_rank': ev['old_rank'],
+            })
     users_by_id = {u.id: u for u in User.query.all()}
     profiles = {p.user_id: p for p in UserProfile.query.all()}
     leaderboard = []
@@ -251,12 +270,34 @@ def get_champs_leaderboard():
         username = user.username if user else r['analyst']
         display_name = (profile.display_name if profile and profile.display_name else None) or username
         medal = {1: '🥇', 2: '🥈', 3: '🥉'}.get(r['rank'], '')
-        trend_delta, trend_dir = get_rank_trend(db, ChampRankSnapshot, uid, r['rank']) if uid else (0, 'same')
+        current_rank = r['rank']
         trend = None
-        if trend_dir == 'up':
-            trend = f'[ +{trend_delta} ] ▲'
-        elif trend_dir == 'down':
-            trend = f'[ -{abs(trend_delta)}  ] ▼'
+        # Same-day trend: compare to today's snapshot *before* we updated it (previous load)
+        old_rank = today_snapshot_ranks.get(uid) if uid else None
+        if old_rank is not None and old_rank != current_rank:
+            delta = old_rank - current_rank
+            if delta > 0:
+                trend = f'+{delta}'
+            else:
+                trend = f'-{abs(delta)}'
+            _log_champs_event('rank_change', user_id=uid, payload={
+                'old_rank': old_rank,
+                'new_rank': current_rank,
+            })
+        # Fallback: trend from rank_change event in last 24h (arrows persist 24h after refresh)
+        if trend is None and uid:
+            trend_delta, trend_dir = get_rank_trend_from_events_24h(db, ActivityEvent, uid, within_hours=24)
+            if trend_delta is not None and trend_dir == 'up':
+                trend = f'+{trend_delta}'
+            elif trend_delta is not None and trend_dir == 'down':
+                trend = f'-{abs(trend_delta)}'
+        # Fallback: compare to yesterday (or last available)
+        if trend is None and uid:
+            trend_delta, trend_dir = get_rank_trend(db, ChampRankSnapshot, uid, current_rank)
+            if trend_dir == 'up':
+                trend = f'+{trend_delta}'
+            elif trend_dir == 'down':
+                trend = f'-{abs(trend_delta)}'
         leaderboard.append({
             'rank': r['rank'],
             'analyst': r['analyst'],
@@ -297,13 +338,13 @@ def get_champs_team_goal():
         target_value = compute_team_goal_for_week(db, goal, IOC, YaraRule, ActivityEvent, last_week_start, last_week_end)
         current = compute_team_goal_for_week(db, goal, IOC, YaraRule, ActivityEvent, this_week_start, today)
         if target_value and target_value > 0:
-            percent = min(100, int(round(100 * current / target_value)))
+            percent = int(round(100 * current / target_value))
         else:
             percent = 100 if current > 0 else 0
     else:
         current = compute_team_goal_current(db, goal, IOC, YaraRule, ActivityEvent)
         target_value = goal.target_value
-        percent = min(100, int(100 * current / target_value)) if target_value else (100 if current > 0 else 0)
+        percent = int(100 * current / target_value) if target_value else (100 if current > 0 else 0)
     for milestone in (25, 50, 75, 80, 100):
         if percent >= milestone and not _goal_milestone_already_logged(goal.id, milestone):
             _log_champs_event('goal_progress', user_id=None, payload={

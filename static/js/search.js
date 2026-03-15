@@ -303,9 +303,17 @@
     function openDeleteIocModal(value, type) {
         document.getElementById('deleteIocValue').value = value || '';
         document.getElementById('deleteIocType').value = type || '';
-        if (deleteIocReason) deleteIocReason.value = '';
+        if (deleteIocReason) { deleteIocReason.value = ''; deleteIocReason.removeAttribute('dir'); deleteIocReason.setAttribute('dir', 'ltr'); }
         if (deleteIocReasonError) { deleteIocReasonError.textContent = ''; deleteIocReasonError.classList.add('hidden'); }
         if (deleteIocModal) deleteIocModal.classList.remove('hidden');
+    }
+    if (deleteIocReason && typeof window.detectDir === 'function') {
+        deleteIocReason.addEventListener('input', function () {
+            this.setAttribute('dir', window.detectDir(this.value));
+        });
+        deleteIocReason.addEventListener('keyup', function () {
+            this.setAttribute('dir', window.detectDir(this.value));
+        });
     }
 
     document.getElementById('deleteIocCancel')?.addEventListener('click', () => {

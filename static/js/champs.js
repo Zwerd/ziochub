@@ -72,8 +72,14 @@
                 champsLeaderboardData = result.leaderboard;
                 listEl.innerHTML = result.leaderboard.map((a, i) => {
                     const rankClass = a.rank === 1 ? 'champs-rank-1' : a.rank === 2 ? 'champs-rank-2' : a.rank === 3 ? 'champs-rank-3' : '';
-                    const scoreColorClass = a.rank === 1 ? 'champs-score-gold' : a.rank === 2 ? 'champs-score-silver' : a.rank === 3 ? 'champs-score-bronze' : 'champs-score-default';
-                    const trendHtml = a.trend ? `<span class="champs-trend-bracket champs-trend-glow text-xs font-mono font-semibold ${a.trend.includes('▲') ? 'champs-trend-up' : a.trend.includes('▼') ? 'champs-trend-down' : ''}">${escapeHtml(a.trend)}</span>` : '';
+                    const trendUp = a.trend && (String(a.trend).startsWith('+') || String(a.trend).includes('▲'));
+                    const trendDown = a.trend && (String(a.trend).startsWith('-') || String(a.trend).includes('▼'));
+                    const trendNum = a.trend ? String(a.trend).replace(/[^0-9]/g, '') || '' : '';
+                    const trendHtml = trendUp
+                        ? `<span class="champs-trend-pill champs-trend-up" title="Rank improved"><span class="champs-trend-arrow" aria-hidden="true">↑</span><span class="champs-trend-delta">${escapeHtml(trendNum || a.trend)}</span></span>`
+                        : trendDown
+                            ? `<span class="champs-trend-pill champs-trend-down" title="Rank dropped"><span class="champs-trend-arrow" aria-hidden="true">↓</span><span class="champs-trend-delta">${escapeHtml(trendNum || a.trend)}</span></span>`
+                            : '<span class="champs-trend-pill champs-trend-same" aria-hidden="true">—</span>';
                     const medal = a.medal || '';
                     const rankText = `#${a.rank}`;
                     const avatarUrl = a.avatar_url || '';
@@ -96,7 +102,6 @@
                                     <span class="font-bold text-sm truncate">${displayName}</span>
                                 </div>
                                 <div class="flex items-center gap-2 mt-1 flex-wrap">
-                                    <span class="champs-ladder-score font-mono text-xl font-extrabold ${scoreColorClass}">${a.score}</span>
                                     <span class="text-sm font-semibold opacity-90">${rankText}</span>
                                     ${trendHtml}
                                 </div>
@@ -173,6 +178,11 @@
                 } else showToast(j.message || 'Failed', 'error');
             } catch (err) { showToast('Failed to set goal', 'error'); }
         });
+        const descEl = document.getElementById('champsGoalDescription');
+        if (descEl && typeof window.detectDir === 'function') {
+            descEl.addEventListener('input', function () { this.setAttribute('dir', window.detectDir(this.value)); });
+            descEl.addEventListener('keyup', function () { this.setAttribute('dir', window.detectDir(this.value)); });
+        }
     })();
 
     (function initChampsTickerMsgModal() {
@@ -276,8 +286,9 @@
             } else {
                 titleEl.removeAttribute('title');
             }
-            document.getElementById('champsTeamHudBar').style.width = Math.min(100, g.percent || 0) + '%';
-            document.getElementById('champsTeamHudPercent').textContent = (g.percent || 0) + '%';
+            const pct = g.percent != null ? Number(g.percent) : 0;
+            document.getElementById('champsTeamHudBar').style.width = Math.min(100, pct) + '%';
+            document.getElementById('champsTeamHudPercent').textContent = pct + '%';
             document.getElementById('champsTeamHudSub').textContent = (g.current_value || 0) + ' / ' + (g.target_value || 0) + ' ' + (g.unit || '');
         } catch (e) { if (barArea) barArea.style.display = 'none'; }
     }
@@ -385,12 +396,16 @@
         const roleDescHtml = roleDesc ? `<p class="text-secondary font-medium mt-0.5">${escapeHtml(roleDesc)}</p>` : '';
         content.innerHTML = `
             <div class="champs-spotlight-card rounded-lg border border-white/10 bg-tertiary/80 p-4 flex-1 min-h-0 flex flex-col overflow-auto">
-                <div class="flex items-center gap-5 mb-4 flex-shrink-0">
+                <div class="champs-spotlight-header flex items-stretch gap-4 mb-4 flex-shrink-0">
                     <span class="champs-spotlight-avatar w-20 h-20 rounded-full overflow-hidden bg-slate-600/50 flex items-center justify-center ring-4 ring-cyan-500/30 flex-shrink-0">${avatarHtml}</span>
-                    <div class="min-w-0 flex-1">
+                    <div class="min-w-0 flex-1 flex flex-col justify-center">
                         ${nameLineHtml}
                         ${roleDescHtml}
-                        <p class="text-secondary font-medium mt-1">Rank <span class="font-bold text-white">#${data.rank}</span> • <span class="font-mono accent-green">${data.score}</span> pts${streakText}</p>
+                        <p class="text-secondary font-medium mt-1">Rank <span class="font-bold text-white">#${data.rank}</span>${streakText ? ' ' + streakText : ''}</p>
+                    </div>
+                    <div class="champs-spotlight-points-hero flex-shrink-0 flex flex-col items-start justify-center">
+                        <span class="champs-spotlight-points-label">Points</span>
+                        <span class="champs-spotlight-points-value">${data.score != null ? data.score : 0}</span>
                     </div>
                 </div>
                 <div class="champs-stats-grid grid grid-cols-2 gap-3">
@@ -460,23 +475,26 @@
         renderChampsTrophyCabinet(a.badges || []);
         content.innerHTML = `
             <div class="champs-spotlight-card rounded-lg border border-white/10 bg-tertiary/80 p-4 champs-spotlight-glow flex-1 min-h-0 flex flex-col overflow-auto">
-                <div class="flex items-center gap-5 mb-4 flex-shrink-0">
-                    <span class="champs-spotlight-avatar w-24 h-24 rounded-full overflow-hidden bg-slate-600/50 flex items-center justify-center ring-4 ring-cyan-500/40 flex-shrink-0">${avatarHtml}</span>
-                    <div class="flex-1 min-w-0">
-                        ${nameLineHtml}
-                        ${roleDescHtml}
-                        <p class="text-secondary text-sm mt-2">Level <strong class="text-white">${a.level || 1}</strong> → <strong class="text-white">${(a.level || 1) + 1}</strong> <span class="opacity-90">(${a.xp_to_next || 0} XP to go)</span></p>
-                        <div class="mt-2 h-3 bg-black/40 rounded-full overflow-hidden max-w-xs">
-                            <div class="champs-xp-fill h-full bg-gradient-to-r from-cyan-500 to-emerald-500 rounded-full transition-all duration-500" style="width: ${xpPct}%"></div>
+                <div class="champs-spotlight-grid flex-shrink-0 mb-4">
+                    <div class="champs-spotlight-header-cell flex items-center gap-4 min-w-0">
+                        <span class="champs-spotlight-avatar w-24 h-24 rounded-full overflow-hidden bg-slate-600/50 flex items-center justify-center ring-4 ring-cyan-500/40 flex-shrink-0">${avatarHtml}</span>
+                        <div class="champs-spotlight-name-area flex flex-col justify-center min-w-0">
+                            ${nameLineHtml}
+                            ${roleDescHtml}
+                            <p class="text-secondary text-sm mt-2">Level <strong class="text-white">${a.level || 1}</strong> → <strong class="text-white">${(a.level || 1) + 1}</strong> <span class="opacity-90">(${a.xp_to_next || 0} XP to go)</span></p>
+                            <div class="mt-2 h-3 bg-black/40 rounded-full overflow-hidden max-w-xs">
+                                <div class="champs-xp-fill h-full bg-gradient-to-r from-cyan-500 to-emerald-500 rounded-full transition-all duration-500" style="width: ${xpPct}%"></div>
+                            </div>
                         </div>
                     </div>
-                </div>
-                <div class="flex flex-nowrap gap-2 mb-4 min-w-0">
-                    <div class="champs-stat-card flex-1 min-w-0 rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">Points</span><span class="font-mono text-lg font-bold text-cyan-400 truncate block">${a.score != null ? a.score : 0}</span></div>
-                    <div class="champs-stat-card flex-1 min-w-0 rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">IOCs</span><span class="font-mono text-lg font-bold accent-green truncate block">${a.total_iocs || 0}</span></div>
-                    <div class="champs-stat-card flex-1 min-w-0 rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">YARA</span><span class="font-mono text-lg font-bold text-amber-400 truncate block">${a.yara_count || 0}</span></div>
-                    <div class="champs-stat-card flex-1 min-w-0 rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">Deletions</span><span class="font-mono text-lg font-bold truncate block">${a.deletion_count || 0}</span></div>
-                    <div class="champs-stat-card flex-1 min-w-0 rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">Streak</span><span class="font-mono text-lg font-bold truncate block">${a.streak_days || 0}d</span></div>
+                    <div class="champs-spotlight-points-hero flex flex-col items-start justify-center">
+                        <span class="champs-spotlight-points-label">Points</span>
+                        <span class="champs-spotlight-points-value">${a.score != null ? a.score : 0}</span>
+                    </div>
+                    <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">IOCs</span><span class="font-mono text-lg font-bold accent-green truncate block">${a.total_iocs || 0}</span></div>
+                    <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">YARA</span><span class="font-mono text-lg font-bold text-amber-400 truncate block">${a.yara_count || 0}</span></div>
+                    <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">Deletions</span><span class="font-mono text-lg font-bold truncate block">${a.deletion_count || 0}</span></div>
+                    <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">Streak</span><span class="font-mono text-lg font-bold truncate block">${a.streak_days || 0}d</span></div>
                 </div>
                 ${chartHtml}`;
         if (chartHtml && a.activity_per_day && typeof Chart !== 'undefined') {

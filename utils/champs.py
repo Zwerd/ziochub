@@ -147,7 +147,7 @@ SMART_COMMENT_MIN_LEN = 10
 SMART_DUPLICATE_THRESHOLD = 3
 
 
-def _compute_smart_ioc_points(method, comment, campaign_id, analyst_key, day, comment_counts, tag_count=0):
+def _compute_smart_ioc_points(method, comment, campaign_id, analyst_key, day, comment_counts, tag_count=0, skip_tag_bonus=False):
     """
     Smart Effort (#8) IOC scoring.
     Single submit: 2 base. Bulk: 1 base.
@@ -157,10 +157,8 @@ def _compute_smart_ioc_points(method, comment, campaign_id, analyst_key, day, co
       - 100-299 chars: +2
       - >=300 chars: +3
     +1 for campaign link.
-    Tag bonus (bulk): same tag for all = 1 pt base only; more distinct tags = more points:
-      - 0-1 tag: 0 bonus
-      - 2 tags: +1
-      - 3+ tags: +2
+    Tag bonus: for single submit, per-row (2 tags +1, 3+ +2). For bulk, tag bonus is applied
+    once per batch per (analyst, day) as distinct-tag count in compute_analyst_scores, so skip here when skip_tag_bonus.
     Range: 1 (lazy bulk) up to ~8 (single + long comment + campaign + tags).
     """
     is_bulk = method in ('csv', 'txt', 'paste', 'import')
@@ -184,10 +182,11 @@ def _compute_smart_ioc_points(method, comment, campaign_id, analyst_key, day, co
             pts += bonus
     if campaign_id:
         pts += 1
-    if tag_count >= 3:
-        pts += 2
-    elif tag_count >= 2:
-        pts += 1
+    if not skip_tag_bonus:
+        if tag_count >= 3:
+            pts += 2
+        elif tag_count >= 2:
+            pts += 1
     # Per doc: minimum 1, maximum ~8; never 0 for any IOC submit
     return max(1, min(8, pts))
 
@@ -227,10 +226,26 @@ def _tag_count_from_row(r):
     return 0
 
 
+def _tags_set_from_row(r):
+    """Return set of distinct tag strings (lowercased) for an IOC row."""
+    raw = r.get('tags')
+    if not raw:
+        return set()
+    if isinstance(raw, list):
+        return {str(t).strip().lower() for t in raw if (t or '').strip()}
+    if isinstance(raw, str):
+        try:
+            arr = json.loads(raw)
+            return {str(t).strip().lower() for t in arr if isinstance(t, str) and t.strip()}
+        except (TypeError, ValueError):
+            return set()
+    return set()
+
+
 def _score_ioc_rows(ioc_rows, scoring_method, comment_counts=None):
     """
     Score a list of IOC row dicts. Returns list of (analyst, date, points, user_id) tuples.
-    For Smart Effort uses _compute_smart_ioc_points; otherwise compute_ioc_points.
+    For Smart Effort: bulk rows get no per-row tag bonus (distinct-tag bonus added in compute_analyst_scores).
     """
     smart = scoring_method == SCORING_SMART
     results = []
@@ -241,7 +256,11 @@ def _score_ioc_rows(ioc_rows, scoring_method, comment_counts=None):
             comment = (r.get('comment') or '').strip()
             method = r.get('submission_method') or 'single'
             tag_count = _tag_count_from_row(r)
-            pts = _compute_smart_ioc_points(method, comment, r.get('campaign_id'), analyst, d, comment_counts or {}, tag_count=tag_count)
+            skip_tag_bonus = method in ('csv', 'txt', 'paste', 'import')
+            pts = _compute_smart_ioc_points(
+                method, comment, r.get('campaign_id'), analyst, d, comment_counts or {},
+                tag_count=tag_count, skip_tag_bonus=skip_tag_bonus,
+            )
         else:
             pts = compute_ioc_points(r.get('type'), r.get('campaign_id'))
         results.append((analyst, d, pts, r.get('user_id')))
@@ -578,6 +597,23 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
         if uid:
             analyst_user_id[analyst] = uid
 
+    # Smart (#8) bulk: 1 point per distinct tag across the batch (analyst+day), not per row
+    if smart and ioc_dicts:
+        bulk_methods = ('csv', 'txt', 'paste', 'import')
+        batch_distinct_tags = defaultdict(lambda: set())
+        for r in ioc_dicts:
+            method = (r.get('submission_method') or 'single').lower()
+            if method not in bulk_methods:
+                continue
+            a = (r.get('analyst') or 'unknown').lower()
+            d = _to_date(r['created_at'])
+            day_key = (_ensure_date(d) if d is not None else None) or today
+            batch_distinct_tags[(a, day_key)].update(_tags_set_from_row(r))
+        for (a, day_key), tags_set in batch_distinct_tags.items():
+            if tags_set:
+                analyst_daily[a][day_key] = analyst_daily[a].get(day_key, 0) + len(tags_set)
+                analyst_last[a] = max(analyst_last.get(a, day_key), day_key) if analyst_last.get(a) else day_key
+
     # YARA points (per-rule quality 10-50, or YARA_DEFAULT if not set)
     yara_q = db.session.query(YaraRule.analyst, YaraRule.uploaded_at, YaraRule.quality_points, YaraRule.status)
     if start_dt is not None:
@@ -629,13 +665,13 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
             if uid:
                 analyst_user_id[a] = uid
 
-        # Reward notes (Smart only), campaign link and campaign create (all methods)
+        # Reward notes (Smart only), campaign link, campaign create, tag add (Smart only)
         evt_q = db.session.query(
             ActivityEvent.user_id,
             ActivityEvent.event_type,
             ActivityEvent.payload,
             ActivityEvent.created_at,
-        ).filter(ActivityEvent.event_type.in_(['ioc_note_add', 'ioc_campaign_link', 'campaign_create']))
+        ).filter(ActivityEvent.event_type.in_(['ioc_note_add', 'ioc_campaign_link', 'campaign_create', 'ioc_tag_add']))
         if start_dt is not None:
             evt_q = evt_q.filter(ActivityEvent.created_at >= start_dt)
         if end_dt is not None:
@@ -668,6 +704,8 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
                     pts_extra = 1
             elif event_type == 'campaign_create':
                 pts_extra = 1
+            elif event_type == 'ioc_tag_add' and smart:
+                pts_extra = int(p.get('added_count') or 0)
 
             if pts_extra and d:
                 analyst_daily[a][d] = analyst_daily[a].get(d, 0) + pts_extra
@@ -733,12 +771,53 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
     return result
 
 
+def get_rank_trend_from_events_24h(db, ActivityEvent, user_id, within_hours=24):
+    """If user had a rank_change event in the last within_hours, return (delta, 'up'|'down'). Else (None, None).
+    Payload must have old_rank and new_rank; delta = old_rank - new_rank (positive = improved)."""
+    if not user_id or not ActivityEvent:
+        return None, None
+    try:
+        now = datetime.utcnow()
+        cutoff = now - timedelta(hours=within_hours)
+        ev = (
+            ActivityEvent.query.filter(
+                ActivityEvent.event_type == 'rank_change',
+                ActivityEvent.user_id == user_id,
+                ActivityEvent.created_at >= cutoff,
+            )
+            .order_by(ActivityEvent.created_at.desc())
+            .first()
+        )
+        if not ev or not ev.payload:
+            return None, None
+        payload = json.loads(ev.payload) if isinstance(ev.payload, str) else (ev.payload or {})
+        old_r = payload.get('old_rank')
+        new_r = payload.get('new_rank')
+        if old_r is None or new_r is None:
+            return None, None
+        delta = int(old_r) - int(new_r)
+        if delta > 0:
+            return delta, 'up'
+        if delta < 0:
+            return delta, 'down'
+        return None, None
+    except Exception:
+        return None, None
+
+
 def get_rank_trend(db, ChampRankSnapshot, user_id, current_rank):
-    """Compare current rank to yesterday's."""
+    """Compare current rank to the most recent snapshot before today (yesterday or last available)."""
     if not user_id:
         return 0, 'same'
-    yesterday = date.today() - timedelta(days=1)
-    snap = ChampRankSnapshot.query.filter_by(user_id=user_id, snapshot_date=yesterday).first()
+    today = date.today()
+    snap = (
+        ChampRankSnapshot.query.filter(
+            ChampRankSnapshot.user_id == user_id,
+            ChampRankSnapshot.snapshot_date < today,
+        )
+        .order_by(ChampRankSnapshot.snapshot_date.desc())
+        .first()
+    )
     if not snap:
         return 0, 'same'
     delta = snap.rank - current_rank
@@ -750,14 +829,14 @@ def get_rank_trend(db, ChampRankSnapshot, user_id, current_rank):
 
 
 def save_daily_rank_snapshots(db, IOC, YaraRule, User, ChampRankSnapshot, ActivityEvent=None, scoring_method='1', exclude_usernames=None, rows=None):
-    """Save today's rank snapshot for each analyst. Idempotent (skip if already saved).
-    If rows is provided, use it (e.g. from ChampScore); otherwise compute via compute_analyst_scores.
-    Returns (did_save: bool, rows: list or None). If did_save, rows are the scores used; else rows is None."""
+    """Save or refresh today's rank snapshot for each analyst.
+    When rows is provided, always sync today's snapshot from rows (so trend can compare to previous load same day).
+    If rows is None, compute via compute_analyst_scores.
+    Returns (did_save: bool, rows: list or None). did_save True if we inserted at least one new row; else we only updated."""
     today = date.today()
-    if ChampRankSnapshot.query.filter_by(snapshot_date=today).first():
-        return False, rows  # already saved today; return rows if caller needs them
     if rows is None:
         rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=scoring_method, exclude_usernames=exclude_usernames)
+    did_insert = False
     for r in rows:
         uid = r.get('user_id')
         if not uid:
@@ -768,9 +847,10 @@ def save_daily_rank_snapshots(db, IOC, YaraRule, User, ChampRankSnapshot, Activi
             existing.score = r['score']
         else:
             db.session.add(ChampRankSnapshot(user_id=uid, rank=r['rank'], score=r['score'], snapshot_date=today))
+            did_insert = True
     try:
         db.session.commit()
-        return True, rows
+        return did_insert, rows
     except Exception:
         db.session.rollback()
         return False, None

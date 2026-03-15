@@ -603,9 +603,11 @@ def edit_ioc():
     (
         _commit_with_retry, _log_ioc_history, audit_log, _resolve_analyst_to_user,
         _capture_champs_before, _detect_champs_changes, _log_champs_event, refresh_champ_score_for_user,
+        _get_setting,
     ) = _from_app(
         '_commit_with_retry', '_log_ioc_history', 'audit_log', '_resolve_analyst_to_user',
         '_capture_champs_before', '_detect_champs_changes', '_log_champs_event', 'refresh_champ_score_for_user',
+        '_get_setting',
     )
     try:
         data = request.get_json()
@@ -728,6 +730,23 @@ def edit_ioc():
                 refresh_champ_score_for_user(current_user.id)
             except Exception as e:
                 logger.warning('edit_ioc: refresh_champ_score failed (edit saved): %s', e)
+
+        # SMART (#8): 1 point per tag added to existing IOC
+        tags_added_count = 0
+        if old_tags != new_tags_val:
+            old_set = {str(t).strip().lower() for t in old_tags_list if str(t).strip()}
+            new_set = {str(t).strip().lower() for t in tags_list if str(t).strip()}
+            tags_added_count = len(new_set - old_set)
+        if tags_added_count > 0 and _get_setting('champs_scoring_method', '1') == '8':
+            try:
+                _log_champs_event(
+                    'ioc_tag_add',
+                    user_id=current_user.id,
+                    payload={'added_count': tags_added_count, 'ioc_id': row.id},
+                )
+                refresh_champ_score_for_user(current_user.id)
+            except Exception as e:
+                logger.warning('edit_ioc: ioc_tag_add event failed: %s', e)
 
         response = {'success': True, 'message': f'{ioc_type} IOC updated successfully'}
         if campaign_linked:

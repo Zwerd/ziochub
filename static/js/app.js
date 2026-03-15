@@ -1,6 +1,22 @@
 /* app.js - Core application bootstrap (extracted from inline <script>) */
 
 // ---------------------------------------------------------------------------
+// RTL/LTR detection (Hebrew vs English) - used by delete reason, team goal, profile
+// ---------------------------------------------------------------------------
+function detectDir(text) {
+    if (!text || typeof text !== 'string') return 'ltr';
+    var t = text.trim();
+    if (!t.length) return 'ltr';
+    var heCount = 0;
+    for (var i = 0; i < t.length; i++) {
+        var c = t.charCodeAt(i);
+        if ((c >= 0x0590 && c <= 0x05FF) || (c >= 0xFB1D && c <= 0xFB4F)) heCount++;
+    }
+    return heCount > t.length / 2 ? 'rtl' : 'ltr';
+}
+window.detectDir = detectDir;
+
+// ---------------------------------------------------------------------------
 // Global state
 // ---------------------------------------------------------------------------
 var translations = {};
@@ -582,9 +598,10 @@ function showAchievementModal(result) {
     }
 
     if (badges && badges.length > 0) {
-        badges.forEach(function (b) {
+        badges.forEach(function (b, i) {
             var item = document.createElement('div');
             item.className = 'badge-earned-item flex flex-col items-center gap-2';
+            item.style.animationDelay = (0.08 * i) + 's';
             var symbol = document.createElement('span');
             symbol.className = 'badge-earned-symbol';
             symbol.textContent = b.emoji || '🏅';

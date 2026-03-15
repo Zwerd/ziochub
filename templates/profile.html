@@ -31,7 +31,7 @@
             </div>
             <div>
                 <label for="role_description" class="block text-sm font-semibold text-secondary mb-1">Role Description</label>
-                <textarea id="role_description" name="role_description" maxlength="500" rows="3"
+                <textarea id="role_description" name="role_description" maxlength="500" rows="3" dir="ltr"
                           class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green focus:ring-1 focus:ring-accent-green resize-y">{{ (profile and profile.role_description) or '' }}</textarea>
             </div>
             <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 border border-cyan-400/40 text-white transition btn-cmd-primary">
@@ -57,6 +57,14 @@
 </div>
 
 <script>
+(function() {
+    var roleDesc = document.getElementById('role_description');
+    if (roleDesc && typeof window.detectDir === 'function') {
+        roleDesc.addEventListener('input', function() { this.setAttribute('dir', window.detectDir(this.value)); });
+        roleDesc.addEventListener('keyup', function() { this.setAttribute('dir', window.detectDir(this.value)); });
+        roleDesc.setAttribute('dir', window.detectDir(roleDesc.value));
+    }
+})();
 document.getElementById('profileForm').addEventListener('submit', async function(e) {
     e.preventDefault();
     var msgEl = document.getElementById('profileMessage');

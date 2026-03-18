@@ -10,7 +10,7 @@ import csv
 import uuid
 from datetime import datetime, timezone
 
-from flask import Blueprint, Response, current_app
+from flask import Blueprint, Response, current_app, request
 from sqlalchemy import func
 
 from extensions import db
@@ -22,6 +22,28 @@ from utils.validation_messages import MSG_INVALID_IOC_TYPE, MSG_INVALID_FILENAME
 
 
 bp = Blueprint('feeds', __name__, url_prefix='/feed')
+
+
+def _feeds_allowed():
+    """Return True if feeds are enabled (feeds_public_enabled). When False, callers should return 503."""
+    try:
+        from app import _get_setting
+        return _get_setting('feeds_public_enabled', 'true').strip().lower() == 'true'
+    except Exception:
+        return True
+
+
+@bp.before_request
+def _require_feeds_enabled():
+    """When feeds_public_enabled is false, return 503 for all /feed/* requests."""
+    if _feeds_allowed():
+        return None
+    return Response(
+        'Feeds are not available. Enable "Feeds and TAXII publicly available" in Admin Settings.',
+        status=503,
+        mimetype='text/plain',
+        headers={'Retry-After': '60'},
+    )
 
 
 def _get_data_yara():

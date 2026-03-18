@@ -10,7 +10,7 @@ from extensions import db
 from models import User, UserProfile, UserSession, _utcnow
 from utils.auth import hash_password, verify_password
 from utils.decorators import login_required
-from utils.ldap_auth import try_ldap_bind, try_ldap_mock_dev, check_ldap_reachable, is_dev_mode
+from utils.ldap_auth import try_ldap_bind_servers, try_ldap_bind, try_ldap_mock_dev, check_ldap_reachable, is_dev_mode
 
 try:
     import config as _config
@@ -115,23 +115,30 @@ def login():
     # Phase 3: Try LDAP if enabled and (user not found yet) and auth_mode allows LDAP
     if user is None and ldap_enabled and auth_mode in ('ldap', 'ldap_with_local_fallback', 'local_with_ldap_fallback'):
         try:
-            ldap_url = _get_setting('ldap_url', '').strip()
-            ldap_base_dn = _get_setting('ldap_base_dn', '').strip()
-            ldap_bind_dn = _get_setting('ldap_bind_dn', '').strip()
-            ldap_bind_password = _get_setting('ldap_bind_password', '').strip()
+            import json as _json
             ldap_user_filter = _get_setting('ldap_user_filter', '(sAMAccountName=%(user)s)').strip()
-
+            servers = []
+            raw_servers = (_get_setting('ldap_servers', '') or '').strip()
+            if raw_servers and raw_servers != '[]':
+                try:
+                    servers = _json.loads(raw_servers)
+                except Exception:
+                    pass
+            if not servers and _get_setting('ldap_url', '').strip():
+                servers = [{
+                    'url': _get_setting('ldap_url', ''),
+                    'base_dn': _get_setting('ldap_base_dn', ''),
+                    'bind_dn': _get_setting('ldap_bind_dn', ''),
+                    'bind_password': _get_setting('ldap_bind_password', ''),
+                }]
             ldap_ok = False
             display_name = None
-            if ldap_url and ldap_base_dn:
-                ldap_ok, display_name = try_ldap_bind(
-                    ldap_url, ldap_base_dn, ldap_bind_dn, ldap_bind_password,
-                    ldap_user_filter, username, password,
-                )
+            if servers:
+                ldap_ok, display_name = try_ldap_bind_servers(servers, ldap_user_filter, username, password)
             if not ldap_ok:
                 ldap_ok, display_name = try_ldap_mock_dev(username, password)
-            if not ldap_ok and ldap_url and ldap_base_dn:
-                logging.warning('Phase 6.3: LDAP unreachable for %s; falling back to local if auth_mode allows', username)
+            if not ldap_ok and servers:
+                logging.warning('Phase 6.3: LDAP unreachable for %s (tried %d server(s)); falling back to local if auth_mode allows', username, len(servers))
             if ldap_ok:
                 user = User.query.filter(func.lower(User.username) == username).first()
                 if user:
@@ -150,7 +157,9 @@ def login():
                     _commit_with_retry()
                 profile = UserProfile.query.filter_by(user_id=user.id).first()
                 if profile:
-                    profile.display_name = display_name or username
+                    # Do not overwrite display_name if user already set a custom one in profile
+                    if not (profile.display_name or '').strip():
+                        profile.display_name = display_name or username
                 else:
                     db.session.add(UserProfile(user_id=user.id, display_name=display_name or username))
                 _commit_with_retry()
@@ -359,16 +368,35 @@ def api_profile_avatar_delete():
 
 @bp.route('/api/ldap/health')
 def api_ldap_health():
-    """Phase 3.7: LDAP health check - reachable or not."""
+    """Phase 3.7: LDAP health check - reachable or not (uses first configured server)."""
     _api_ok, _get_setting = _from_app('_api_ok', '_get_setting')
+    import json as _json
     ldap_enabled = _get_setting('ldap_enabled', 'false').lower() == 'true'
     if not ldap_enabled:
         return _api_ok(data={'ldap_enabled': False, 'reachable': None, 'message': 'LDAP disabled'})
-    ldap_url = _get_setting('ldap_url', '').strip()
-    ldap_base_dn = _get_setting('ldap_base_dn', '').strip()
-    ldap_bind_dn = _get_setting('ldap_bind_dn', '').strip()
-    ldap_bind_password = _get_setting('ldap_bind_password', '').strip()
-    reachable, msg = check_ldap_reachable(ldap_url, ldap_base_dn, ldap_bind_dn, ldap_bind_password)
+    servers = []
+    raw_servers = (_get_setting('ldap_servers', '') or '').strip()
+    if raw_servers and raw_servers != '[]':
+        try:
+            servers = _json.loads(raw_servers)
+        except Exception:
+            pass
+    if not servers and _get_setting('ldap_url', '').strip():
+        servers = [{
+            'url': _get_setting('ldap_url', ''),
+            'base_dn': _get_setting('ldap_base_dn', ''),
+            'bind_dn': _get_setting('ldap_bind_dn', ''),
+            'bind_password': _get_setting('ldap_bind_password', ''),
+        }]
+    if not servers:
+        return _api_ok(data={'ldap_enabled': True, 'reachable': False, 'message': 'No LDAP servers configured'})
+    s = servers[0]
+    reachable, msg = check_ldap_reachable(
+        (s.get('url') or '').strip(),
+        (s.get('base_dn') or '').strip(),
+        (s.get('bind_dn') or '').strip(),
+        s.get('bind_password') or '',
+    )
     return _api_ok(data={'ldap_enabled': True, 'reachable': reachable, 'message': msg})
 
 

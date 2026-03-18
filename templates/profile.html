@@ -84,6 +84,10 @@ document.getElementById('profileForm').addEventListener('submit', async function
             msgEl.classList.add('text-green-400');
             msgEl.classList.remove('text-red-400');
             msgEl.textContent = 'Profile saved.';
+            if (data.display_name && window.authState) {
+                window.authState.display_name = data.display_name;
+                if (window.updateAuthUI) window.updateAuthUI();
+            }
         } else {
             msgEl.classList.add('text-red-400');
             msgEl.classList.remove('text-green-400');

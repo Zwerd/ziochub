@@ -499,6 +499,30 @@ def submit_ioc():
                         push_hash_to_tie(config_path, value, audit_log)
             except Exception as dxl_err:
                 logging.warning('DXL push after submit_ioc failed: %s', dxl_err)
+        # MISP push: send IOC to MISP when enabled (SOC uses ZIoCHub but feeds MISP; comment pushed if option on).
+        # Skip push when analyst is the MISP sync user to avoid loop: MISP → sync into ZIoCHub (analyst=misp_sync) → push back to MISP.
+        try:
+            _get_setting = _from_app('_get_setting')[0]
+            misp_sync_user = (_get_setting('misp_sync_user', 'misp_sync') or 'misp_sync').strip().lower()
+            if _get_setting('misp_push_enabled', 'false').lower() == 'true' and username.lower() != misp_sync_user:
+                url = _get_setting('misp_url', '').strip()
+                api_key = _get_setting('misp_api_key', '').strip()
+                if url and api_key:
+                    verify_ssl = _get_setting('misp_verify_ssl', 'false').lower() == 'true'
+                    include_comment = _get_setting('misp_push_include_comment', 'true').lower() == 'true'
+                    event_id_str = _get_setting('misp_push_default_event_id', '').strip()
+                    event_id = int(event_id_str) if event_id_str.isdigit() else None
+                    from utils.misp_push import push_ioc_to_misp
+                    cmt = (sanitize_comment(comment) or '').strip() if comment else ''
+                    ok, msg = push_ioc_to_misp(
+                        ioc_type, value, cmt or None,
+                        event_id=event_id, url=url, api_key=api_key, verify_ssl=verify_ssl,
+                        include_comment=include_comment,
+                    )
+                    if not ok:
+                        logging.warning('MISP push after submit_ioc failed: %s', msg)
+        except Exception as misp_err:
+            logging.warning('MISP push after submit_ioc failed: %s', misp_err)
         refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
         refresh_champ_score_for_user(user_id)
         response = {'success': True, 'message': f'{ioc_type} IOC submitted successfully'}
@@ -1294,10 +1318,12 @@ def submit_staging():
             logging.warning('submit_staging: capture champs before failed: %s', cap_err)
             champs_before = {'scoring_method': '1', 'badges': set(), 'level': 0, 'rank': 0, 'score': 0}
         fallback_ticket = _auto_ticket_id(current_user.id)
+        misp_sync_user = (_get_setting('misp_sync_user', 'misp_sync') or 'misp_sync').strip().lower()
         summary = {}
         total_updated = 0
         total_new = 0
         new_hashes_for_dxl = []
+        new_iocs_for_misp = []
         for raw in items:
             ioc_value = (raw.get('ioc') or '').strip()
             ioc_type = (raw.get('type') or '').strip()
@@ -1385,6 +1411,9 @@ def submit_staging():
                 total_new += 1
                 if ioc_type == 'Hash':
                     new_hashes_for_dxl.append(ioc_value)
+                # Only push to MISP if analyst is not the MISP sync user (avoid loop: MISP → sync → push back)
+                if analyst.lower() != misp_sync_user:
+                    new_iocs_for_misp.append((ioc_type, ioc_value, comment or ''))
                 summary[ioc_type] = summary.get(ioc_type, {'updated': 0, 'new': 0})
                 summary[ioc_type]['new'] += 1
 
@@ -1393,6 +1422,31 @@ def submit_staging():
         except Exception:
             db.session.rollback()
             raise
+
+        # MISP push: send new IOCs to MISP when enabled (SOC uses ZIoCHub but feeds MISP)
+        try:
+            _get_setting = _from_app('_get_setting')[0]
+            if _get_setting('misp_push_enabled', 'false').lower() == 'true' and new_iocs_for_misp:
+                url = _get_setting('misp_url', '').strip()
+                api_key = _get_setting('misp_api_key', '').strip()
+                if url and api_key:
+                    verify_ssl = _get_setting('misp_verify_ssl', 'false').lower() == 'true'
+                    include_comment = _get_setting('misp_push_include_comment', 'true').lower() == 'true'
+                    event_id_str = _get_setting('misp_push_default_event_id', '').strip()
+                    event_id = int(event_id_str) if event_id_str.isdigit() else None
+                    from utils.misp_push import push_ioc_to_misp
+                    for ioc_type, ioc_value, comment in new_iocs_for_misp:
+                        ok, msg = push_ioc_to_misp(
+                            ioc_type, ioc_value, comment or None,
+                            event_id=event_id, url=url, api_key=api_key, verify_ssl=verify_ssl,
+                            include_comment=include_comment,
+                        )
+                        if not ok:
+                            logging.warning('MISP push after staging failed for %s %s: %s', ioc_type, ioc_value[:50], msg)
+                        elif event_id is None:
+                            event_id = int(msg.split()[-1]) if msg.split()[-1].isdigit() else event_id
+        except Exception as misp_err:
+            logging.warning('MISP push after submit_staging failed: %s', misp_err)
 
         # DXL: push new hashes to TIE if enabled
         try:

@@ -298,6 +298,7 @@ def get_champs_leaderboard():
                 trend = f'+{trend_delta}'
             elif trend_dir == 'down':
                 trend = f'-{abs(trend_delta)}'
+        is_active = getattr(user, 'is_active', True) if user else True
         leaderboard.append({
             'rank': r['rank'],
             'analyst': r['analyst'],
@@ -312,6 +313,7 @@ def get_champs_leaderboard():
             'medal': medal,
             'trend': trend,
             'streak_days': r.get('streak_days', 0),
+            'is_active': is_active,
         })
     payload = {'success': True, 'leaderboard': leaderboard, 'count': len(leaderboard)}
     set_cached(cache_key, payload, ttl_seconds=CHAMPS_CACHE_TTL)
@@ -560,6 +562,7 @@ def get_champs_analyst(user_id):
     detail['display_name'] = (profile.display_name if profile and profile.display_name else None) or user.username
     detail['avatar_url'] = _avatar_url_for_user(profile, user_id)
     detail['role_description'] = (profile.role_description if profile and profile.role_description else None) or ''
+    detail['is_active'] = getattr(user, 'is_active', True)
     payload = {'success': True, 'analyst': detail}
     set_cached(cache_key, payload, ttl_seconds=CHAMPS_ANALYST_CACHE_TTL)
     return jsonify(payload)

@@ -1151,4 +1151,15 @@
         set: function (v) { playbookSites = v; },
         configurable: true
     });
+
+    Object.defineProperty(window, 'playbookCustomFromApi', {
+        get: function () { return playbookCustomFromApi; },
+        set: function (v) { playbookCustomFromApi = v; },
+        configurable: true
+    });
+
+    Object.defineProperty(window, 'playbookSitesBuiltIn', {
+        get: function () { return playbookSitesBuiltIn; },
+        configurable: true
+    });
 })();

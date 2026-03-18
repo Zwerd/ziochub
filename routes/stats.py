@@ -373,11 +373,17 @@ def api_feed_pulse():
     except Exception:
         pass
 
-    # Filter out analyst-excluded anomalies (persisted in sanity_exclusions table)
+    # Filter out analyst-excluded anomalies (persisted in sanity_exclusions table).
+    # Load only (value, ioc_type, anomaly_type) to reduce memory and speed with 2500+ rows.
     excl_set = set()
     try:
-        for e in SanityExclusion.query.all():
-            excl_set.add((e.value, e.ioc_type or '', e.anomaly_type or ''))
+        rows = SanityExclusion.query.with_entities(
+            SanityExclusion.value,
+            SanityExclusion.ioc_type,
+            SanityExclusion.anomaly_type,
+        ).all()
+        for value, ioc_type, anomaly_type in rows:
+            excl_set.add((value or '', ioc_type or '', anomaly_type or ''))
     except Exception:
         pass
     anomalies = [a for a in anomalies if (a.get('value', ''), a.get('ioc_type', ''), a.get('type', '')) not in excl_set]

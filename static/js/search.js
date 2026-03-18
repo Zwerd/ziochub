@@ -4,10 +4,32 @@
  *                     switchTab, loadStats, loadLiveFeed, loadFeedPulse, loadUsersForAssignDropdown,
  *                     openYaraMetaEditModal, translations, currentLang.
  * Exposes: performSearch, openEditModal, openDeleteIocModal, revokeIOC, openIocHistoryModal,
- *          getExpirationBadge, highlightMatch.
+ *          getExpirationBadge, highlightMatch, detectTextDir.
  */
 (function(global) {
     'use strict';
+
+    var rtlByScriptEnabled = (document.body && document.body.getAttribute('data-search-comment-rtl')) === '1';
+
+    /**
+     * If setting is on: return 'rtl' when text has more Hebrew/Arabic letters than other letters, else 'ltr'. Else return 'auto'.
+     */
+    function detectTextDir(text) {
+        if (!text || typeof text !== 'string') return 'auto';
+        if (!rtlByScriptEnabled) return 'auto';
+        var rtl = 0, ltr = 0, c, code;
+        for (var i = 0; i < text.length; i++) {
+            c = text[i];
+            code = c.charCodeAt(0);
+            if (code >= 0x0590 && code <= 0x05FF) rtl++;      // Hebrew
+            else if (code >= 0x0600 && code <= 0x06FF) rtl++; // Arabic
+            else if ((code >= 0x0041 && code <= 0x005A) || (code >= 0x0061 && code <= 0x007A)) ltr++; // Latin A-Za-z
+            else if (code >= 0x0400 && code <= 0x04FF) ltr++; // Cyrillic
+        }
+        if (rtl === 0 && ltr === 0) return 'auto';
+        return rtl > ltr ? 'rtl' : 'ltr';
+    }
+    global.detectTextDir = detectTextDir;
 
     const searchInput = document.getElementById('searchInput');
     const searchButton = document.getElementById('searchButton');

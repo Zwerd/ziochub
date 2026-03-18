@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import OperationalError
 
 from extensions import db
-from models import User, UserProfile, SystemSetting
+from models import User, UserProfile, SystemSetting, IOC
 from utils.auth import hash_password
 from utils.decorators import admin_required, admin_required_page
 from utils.allowlist import clear_allowlist_cache
@@ -137,6 +137,7 @@ _SETTINGS_DEFAULTS = {
     'ldap_base_dn': '',
     'ldap_bind_dn': '',
     'ldap_bind_password': '',
+    'ldap_servers': '[]',  # JSON array of {url, base_dn, bind_dn, bind_password}; auth tries in order
     'ldap_user_filter': '(sAMAccountName=%(user)s)',
     'misp_enabled': 'false',
     'misp_url': '',
@@ -160,6 +161,7 @@ _SETTINGS_DEFAULTS = {
     'automation_fireeye_enabled': 'false',
     'automation_fireeye_appliances': '[]',
     'sanity_check_mode': 'block_non_admin',
+    'search_comment_rtl_by_script': 'true',  # In search results: if comment has more Hebrew/Arabic than other text, show RTL
 }
 
 
@@ -184,6 +186,19 @@ def get_settings():
     for k, v in _SETTINGS_DEFAULTS.items():
         if k not in settings:
             settings[k] = v
+    # Backward compat: if ldap_servers empty but single ldap_url set, expose as one server in list
+    import json as _json
+    try:
+        raw_servers = (settings.get('ldap_servers') or '').strip()
+        if (not raw_servers or raw_servers == '[]') and (settings.get('ldap_url') or '').strip():
+            settings['ldap_servers'] = _json.dumps([{
+                'url': settings.get('ldap_url', ''),
+                'base_dn': settings.get('ldap_base_dn', ''),
+                'bind_dn': settings.get('ldap_bind_dn', ''),
+                'bind_password': settings.get('ldap_bind_password', ''),
+            }])
+    except Exception:
+        pass
     return _api_ok(data={'settings': settings})
 
 
@@ -192,6 +207,7 @@ _MISP_SAVE_KEYS_FALLBACK = (
     'misp_enabled', 'misp_url', 'misp_api_key', 'misp_verify_ssl', 'misp_last_days',
     'misp_filter_tags', 'misp_filter_types', 'misp_published_only', 'misp_default_ttl',
     'misp_sync_user', 'misp_pull_interval', 'misp_exclude_from_champs',
+    'misp_push_enabled', 'misp_push_include_comment', 'misp_push_default_event_id',
 )
 _MISP_SYNC_KEYS_FALLBACK = (
     'misp_url', 'misp_api_key', 'misp_verify_ssl', 'misp_last_days',
@@ -212,15 +228,20 @@ def save_settings():
         except ImportError:
             misp_keys = _MISP_SAVE_KEYS_FALLBACK
         syslog_keys = ('syslog_udp_enabled', 'syslog_udp_host', 'syslog_udp_port')
-        ldap_keys = ('auth_mode', 'ldap_enabled', 'ldap_url', 'ldap_base_dn', 'ldap_bind_dn', 'ldap_bind_password', 'ldap_user_filter')
+        ldap_keys = ('auth_mode', 'ldap_enabled', 'ldap_url', 'ldap_base_dn', 'ldap_bind_dn', 'ldap_bind_password', 'ldap_servers', 'ldap_user_filter')
         dxl_keys = ('dxl_enabled', 'dxl_config_path')
         automation_keys = ('automation_fireeye_enabled', 'automation_fireeye_appliances')
         sanity_keys = ('sanity_check_mode',)
+        feed_keys = ('feeds_public_enabled',)
+        search_keys = ('search_comment_rtl_by_script',)
         sections = []
-        for key in ldap_keys + misp_keys + syslog_keys + dxl_keys + automation_keys + sanity_keys:
+        for key in ldap_keys + misp_keys + syslog_keys + dxl_keys + automation_keys + sanity_keys + feed_keys + search_keys:
             if key in data:
                 val = data[key]
                 if key == 'automation_fireeye_appliances':
+                    import json
+                    _set_setting(key, json.dumps(val) if isinstance(val, (list, dict)) else str(val).strip())
+                elif key == 'ldap_servers':
                     import json
                     _set_setting(key, json.dumps(val) if isinstance(val, (list, dict)) else str(val).strip())
                 else:
@@ -237,6 +258,10 @@ def save_settings():
                     sections.append('Automation')
                 elif key in sanity_keys and 'Sanity' not in sections:
                     sections.append('Sanity')
+                elif key in feed_keys and 'Feeds' not in sections:
+                    sections.append('Feeds')
+                elif key in search_keys and 'Search' not in sections:
+                    sections.append('Search')
         try:
             from utils.cef_logger import refresh_cef_udp_target
             udp_enabled = _get_setting('syslog_udp_enabled', 'false').lower() == 'true'
@@ -345,11 +370,28 @@ def dxl_test():
 @bp.route('/ldap/test', methods=['POST'])
 @admin_required
 def ldap_test():
-    """Run LDAP connection test step-by-step; return list of steps for Admin UI."""
+    """Run LDAP connection test for one or multiple servers; return steps per server for Admin UI."""
     _api_ok, _api_error = _from_app('_api_ok', '_api_error')
     try:
         from utils.ldap_auth import test_ldap_connection_steps
+        import json as _json
         data = request.get_json() or {}
+        servers = data.get('ldap_servers')
+        if isinstance(servers, list) and len(servers) > 0:
+            results = []
+            all_ok = True
+            for i, s in enumerate(servers):
+                url = (s.get('url') or '').strip()
+                base_dn = (s.get('base_dn') or '').strip()
+                bind_dn = (s.get('bind_dn') or '').strip()
+                bind_password = s.get('bind_password') or ''
+                steps = test_ldap_connection_steps(url, base_dn, bind_dn, bind_password)
+                ok = all(st.get('status') == 'ok' for st in steps)
+                if not ok:
+                    all_ok = False
+                results.append({'url': url or '(empty)', 'steps': steps, 'success': ok})
+            return _api_ok(data={'success': all_ok, 'servers': results})
+        # Single server (legacy)
         ldap_url = (data.get('ldap_url') or '').strip()
         base_dn = (data.get('ldap_base_dn') or '').strip()
         bind_dn = (data.get('ldap_bind_dn') or '').strip()
@@ -562,7 +604,9 @@ def user_avatar_delete(user_id):
 @admin_required
 def toggle_user_active(user_id):
     """Activate or deactivate a user (admin only)."""
-    _api_error, _commit_with_retry, audit_log = _from_app('_api_error', '_commit_with_retry', 'audit_log')
+    _api_error, _commit_with_retry, audit_log, invalidate_champs_leaderboard_cache = _from_app(
+        '_api_error', '_commit_with_retry', 'audit_log', 'invalidate_champs_leaderboard_cache'
+    )
     try:
         user = db.session.get(User, user_id)
         if not user:
@@ -573,6 +617,10 @@ def toggle_user_active(user_id):
         _commit_with_retry()
         status = 'activated' if user.is_active else 'deactivated'
         audit_log('admin_user_toggle', f'user_id={user_id} status={status} by={current_user.username}')
+        try:
+            invalidate_champs_leaderboard_cache(user_id=user_id)
+        except Exception:
+            pass
         return jsonify({'success': True, 'message': f'User {user.username} {status}', 'is_active': user.is_active})
     except Exception as e:
         logging.exception('api_admin_toggle_user_active failed')
@@ -705,6 +753,64 @@ def misp_sync_now():
         return _api_error(str(e), 500)
 
 
+@bp.route('/backfill-ioc-aggregate-fields', methods=['POST'])
+@admin_required
+def backfill_ioc_aggregate_fields():
+    """
+    Backfill country_code, tld, email_domain for existing IOCs that have them null.
+    Fixes Live Stats (Top Countries, Top TLDs, Top Email Domains) for MISP-imported or legacy data.
+    """
+    _api_ok, _api_error, audit_log, _commit_with_retry = _from_app(
+        '_api_ok', '_api_error', 'audit_log', '_commit_with_retry'
+    )
+    try:
+        from utils.ioc_aggregate_fields import compute_ioc_aggregate_fields
+
+        geoip_reader = None
+        try:
+            from app import geoip_reader as _gr
+            geoip_reader = _gr
+        except ImportError:
+            pass
+
+        # IOCs missing aggregate fields: IP without country_code, Domain/URL without tld, Email without email_domain
+        need_fill = IOC.query.filter(
+            db.or_(
+                db.and_(IOC.type == 'IP', IOC.country_code.is_(None)),
+                db.and_(IOC.type == 'Domain', IOC.tld.is_(None)),
+                db.and_(IOC.type == 'URL', IOC.tld.is_(None)),
+                db.and_(IOC.type == 'Email', IOC.email_domain.is_(None)),
+            )
+        ).all()
+
+        updated = 0
+        for row in need_fill:
+            agg = compute_ioc_aggregate_fields(row.type, row.value or '', geoip_reader)
+            changed = False
+            if row.type == 'IP' and agg.get('country_code') is not None:
+                row.country_code = agg['country_code']
+                changed = True
+            if row.type in ('Domain', 'URL') and agg.get('tld') is not None:
+                row.tld = agg['tld']
+                changed = True
+            if row.type == 'Email' and agg.get('email_domain') is not None:
+                row.email_domain = agg['email_domain']
+                changed = True
+            if changed:
+                updated += 1
+
+        if updated > 0:
+            _commit_with_retry()
+        audit_log('backfill_ioc_aggregate', f'updated={updated} total_candidates={len(need_fill)} by={current_user.username}')
+        return _api_ok(
+            message=f'Backfill complete: {updated} IOCs updated (of {len(need_fill)} needing aggregate fields).',
+            data={'updated': updated, 'candidates': len(need_fill)},
+        )
+    except Exception as e:
+        logging.exception('admin backfill_ioc_aggregate_fields failed')
+        return _api_error(str(e), 500)
+
+
 # --- Admin HTML pages ---
 
 @pages_bp.route('/')
@@ -721,9 +827,29 @@ def _misp_settings_fallback(get_setting_fn):
         'misp_last_days': '30', 'misp_filter_tags': '', 'misp_filter_types': '',
         'misp_published_only': 'true', 'misp_default_ttl': 'permanent', 'misp_sync_user': 'misp_sync',
         'misp_pull_interval': '60', 'misp_exclude_from_champs': 'true',
+        'misp_push_enabled': 'false', 'misp_push_include_comment': 'true', 'misp_push_default_event_id': '',
         'misp_last_sync': '', 'misp_last_sync_result': '',
     }
     return {k: str((get_setting_fn(k, v) if callable(get_setting_fn) else get_setting_fn.get(k, v)) or v).strip() or v for k, v in defaults.items()}
+
+
+def _get_ldap_servers_for_form(get_setting_fn):
+    """Return list of LDAP server dicts for settings form; migrate from single server if needed."""
+    import json as _json
+    try:
+        raw = (get_setting_fn('ldap_servers', '') or '').strip()
+        if raw and raw != '[]':
+            return _json.loads(raw)
+        if (get_setting_fn('ldap_url', '') or '').strip():
+            return [{
+                'url': get_setting_fn('ldap_url', ''),
+                'base_dn': get_setting_fn('ldap_base_dn', ''),
+                'bind_dn': get_setting_fn('ldap_bind_dn', ''),
+                'bind_password': get_setting_fn('ldap_bind_password', ''),
+            }]
+    except Exception:
+        pass
+    return []
 
 
 @pages_bp.route('/settings')
@@ -737,13 +863,16 @@ def admin_settings():
             misp_settings_dict = get_settings_for_form(_get_setting)
         except ImportError:
             misp_settings_dict = _misp_settings_fallback(_get_setting)
+        ldap_servers = _get_ldap_servers_for_form(_get_setting)
         settings = {
             'auth_mode': _get_setting('auth_mode', 'local_only'),
+            'feeds_public_enabled': _get_setting('feeds_public_enabled', 'true'),
             'ldap_enabled': _get_setting('ldap_enabled', 'false'),
             'ldap_url': _get_setting('ldap_url', ''),
             'ldap_base_dn': _get_setting('ldap_base_dn', ''),
             'ldap_bind_dn': _get_setting('ldap_bind_dn', ''),
             'ldap_bind_password': _get_setting('ldap_bind_password', ''),
+            'ldap_servers': ldap_servers,
             'ldap_user_filter': _get_setting('ldap_user_filter', '(sAMAccountName=%(user)s)'),
             **misp_settings_dict,
             'syslog_udp_enabled': _get_setting('syslog_udp_enabled', 'false'),
@@ -753,6 +882,7 @@ def admin_settings():
             'dxl_config_path': _get_setting('dxl_config_path', ''),
             'automation_fireeye_enabled': _get_setting('automation_fireeye_enabled', 'false'),
             'automation_fireeye_appliances': _get_setting('automation_fireeye_appliances', '[]'),
+            'search_comment_rtl_by_script': _get_setting('search_comment_rtl_by_script', 'true'),
         }
         return render_template('admin/settings.html', settings=settings)
     except Exception:

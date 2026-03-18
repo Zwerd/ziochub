@@ -174,7 +174,9 @@ def list_yara():
 @bp.route('/delete-yara', methods=['DELETE'])
 @login_required
 def delete_yara():
-    _commit_with_retry, audit_log = _from_app('_commit_with_retry', 'audit_log')
+    _commit_with_retry, audit_log, refresh_champ_score_for_user = _from_app(
+        '_commit_with_retry', 'audit_log', 'refresh_champ_score_for_user'
+    )
     try:
         data = request.get_json() or {}
         filename = (data.get('filename') or '').strip()
@@ -185,11 +187,33 @@ def delete_yara():
             return jsonify({'success': False, 'message': MSG_INVALID_FILENAME}), 400
         if not os.path.isfile(filepath):
             return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
+        rule = YaraRule.query.filter_by(filename=safe).first()
+        is_admin = getattr(current_user, 'is_admin', False)
+        owner_id = None
+        if rule:
+            analyst_lower = (rule.analyst or '').strip().lower()
+            if not is_admin and analyst_lower != current_user.username.lower():
+                return jsonify({'success': False, 'message': 'Only the rule owner or an admin can delete this rule'}), 403
+            owner_id = None
+            if analyst_lower:
+                owner = User.query.filter(func.lower(User.username) == analyst_lower).first()
+                if owner:
+                    owner_id = owner.id
+        else:
+            if not is_admin:
+                return jsonify({'success': False, 'message': 'Only an admin can delete this rule'}), 403
         os.remove(filepath)
         YaraRule.query.filter_by(filename=safe).delete()
         _commit_with_retry()
         audit_log('YARA_DELETE', f'file={safe} analyst={current_user.username}')
+        if owner_id is not None:
+            try:
+                refresh_champ_score_for_user(owner_id)
+            except Exception as e:
+                logging.warning('YARA delete: refresh_champ_score for owner failed: %s', e)
         return jsonify({'success': True, 'message': f'Deleted {safe}'})
+    except OSError as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
@@ -197,11 +221,16 @@ def delete_yara():
 @bp.route('/view-yara/<path:filename>', methods=['GET'])
 def view_yara(filename):
     try:
-        safe, filepath = _yara_safe_path(filename)
+        safe, filepath_approved = _yara_safe_path(filename)
         if safe is None:
             return jsonify({'success': False, 'message': MSG_INVALID_FILENAME}), 400
+        filepath = filepath_approved
         if not os.path.isfile(filepath):
-            return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
+            _, filepath_pending = _yara_safe_path_pending(filename)
+            if os.path.isfile(filepath_pending):
+                filepath = filepath_pending
+            else:
+                return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
         with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
         return jsonify({'success': True, 'filename': safe, 'content': content})
@@ -212,7 +241,7 @@ def view_yara(filename):
 @bp.route('/update-yara', methods=['POST'])
 @login_required
 def update_yara():
-    _commit_with_retry, = _from_app('_commit_with_retry')
+    _commit_with_retry, audit_log = _from_app('_commit_with_retry', 'audit_log')
     try:
         data = request.get_json()
         if not data:
@@ -223,16 +252,41 @@ def update_yara():
             return jsonify({'success': False, 'message': MSG_FILENAME_REQUIRED}), 400
         if content is None:
             return jsonify({'success': False, 'message': 'Content is required'}), 400
-        safe, filepath = _yara_safe_path(filename)
+        safe, filepath_approved = _yara_safe_path(filename)
         if safe is None:
             return jsonify({'success': False, 'message': MSG_INVALID_FILENAME}), 400
-        if not os.path.isfile(filepath):
-            return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
+        _, filepath_pending = _yara_safe_path_pending(filename)
         content_str = content if isinstance(content, str) else ''
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content_str)
-        quality_pts = compute_yara_quality_points(content_str)
         row = YaraRule.query.filter_by(filename=safe).first()
+        is_admin = getattr(current_user, 'is_admin', False)
+        if not is_admin:
+            if not row:
+                return jsonify({'success': False, 'message': 'Only an admin can edit this rule'}), 403
+            analyst_lower = (row.analyst or '').strip().lower()
+            if analyst_lower != current_user.username.lower():
+                return jsonify({'success': False, 'message': 'Only the rule owner or an admin can edit this rule'}), 403
+        if os.path.isfile(filepath_approved):
+            if not is_admin and row and getattr(row, 'status', None) == 'approved':
+                with open(filepath_pending, 'w', encoding='utf-8') as f:
+                    f.write(content_str)
+                try:
+                    os.remove(filepath_approved)
+                except OSError:
+                    pass
+                if row:
+                    row.quality_points = compute_yara_quality_points(content_str)
+                    row.status = 'pending'
+                    _commit_with_retry()
+                audit_log('YARA_UPDATE', f'file={safe} analyst={current_user.username} status=pending (re-approval required)')
+                return jsonify({'success': True, 'message': f'Updated {safe}. Rule moved to pending for admin approval.', 'moved_to_pending': True})
+            with open(filepath_approved, 'w', encoding='utf-8') as f:
+                f.write(content_str)
+        elif os.path.isfile(filepath_pending):
+            with open(filepath_pending, 'w', encoding='utf-8') as f:
+                f.write(content_str)
+        else:
+            return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
+        quality_pts = compute_yara_quality_points(content_str)
         if row:
             row.quality_points = quality_pts
             _commit_with_retry()
@@ -251,9 +305,30 @@ def edit_yara_meta():
         filename = (data.get('filename') or '').strip()
         if not filename:
             return jsonify({'success': False, 'message': 'Filename is required'}), 400
-        rule = YaraRule.query.filter_by(filename=filename).first()
+        safe, _ = _yara_safe_path(filename)
+        if safe is None:
+            return jsonify({'success': False, 'message': MSG_INVALID_FILENAME}), 400
+        rule = YaraRule.query.filter_by(filename=safe).first()
         if not rule:
             return jsonify({'success': False, 'message': 'YARA rule not found'}), 404
+        is_admin = getattr(current_user, 'is_admin', False)
+        if not is_admin:
+            analyst_lower = (rule.analyst or '').strip().lower()
+            if analyst_lower != current_user.username.lower():
+                return jsonify({'success': False, 'message': 'Only the rule owner or an admin can edit this rule'}), 403
+        if not is_admin and getattr(rule, 'status', None) == 'approved':
+            path_approved = os.path.join(_data_yara(), safe)
+            path_pending = os.path.join(_data_yara_pending(), safe)
+            if os.path.isfile(path_approved):
+                with open(path_approved, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read()
+                with open(path_pending, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                try:
+                    os.remove(path_approved)
+                except OSError:
+                    pass
+                rule.status = 'pending'
         new_ticket_id = data.get('ticket_id')
         if new_ticket_id is not None:
             _auto_ticket_id, = _from_app('_auto_ticket_id')
@@ -281,7 +356,11 @@ def edit_yara_meta():
         if campaign_name_raw is not None:
             changes.append('campaign')
         audit_log('YARA_EDIT_META', f'file={filename} changes={",".join(changes) or "none"}')
-        return jsonify({'success': True, 'message': f'YARA rule "{filename}" updated successfully'})
+        msg = f'YARA rule "{filename}" updated successfully'
+        moved = not is_admin and getattr(rule, 'status', None) == 'pending'
+        if moved:
+            msg += ' Rule moved to pending for admin approval.'
+        return jsonify({'success': True, 'message': msg, 'moved_to_pending': moved})
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -373,10 +452,13 @@ def approve_yara():
             return jsonify({'success': False, 'message': MSG_INVALID_FILENAME}), 400
         rule = YaraRule.query.filter_by(filename=safe_pending, status='pending').first()
         if not rule:
+            rule = YaraRule.query.filter(YaraRule.status == 'pending', func.lower(YaraRule.filename) == safe_pending.lower()).first()
+        if not rule:
             return jsonify({'success': False, 'message': 'Rule not found or not pending'}), 404
+        path_pending = os.path.join(_data_yara_pending(), rule.filename)
         if not os.path.isfile(path_pending):
             return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
-        path_approved = os.path.join(_data_yara(), safe_pending)
+        path_approved = os.path.join(_data_yara(), rule.filename)
         if os.path.exists(path_approved):
             return jsonify({'success': False, 'message': 'Rule name already exists in approved'}), 409
         with open(path_pending, 'r', encoding='utf-8', errors='replace') as f:
@@ -389,7 +471,7 @@ def approve_yara():
             pass
         rule.status = 'approved'
         _commit_with_retry()
-        audit_log('YARA_APPROVE', f'file={safe_pending}')
+        audit_log('YARA_APPROVE', f'file={rule.filename}')
         # Refresh Champs score for the rule owner (analyst) so they get full YARA points
         analyst_username = (rule.analyst or '').strip()
         if analyst_username:
@@ -410,24 +492,24 @@ def approve_yara():
                 if isinstance(appliances, list) and appliances:
                     from utils.fireeye_push import push_yara_to_appliances, set_fireeye_status
                     app_obj = current_app._get_current_object()
-                    set_fireeye_status(safe_pending, 'pending', '')
+                    set_fireeye_status(rule.filename, 'pending', '')
 
                     def _fireeye_upload():
                         with app_obj.app_context():
                             try:
-                                result = push_yara_to_appliances(content, safe_pending, appliances, audit_log)
+                                result = push_yara_to_appliances(content, rule.filename, appliances, audit_log)
                                 if result['overall_success']:
-                                    set_fireeye_status(safe_pending, 'success', 'All appliances updated.')
+                                    set_fireeye_status(rule.filename, 'success', 'All appliances updated.')
                                 else:
                                     msgs = '; '.join(
                                         r.get('name', '') + ': ' + (r.get('message') or '')
                                         for r in result.get('results', [])
                                     )
-                                    set_fireeye_status(safe_pending, 'error', msgs or 'Push failed')
+                                    set_fireeye_status(rule.filename, 'error', msgs or 'Push failed')
                             except Exception as e:
-                                logging.exception('FireEye push failed for %s', safe_pending)
-                                set_fireeye_status(safe_pending, 'error', str(e))
-                                audit_log('yara_push_fail', f'file={safe_pending} error={e}')
+                                logging.exception('FireEye push failed for %s', rule.filename)
+                                set_fireeye_status(rule.filename, 'error', str(e))
+                                audit_log('yara_push_fail', f'file={rule.filename} error={e}')
 
                     t = threading.Thread(target=_fireeye_upload, daemon=True)
                     t.start()
@@ -437,7 +519,7 @@ def approve_yara():
 
         return jsonify({
             'success': True,
-            'message': f'Approved: {safe_pending}',
+            'message': f'Approved: {rule.filename}',
             'fireeye_pending': fireeye_pending,
         })
     except Exception as e:

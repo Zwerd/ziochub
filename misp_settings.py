@@ -20,6 +20,9 @@ MISP_SETTING_KEYS = (
     'misp_sync_user',
     'misp_pull_interval',
     'misp_exclude_from_champs',
+    'misp_push_enabled',
+    'misp_push_include_comment',
+    'misp_push_default_event_id',
     'misp_last_sync',
     'misp_last_sync_result',
 )
@@ -54,6 +57,9 @@ MISP_DEFAULTS = {
     'misp_sync_user': 'misp_sync',
     'misp_pull_interval': '60',
     'misp_exclude_from_champs': 'true',
+    'misp_push_enabled': 'false',
+    'misp_push_include_comment': 'true',
+    'misp_push_default_event_id': '',
     'misp_last_sync': '',
     'misp_last_sync_result': '',
 }

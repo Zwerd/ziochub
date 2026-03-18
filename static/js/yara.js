@@ -2,7 +2,7 @@
  * YARA Manager tab logic (Step 10.4 - extracted from index.html).
  * Depends on globals: escapeHtml, escapeAttr, showToast, t, authState, apiFetch, Prism,
  *                     loadLiveFeed, searchInput, searchButton.
- * Exposes: loadYaraRules, loadYaraPending, loadYaraMyPending, openYaraMetaEditModal.
+ * Exposes: loadYaraRules, loadYaraPending, openYaraMetaEditModal.
  */
 (function(global) {
     'use strict';
@@ -121,9 +121,17 @@
         const tbody = document.getElementById('yaraRulesTableBody');
         if (!tbody) return;
         try {
+            const auth = (typeof window !== 'undefined' && window.authState) || (typeof global !== 'undefined' && global.authState) || {};
+            const usernameLower = (auth.username || '').toString().toLowerCase();
+            const isAdmin = !!(auth.is_admin);
             const result = await apiFetch('/api/list-yara');
             if (result && result.success && result.files && result.files.length > 0) {
                 tbody.innerHTML = result.files.map(f => {
+                    const ownerLower = (f.user || '').toString().toLowerCase();
+                    const canEdit = isAdmin || (ownerLower && ownerLower === usernameLower);
+                    const canDelete = isAdmin || (ownerLower && ownerLower === usernameLower);
+                    const editBtn = canEdit ? `<button type="button" class="btn-cmd-primary btn-cmd-sm edit-yara-btn" data-filename="${escapeHtml(f.filename)}">${t('actions.edit')}</button>` : '';
+                    const deleteBtn = canDelete ? `<button type="button" class="btn-cmd-danger btn-cmd-sm delete-yara-btn" data-filename="${escapeHtml(f.filename)}">${t('actions.delete')}</button>` : '';
                     return `
                     <tr class="border border-white/10">
                         <td class="border border-white/10 px-4 py-2 text-sm font-mono">${escapeHtml(f.filename)}</td>
@@ -135,8 +143,8 @@
                         <td class="border border-white/10 px-3 py-2">
                             <div class="flex items-center gap-1.5">
                                 <button type="button" class="btn-cmd-primary btn-cmd-sm view-yara-btn" data-filename="${escapeHtml(f.filename)}">${t('actions.view')}</button>
-                                <button type="button" class="btn-cmd-primary btn-cmd-sm edit-yara-btn" data-filename="${escapeHtml(f.filename)}">${t('actions.edit')}</button>
-                                <button type="button" class="btn-cmd-danger btn-cmd-sm delete-yara-btn" data-filename="${escapeHtml(f.filename)}">${t('actions.delete')}</button>
+                                ${editBtn}
+                                ${deleteBtn}
                             </div>
                         </td>
                     </tr>
@@ -255,6 +263,12 @@
                 modal.classList.add('hidden');
                 editingYaraFilename = null;
                 loadYaraRules();
+                if (result.moved_to_pending || (result.message && result.message.indexOf('pending') !== -1)) {
+                    const pendingSec = document.getElementById('yaraPendingSection');
+                    if (pendingSec) pendingSec.classList.remove('hidden');
+                    if (typeof loadYaraPending === 'function') await loadYaraPending();
+                    setTimeout(function () { pendingSec && pendingSec.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 100);
+                }
             } else {
                 showToast(result.message || 'Update failed', 'error');
             }
@@ -294,8 +308,12 @@
                 showToast(result.message, 'success');
                 if (typeof loadLiveFeed === 'function') loadLiveFeed();
                 loadYaraRules();
-                if (authState.is_admin) loadYaraPending();
-                if (authState.authenticated) loadYaraMyPending();
+                if (authState.authenticated) {
+                    const pendingSec = document.getElementById('yaraPendingSection');
+                    if (pendingSec) pendingSec.classList.remove('hidden');
+                    await loadYaraPending();
+                    setTimeout(function () { pendingSec && pendingSec.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 100);
+                }
             } else {
                 showToast(result.message || 'Upload failed', 'error');
             }
@@ -307,75 +325,48 @@
     async function loadYaraPending() {
         const tbody = document.getElementById('yaraPendingTableBody');
         if (!tbody) return;
-        const section = document.getElementById('yaraPendingSection');
-        if (section && section.classList.contains('hidden')) return;
+        const auth = (typeof window !== 'undefined' && window.authState) || (typeof global !== 'undefined' && global.authState);
+        const isAdmin = auth && auth.is_admin;
+        const baseUrl = isAdmin ? '/api/yara/pending' : '/api/yara/my-pending';
+        const apiUrl = baseUrl + (baseUrl.indexOf('?') >= 0 ? '&' : '?') + '_=' + Date.now();
         try {
-            const response = await fetch('/api/yara/pending');
+            const response = await fetch(apiUrl);
             const result = await response.json();
             if (result.success && result.files && result.files.length > 0) {
-                tbody.innerHTML = result.files.map(f => `
-                    <tr class="border border-white/10">
-                        <td class="border border-white/10 px-4 py-2 text-sm font-mono">${escapeHtml(f.filename)}</td>
+                tbody.innerHTML = result.files.map(f => {
+                    const analystCell = isAdmin ? escapeHtml(f.user || '-') : '-';
+                    const actionsHtml = isAdmin
+                        ? `<button type="button" class="btn-cmd-primary btn-cmd-sm view-pending-yara-btn" data-filename="${escapeAttr(f.filename)}">${t('actions.view')}</button>
+                           <button type="button" class="btn-cmd-primary btn-cmd-sm approve-pending-yara-btn" data-filename="${escapeAttr(f.filename)}">Approve</button>
+                           <button type="button" class="btn-cmd-danger btn-cmd-sm reject-pending-yara-btn" data-filename="${escapeAttr(f.filename)}">Reject</button>`
+                        : `<button type="button" class="btn-cmd-primary btn-cmd-sm view-pending-yara-btn" data-filename="${escapeAttr(f.filename)}">${t('actions.view')}</button>`;
+                    const pendingBadge = '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40 mr-2 flex-shrink-0">Pending</span>';
+                    return `<tr class="border border-white/10">
+                        <td class="border border-white/10 px-4 py-2 text-sm font-mono"><span class="inline-flex items-center gap-1 flex-wrap">${pendingBadge}${escapeHtml(f.filename)}</span></td>
                         <td class="border border-white/10 px-4 py-2 text-sm text-secondary truncate max-w-xs" title="${escapeAttr((f.comment || '').trim())}" dir="${typeof detectTextDir==='function'?detectTextDir(f.comment||''):'auto'}">${escapeHtml(f.comment || '-')}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.upload_date || '-')}</td>
-                        <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.user || '-')}</td>
+                        <td class="border border-white/10 px-4 py-2 text-sm">${analystCell}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.ticket_id || '-')}</td>
-                        <td class="border border-white/10 px-3 py-2">
-                            <div class="flex items-center gap-1.5">
-                                <button type="button" class="btn-cmd-primary btn-cmd-sm view-pending-yara-btn" data-filename="${escapeAttr(f.filename)}">${t('actions.view')}</button>
-                                <button type="button" class="btn-cmd-primary btn-cmd-sm approve-pending-yara-btn" data-filename="${escapeAttr(f.filename)}">Approve</button>
-                                <button type="button" class="btn-cmd-danger btn-cmd-sm reject-pending-yara-btn" data-filename="${escapeAttr(f.filename)}">Reject</button>
-                            </div>
-                        </td>
-                    </tr>
-                `).join('');
+                        <td class="border border-white/10 px-3 py-2"><div class="flex items-center gap-1.5">${actionsHtml}</div></td>
+                    </tr>`;
+                }).join('');
                 tbody.querySelectorAll('.view-pending-yara-btn').forEach(btn => {
                     btn.addEventListener('click', () => viewPendingYaraRule(btn.getAttribute('data-filename')));
                 });
-                tbody.querySelectorAll('.approve-pending-yara-btn').forEach(btn => {
-                    btn.addEventListener('click', () => approvePendingYaraRule(btn.getAttribute('data-filename')));
-                });
-                tbody.querySelectorAll('.reject-pending-yara-btn').forEach(btn => {
-                    btn.addEventListener('click', () => rejectPendingYaraRule(btn.getAttribute('data-filename')));
-                });
+                if (isAdmin) {
+                    tbody.querySelectorAll('.approve-pending-yara-btn').forEach(btn => {
+                        btn.addEventListener('click', () => approvePendingYaraRule(btn.getAttribute('data-filename')));
+                    });
+                    tbody.querySelectorAll('.reject-pending-yara-btn').forEach(btn => {
+                        btn.addEventListener('click', () => rejectPendingYaraRule(btn.getAttribute('data-filename')));
+                    });
+                }
             } else {
                 tbody.innerHTML = '<tr><td colspan="6" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">No pending rules</td></tr>';
             }
         } catch (error) {
             console.error('Error loading pending YARA:', error);
             tbody.innerHTML = '<tr><td colspan="6" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">Error loading pending</td></tr>';
-        }
-    }
-
-    async function loadYaraMyPending() {
-        const tbody = document.getElementById('yaraMyPendingTableBody');
-        if (!tbody) return;
-        const section = document.getElementById('yaraMyPendingSection');
-        if (section && section.classList.contains('hidden')) return;
-        try {
-            const response = await fetch('/api/yara/my-pending');
-            const result = await response.json();
-            if (result.success && result.files && result.files.length > 0) {
-                tbody.innerHTML = result.files.map(f => `
-                    <tr class="border border-white/10">
-                        <td class="border border-white/10 px-4 py-2 text-sm font-mono">${escapeHtml(f.filename)}</td>
-                        <td class="border border-white/10 px-4 py-2 text-sm text-secondary truncate max-w-xs" title="${escapeAttr((f.comment || '').trim())}" dir="${typeof detectTextDir==='function'?detectTextDir(f.comment||''):'auto'}">${escapeHtml(f.comment || '-')}</td>
-                        <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.upload_date || '-')}</td>
-                        <td class="border border-white/10 px-4 py-2"><span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-500/20 text-amber-400 border border-amber-500/40">Pending</span></td>
-                        <td class="border border-white/10 px-3 py-2">
-                            <button type="button" class="btn-cmd-primary btn-cmd-sm view-my-pending-yara-btn" data-filename="${escapeAttr(f.filename)}">${t('actions.view')}</button>
-                        </td>
-                    </tr>
-                `).join('');
-                tbody.querySelectorAll('.view-my-pending-yara-btn').forEach(btn => {
-                    btn.addEventListener('click', () => viewPendingYaraRule(btn.getAttribute('data-filename')));
-                });
-            } else {
-                tbody.innerHTML = '<tr><td colspan="5" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">No pending uploads</td></tr>';
-            }
-        } catch (error) {
-            console.error('Error loading my pending YARA:', error);
-            tbody.innerHTML = '<tr><td colspan="5" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">Error loading</td></tr>';
         }
     }
 
@@ -522,6 +513,13 @@
             showToast(d.message || (d.success ? 'Updated' : 'Failed'), d.success ? 'success' : 'error');
             if (d.success) {
                 closeYaraMetaEditModal();
+                if (d.moved_to_pending) {
+                    if (typeof loadYaraRules === 'function') loadYaraRules();
+                    const pendingSec = document.getElementById('yaraPendingSection');
+                    if (pendingSec) pendingSec.classList.remove('hidden');
+                    if (typeof loadYaraPending === 'function') await loadYaraPending();
+                    setTimeout(function () { pendingSec && pendingSec.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 100);
+                }
                 const searchInput = document.getElementById('searchInput');
                 const searchButton = document.getElementById('searchButton');
                 if (searchInput && searchInput.value.trim() && searchButton) {
@@ -535,6 +533,5 @@
 
     global.loadYaraRules = loadYaraRules;
     global.loadYaraPending = loadYaraPending;
-    global.loadYaraMyPending = loadYaraMyPending;
     global.openYaraMetaEditModal = openYaraMetaEditModal;
 })(typeof window !== 'undefined' ? window : this);

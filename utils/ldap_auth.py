@@ -38,6 +38,38 @@ def is_production_env() -> bool:
     return env == 'production'
 
 
+def try_ldap_bind_servers(
+    servers: list[dict],
+    user_filter: str,
+    username: str,
+    password: str,
+) -> tuple[bool, str | None]:
+    """
+    Try LDAP bind against a list of servers in order.
+    Stops at the first successful bind. Returns (success, display_name or None).
+    Each server dict: {"url": str, "base_dn": str, "bind_dn": str, "bind_password": str}.
+    """
+    if not servers:
+        return False, None
+    for s in servers:
+        url = (s.get("url") or "").strip()
+        base_dn = (s.get("base_dn") or "").strip()
+        if not url or not base_dn:
+            continue
+        ok, display_name = try_ldap_bind(
+            url,
+            base_dn,
+            (s.get("bind_dn") or "").strip(),
+            s.get("bind_password") or "",
+            user_filter,
+            username,
+            password,
+        )
+        if ok:
+            return True, display_name
+    return False, None
+
+
 def try_ldap_bind(
     ldap_url: str,
     base_dn: str,

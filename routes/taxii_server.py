@@ -10,6 +10,17 @@ from datetime import datetime
 from flask import Blueprint, Response, request
 
 
+def _taxii_feeds_disabled_response():
+    """Return 503 response when feeds_public_enabled is false; else None."""
+    try:
+        from app import _get_setting
+        if _get_setting('feeds_public_enabled', 'true').strip().lower() != 'true':
+            return _taxii_json_response({'error': 'Feeds are not available. Enable in Admin Settings.'}, status=503)
+    except Exception:
+        pass
+    return None
+
+
 TAXII_MEDIA_TYPE = 'application/taxii+json;version=2.1'
 STIX_MEDIA_TYPE = 'application/stix+json;version=2.1'
 
@@ -147,6 +158,9 @@ def get_objects(collection_id):
     """
     TAXII 2.1 Get Objects. Envelope with STIX 2.1 indicators; pagination (limit, next, added_after); match[id], match[type], match[spec_version].
     """
+    r = _taxii_feeds_disabled_response()
+    if r is not None:
+        return r
     if collection_id != COLLECTION_ID:
         return _taxii_json_response({'error': 'Collection not found'}, status=404)
     if not _check_accept():
@@ -188,6 +202,9 @@ def get_objects(collection_id):
 @bp.route(f'/{API_ROOT_ID}/collections/<collection_id>/objects/<path:object_id>/', methods=['GET'])
 def get_object(collection_id, object_id):
     """TAXII 2.1 Get an Object by id. Returns envelope with single STIX object or 404."""
+    r = _taxii_feeds_disabled_response()
+    if r is not None:
+        return r
     if collection_id != COLLECTION_ID:
         return _taxii_json_response({'error': 'Collection not found'}, status=404)
     if not _check_accept():
@@ -205,6 +222,9 @@ def get_object(collection_id, object_id):
 @bp.route(f'/{API_ROOT_ID}/collections/<collection_id>/manifest/', methods=['GET'])
 def get_manifest(collection_id):
     """TAXII 2.1 Get Object Manifests. Same pagination and match[] as Get Objects; returns manifest records."""
+    r = _taxii_feeds_disabled_response()
+    if r is not None:
+        return r
     if collection_id != COLLECTION_ID:
         return _taxii_json_response({'error': 'Collection not found'}, status=404)
     if not _check_accept():
@@ -247,6 +267,9 @@ def get_manifest(collection_id):
 @bp.route(f'/{API_ROOT_ID}/collections/<collection_id>/objects/<path:object_id>/versions/', methods=['GET'])
 def get_object_versions(collection_id, object_id):
     """TAXII 2.1 Get Object Versions. ZIoCHub has one version per indicator."""
+    r = _taxii_feeds_disabled_response()
+    if r is not None:
+        return r
     if collection_id != COLLECTION_ID:
         return _taxii_json_response({'error': 'Collection not found'}, status=404)
     if not _check_accept():

@@ -183,19 +183,14 @@ function updateAuthUI() {
             else playbookAdminActions.classList.add('hidden');
         }
         const yaraPendingSection = document.getElementById('yaraPendingSection');
-        if (yaraPendingSection) {
-            if (authState.is_admin) yaraPendingSection.classList.remove('hidden');
-            else yaraPendingSection.classList.add('hidden');
-        }
-        const yaraMyPendingSection = document.getElementById('yaraMyPendingSection');
-        if (yaraMyPendingSection) yaraMyPendingSection.classList.remove('hidden');
+        if (yaraPendingSection) yaraPendingSection.classList.remove('hidden');
     } else {
         loginEl.classList.remove('hidden');
         if (profileEl) profileEl.classList.add('hidden');
         logoutEl.classList.add('hidden');
         if (adminEl) adminEl.classList.add('hidden');
-        const yaraMyPendingSection = document.getElementById('yaraMyPendingSection');
-        if (yaraMyPendingSection) yaraMyPendingSection.classList.add('hidden');
+        const yaraPendingSection = document.getElementById('yaraPendingSection');
+        if (yaraPendingSection) yaraPendingSection.classList.add('hidden');
         const feedPulseAllowlistBtn = document.getElementById('feedPulseAllowlistBtn');
         if (feedPulseAllowlistBtn) feedPulseAllowlistBtn.classList.add('hidden');
     }
@@ -403,9 +398,10 @@ async function switchTab(tabId, skipHash) {
     }
 
     if (tabId === 'yara') {
+        var pendingSec = document.getElementById('yaraPendingSection');
+        if (authState && authState.authenticated && pendingSec) pendingSec.classList.remove('hidden');
         loadYaraRules();
-        if (authState && authState.is_admin) loadYaraPending();
-        if (authState && authState.authenticated) loadYaraMyPending();
+        if (authState && authState.authenticated) loadYaraPending();
     }
 
     if (tabId === 'campaigns') {
@@ -516,6 +512,8 @@ function showAchievementModal(result) {
     var rankEl = document.getElementById('achievementRankUp');
     var nicknameEl = document.getElementById('achievementNewNickname');
     if (!modal || !list) return;
+    // Play sound first so it starts with (or before) the popup; avoids delay from modal render + AudioContext resume
+    playAchievementSound();
     list.innerHTML = '';
     if (pointsEl) { pointsEl.classList.add('hidden'); pointsEl.innerHTML = ''; }
     if (gaugeEl) { gaugeEl.classList.add('hidden'); gaugeEl.innerHTML = ''; }
@@ -618,7 +616,6 @@ function showAchievementModal(result) {
         });
     }
     modal.classList.remove('hidden');
-    playAchievementSound();
     // Refresh Champs/LAVAL so points and ladder show updated score
     if (typeof window.loadChampsAnalysis === 'function') window.loadChampsAnalysis();
 }

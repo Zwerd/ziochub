@@ -85,6 +85,8 @@
                     const avatarUrl = a.avatar_url || '';
                     const displayName = escapeHtml(a.display_name || a.username || a.analyst);
                     const avatarSize = 'w-11 h-11';
+                    const isInactive = a.is_active === false;
+                    const avatarInactiveClass = isInactive ? ' grayscale opacity-70' : '';
                     const avatarHtml = avatarUrl
                         ? `<img src="${escapeAttr(avatarUrl)}" alt="" class="w-full h-full object-cover" onerror="this.onerror=null;this.parentElement.innerHTML='<span class=\\'text-lg\\'>👤</span>'">`
                         : '<span class="text-sm">👤</span>';
@@ -92,9 +94,9 @@
                         ? `<span class="champs-medal-circle champs-medal-circle-${a.rank} champs-rank-slot flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center text-2xl border-2" title="Rank ${a.rank}">${medal}</span>`
                         : `<span class="champs-rank-slot champs-rank-num flex-shrink-0 w-12 h-12 flex items-center justify-center font-extrabold text-secondary text-lg">${a.rank}</span>`;
                     return `
-                        <button type="button" class="champs-ladder-row ${rankClass} w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-white/10 hover:bg-white/5 transition-all text-left" data-index="${i}" title="${a.score} pts">
+                        <button type="button" class="champs-ladder-row ${rankClass} w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-white/10 hover:bg-white/5 transition-all text-left" data-index="${i}" title="${a.score} pts${isInactive ? ' (inactive)' : ''}">
                             ${rankSlot}
-                            <span class="flex-shrink-0 ${avatarSize} rounded-full overflow-hidden bg-slate-600/50 flex items-center justify-center ring-2 ring-white/5">
+                            <span class="flex-shrink-0 ${avatarSize} rounded-full overflow-hidden bg-slate-600/50 flex items-center justify-center ring-2 ring-white/5${avatarInactiveClass}">
                                 ${avatarHtml}
                             </span>
                             <div class="flex-1 min-w-0">
@@ -394,10 +396,11 @@
             ? `<div class="flex items-baseline gap-2 flex-wrap min-w-0"><h3 class="text-2xl font-extrabold accent-blue truncate">${name}</h3><span class="text-secondary font-medium text-base whitespace-nowrap">${nicknamePart}</span></div>`
             : `<h3 class="text-2xl font-extrabold accent-blue truncate">${name}</h3>`;
         const roleDescHtml = roleDesc ? `<p class="text-secondary font-medium mt-0.5">${escapeHtml(roleDesc)}</p>` : '';
+        const spotlightInactiveClass = data.is_active === false ? ' grayscale opacity-70' : '';
         content.innerHTML = `
             <div class="champs-spotlight-card rounded-lg border border-white/10 bg-tertiary/80 p-4 flex-1 min-h-0 flex flex-col overflow-auto">
                 <div class="champs-spotlight-header flex items-stretch gap-4 mb-4 flex-shrink-0">
-                    <span class="champs-spotlight-avatar w-20 h-20 rounded-full overflow-hidden bg-slate-600/50 flex items-center justify-center ring-4 ring-cyan-500/30 flex-shrink-0">${avatarHtml}</span>
+                    <span class="champs-spotlight-avatar w-20 h-20 rounded-full overflow-hidden bg-slate-600/50 flex items-center justify-center ring-4 ring-cyan-500/30 flex-shrink-0${spotlightInactiveClass}">${avatarHtml}</span>
                     <div class="min-w-0 flex-1 flex flex-col justify-center">
                         ${nameLineHtml}
                         ${roleDescHtml}
@@ -448,6 +451,7 @@
         const xpPct = a.level_width ? Math.min(100, 100 * (a.xp_in_level || 0) / a.level_width) : 0;
         const badges = (a.badges || []).map(b => ({ key: b, label: BADGE_LABELS[b] || b, cls: BADGE_CLASSES[b] || '' })).filter(x => x.label);
         const avatarHtml = a.avatar_url ? `<img src="${escapeAttr(a.avatar_url)}" alt="" class="w-full h-full object-cover" onerror="this.parentElement.innerHTML='<span class=\\'text-2xl\\'>👤</span>'">` : '<span class="text-2xl">👤</span>';
+        const fullSpotlightInactiveClass = a.is_active === false ? ' grayscale opacity-70' : '';
         const analystChartName = (a.display_name || a.nickname || a.analyst || 'You').trim() || 'You';
         let chartHtml = '';
         champsMispData = (a.misp_per_day && a.misp_per_day.length > 0) ? a.misp_per_day : null;
@@ -477,7 +481,7 @@
             <div class="champs-spotlight-card rounded-lg border border-white/10 bg-tertiary/80 p-4 champs-spotlight-glow flex-1 min-h-0 flex flex-col overflow-auto">
                 <div class="champs-spotlight-grid flex-shrink-0 mb-4">
                     <div class="champs-spotlight-header-cell flex items-center gap-4 min-w-0">
-                        <span class="champs-spotlight-avatar w-24 h-24 rounded-full overflow-hidden bg-slate-600/50 flex items-center justify-center ring-4 ring-cyan-500/40 flex-shrink-0">${avatarHtml}</span>
+                        <span class="champs-spotlight-avatar w-24 h-24 rounded-full overflow-hidden bg-slate-600/50 flex items-center justify-center ring-4 ring-cyan-500/40 flex-shrink-0${fullSpotlightInactiveClass}">${avatarHtml}</span>
                         <div class="champs-spotlight-name-area flex flex-col justify-center min-w-0">
                             ${nameLineHtml}
                             ${roleDescHtml}

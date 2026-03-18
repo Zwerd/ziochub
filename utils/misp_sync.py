@@ -10,6 +10,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from utils.validation import validate_ioc
+from utils.ioc_aggregate_fields import compute_ioc_aggregate_fields
 
 _log = logging.getLogger('ziochub.misp')
 
@@ -235,10 +236,12 @@ def sync_to_db(
     misp_user_id: int,
     misp_username: str,
     default_ttl_days: int | None = None,
+    geoip_reader=None,
 ) -> dict:
     """
     Insert MISP attributes into ZIoCHub DB.
     Must be called within Flask app context.
+    geoip_reader: optional geoip2 Reader for filling country_code on IPs (Live Stats).
     Returns summary: {added, skipped, errors}
     """
     from extensions import db
@@ -285,6 +288,9 @@ def sync_to_db(
             comment_parts.append(attr_comment)
         comment = ' | '.join(comment_parts) if comment_parts else '[MISP Import]'
 
+        # Live Stats: fill country_code (IP), tld (Domain/URL), email_domain (Email)
+        agg = compute_ioc_aggregate_fields(tg_type, value, geoip_reader)
+
         try:
             ioc = IOC(
                 type=tg_type,
@@ -294,6 +300,9 @@ def sync_to_db(
                 comment=comment[:1000],
                 expiration_date=exp_date,
                 user_id=misp_user_id,
+                country_code=agg.get('country_code'),
+                tld=agg.get('tld'),
+                email_domain=agg.get('email_domain'),
             )
             db.session.add(ioc)
             db.session.add(IocHistory(
@@ -451,7 +460,13 @@ def run_sync(settings: dict, log_lines: list | None = None) -> dict:
         log('Fetch attributes from MISP', 'ok', f'Fetched {len(attrs)} attributes')
 
         log('Insert into ZIoCHub', 'ok', 'Writing to database...')
-        result = sync_to_db(attrs, user_id, username, default_ttl)
+        geoip_reader = None
+        try:
+            from app import geoip_reader as _gr
+            geoip_reader = _gr
+        except ImportError:
+            pass
+        result = sync_to_db(attrs, user_id, username, default_ttl, geoip_reader=geoip_reader)
         result['success'] = True
         result['fetched'] = len(attrs)
         log('Insert into ZIoCHub', 'ok', f"Added: {result.get('added', 0)}, skipped: {result.get('skipped', 0)}, errors: {result.get('errors', 0)}")

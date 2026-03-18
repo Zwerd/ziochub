@@ -16,33 +16,23 @@ body, input, select, textarea, button, label, .tab-button {
     scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }
 
-/* Badge colors for hash types */
-.badge-md5 {
-    background-color: #800080;
-    color: #fff;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-
-.badge-sha256 {
-    background-color: #0000FF;
-    color: #fff;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-
+/* Badge type base + modifiers (UI-DESIGN-REVIEW: single base, color modifiers) */
+.badge-type,
+.badge-md5,
+.badge-sha256,
 .badge-hash {
-    background-color: #6c757d;
-    color: #fff;
     padding: 2px 8px;
     border-radius: 4px;
     font-size: 0.75rem;
     font-weight: 600;
+    color: #fff;
 }
+.badge-type--md5,
+.badge-md5 { background-color: #800080; }
+.badge-type--sha256,
+.badge-sha256 { background-color: #0000FF; }
+.badge-type--hash,
+.badge-hash { background-color: #6c757d; }
 
 /* Modal overlays: .hidden must always hide (Tailwind .flex can override .hidden otherwise) */
 #editModal.hidden,
@@ -52,6 +42,109 @@ body, input, select, textarea, button, label, .tab-button {
 #campaignEditModal.hidden,
 #yaraMetaEditModal.hidden {
     display: none !important;
+}
+
+/* Tab content: .hidden must always hide (moved from index.html inline) */
+.tab-content.hidden {
+    display: none !important;
+}
+
+/* Staging row edit highlight (moved from index.html inline) */
+.txt-staging-row-editing td[data-field] {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: -1px;
+    background-color: rgba(0, 212, 255, 0.08);
+}
+
+/* Header bar: solid background only (no glass); avoids global .bg-secondary override */
+.header-bar {
+    background-color: var(--bg-secondary) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+}
+.header-bar .bg-tertiary {
+    background-color: var(--bg-tertiary) !important;
+}
+
+/* Card panel: unified panel style (replaces repeated Tailwind string) */
+.card-panel {
+    background: var(--glass-bg);
+    border: var(--glass-border);
+    border-radius: 12px;
+    box-shadow: var(--card-shadow);
+    overflow: hidden;
+    color: var(--text-primary);
+}
+.card-panel--compact {
+    padding: 0.75rem 1rem;
+}
+
+/* Modal dialog: unified inner content box for all modals */
+.modal-dialog {
+    background: var(--glass-bg);
+    border: var(--glass-border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    max-width: 28rem;
+    width: 100%;
+    margin-left: 1rem;
+    margin-right: 1rem;
+    box-shadow: var(--card-shadow);
+}
+.modal-dialog--lg {
+    max-width: 32rem;
+}
+
+/* Report card: single class for Reports tab (replaces long repeated string) */
+.report-card {
+    background: var(--glass-bg);
+    border: var(--glass-border);
+    border-radius: 12px;
+    padding: 1rem;
+    box-shadow: var(--card-shadow);
+    min-width: 0;
+}
+
+/* Live Stats: stat icon glow by type (replaces inline filter styles) */
+.stat-icon {
+    font-size: 1.875rem;
+    filter: drop-shadow(0 0 12px currentColor) drop-shadow(0 0 24px currentColor);
+    opacity: 0.9;
+}
+.stat-icon--ip { color: rgba(34, 211, 238, 0.95); }
+.stat-icon--domain { color: rgba(129, 140, 248, 0.95); }
+.stat-icon--hash { color: rgba(244, 63, 94, 0.95); }
+.stat-icon--email { color: rgba(251, 191, 36, 0.95); }
+.stat-icon--url { color: rgba(236, 72, 153, 0.95); }
+.stat-icon--yara { color: rgba(234, 179, 8, 0.95); }
+
+/* Campaign network canvas: theme vars (replaces inline style) */
+.campaign-network-canvas {
+    border-color: var(--border-color);
+    background: var(--bg-secondary);
+}
+
+/* Modal close button: unified look for Close/Cancel in modals */
+.modal-close-btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 0.375rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.modal-close-btn:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
+}
+[data-theme="light"] .modal-close-btn {
+    border-color: rgba(0, 0, 0, 0.2);
+}
+[data-theme="light"] .modal-close-btn:hover {
+    background: rgba(0, 0, 0, 0.05);
 }
 
 /* Sticky Live Stats Dashboard */
@@ -1118,6 +1211,13 @@ div:has(.tab-button):active {
     transition: all 0.3s ease;
     border: none;
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); /* shadow-md */
+}
+/* When used on links (e.g. Export All CSV) */
+a.btn-cmd-primary,
+a.btn-cmd-neutral {
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
 }
 
 /* Primary Button - Blue to Cyan Gradient (Positive Actions) */

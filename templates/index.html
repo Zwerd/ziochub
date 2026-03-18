@@ -18,14 +18,7 @@
     <script src="{{ url_for('static', filename='js/prism.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/prism-clike.min.js') }}"></script>
     <style>
-        /* Override glass for header: solid bg (style.css has .bg-secondary in card rule) */
-        .bg-secondary { background-color: var(--bg-secondary); }
-        .bg-tertiary { background-color: var(--bg-tertiary); }
-
-        /* Tab visibility override */
-        .tab-content.hidden { display: none !important; }
-
-        /* Tab fade-in animation */
+        /* Tab fade-in animation (tab-content.hidden and staging moved to style.css) */
         .tab-content:not(.hidden) {
             animation: tabFadeIn 0.25s ease-out;
         }
@@ -33,21 +26,13 @@
             from { opacity: 0; transform: translateY(6px); }
             to   { opacity: 1; transform: translateY(0); }
         }
-
-        /* Staging row edit highlight */
-        .txt-staging-row-editing td[data-field] {
-            outline: 2px solid var(--accent-blue);
-            outline-offset: -1px;
-            background-color: rgba(0, 212, 255, 0.08);
-        }
-
         /* RTL support */
         [dir="rtl"] { direction: rtl; }
     </style>
 </head>
-<body class="bg-primary text-primary h-screen w-screen overflow-hidden flex flex-col" data-authenticated="{{ '1' if authenticated else '0' }}" data-user-id="{{ user_id or '' }}" data-mute-sound="{{ '1' if mute_sound else '0' }}" data-ambition-popup-disabled="{{ '1' if ambition_popup_disabled else '0' }}" data-achievement-popup-disabled="{{ '1' if achievement_popup_disabled else '0' }}">
-    <!-- Top Bar -->
-    <header class="border-b-2 border-white/10 bg-secondary sticky top-0 z-50 neon-header backdrop-blur-md flex-shrink-0">
+<body class="bg-primary text-primary h-screen w-screen overflow-hidden flex flex-col" data-authenticated="{{ '1' if authenticated else '0' }}" data-user-id="{{ user_id or '' }}" data-mute-sound="{{ '1' if mute_sound else '0' }}" data-ambition-popup-disabled="{{ '1' if ambition_popup_disabled else '0' }}" data-achievement-popup-disabled="{{ '1' if achievement_popup_disabled else '0' }}" data-search-comment-rtl="{{ '1' if search_comment_rtl_by_script else '0' }}">
+    <!-- Top Bar (header-bar = solid bg, no glass override) -->
+    <header class="header-bar border-b-2 border-white/10 bg-secondary sticky top-0 z-50 neon-header backdrop-blur-md flex-shrink-0">
         <div class="navbar-container">
             <!-- LEFT: Logo + Navigation Tabs -->
             <div class="navbar-left">
@@ -130,43 +115,43 @@
                     <!-- Sticky Summary Cards (5 metrics) - Power Badge layout -->
                     <div class="stats-sticky-header flex-shrink-0">
                         <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
-                            <div class="bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
-                                <span class="text-3xl filter drop-shadow-lg opacity-90" style="filter: drop-shadow(0 0 12px rgba(34, 211, 238, 0.6)) drop-shadow(0 0 24px rgba(34, 211, 238, 0.3));">🛡️</span>
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--ip">🛡️</span>
                                 <div class="text-right flex flex-col items-end">
                                     <span class="text-3xl font-bold text-primary" id="statIP">-</span>
                                     <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.blocked_ips">Total Active IPs</span>
                                 </div>
                             </div>
-                            <div class="bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
-                                <span class="text-3xl filter drop-shadow-lg opacity-90" style="filter: drop-shadow(0 0 12px rgba(129, 140, 248, 0.6)) drop-shadow(0 0 24px rgba(129, 140, 248, 0.3));">🌐</span>
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--domain">🌐</span>
                                 <div class="text-right flex flex-col items-end">
                                     <span class="text-3xl font-bold text-primary" id="statDomain">-</span>
                                     <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.blocked_domains">Total Active Domains</span>
                                 </div>
                             </div>
-                            <div class="bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
-                                <span class="text-3xl filter drop-shadow-lg opacity-90" style="filter: drop-shadow(0 0 12px rgba(244, 63, 94, 0.6)) drop-shadow(0 0 24px rgba(244, 63, 94, 0.3));">☣️</span>
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--hash">☣️</span>
                                 <div class="text-right flex flex-col items-end">
                                     <span class="text-3xl font-bold text-primary" id="statHash">-</span>
                                     <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.blocked_hashes">Total Active Hashes</span>
                                 </div>
                             </div>
-                            <div class="bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
-                                <span class="text-3xl filter drop-shadow-lg opacity-90" style="filter: drop-shadow(0 0 12px rgba(251, 191, 36, 0.6)) drop-shadow(0 0 24px rgba(251, 191, 36, 0.3));">📨</span>
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--email">📨</span>
                                 <div class="text-right flex flex-col items-end">
                                     <span class="text-3xl font-bold text-primary" id="statEmail">-</span>
                                     <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.blocked_emails">Total Active Emails</span>
                                 </div>
                             </div>
-                            <div class="bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
-                                <span class="text-3xl filter drop-shadow-lg opacity-90" style="filter: drop-shadow(0 0 12px rgba(236, 72, 153, 0.6)) drop-shadow(0 0 24px rgba(236, 72, 153, 0.3));">🔗</span>
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--url">🔗</span>
                                 <div class="text-right flex flex-col items-end">
                                     <span class="text-3xl font-bold text-primary" id="statURL">-</span>
                                     <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.blocked_urls">Total Active URLs</span>
                                 </div>
                             </div>
-                            <div class="bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
-                                <span class="text-3xl filter drop-shadow-lg opacity-90" style="filter: drop-shadow(0 0 12px rgba(234, 179, 8, 0.6)) drop-shadow(0 0 24px rgba(234, 179, 8, 0.3));">📜</span>
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--yara">📜</span>
                                 <div class="text-right flex flex-col items-end">
                                     <span class="text-3xl font-bold text-primary" id="statYara">-</span>
                                     <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.active_yara">Total Active YARA</span>
@@ -249,7 +234,7 @@
                             <button id="searchButton" 
                                     class="btn-cmd-primary"
                                     data-i18n="search.button">Search</button>
-                            <a href="/api/export-all" id="exportAllCsvBtn" class="px-4 py-2 rounded font-semibold bg-purple-600 hover:bg-purple-700 text-white transition" download data-i18n="search.export_all">Export All CSV</a>
+                            <a href="/api/export-all" id="exportAllCsvBtn" class="btn-cmd-primary" download data-i18n="search.export_all">Export All CSV</a>
                         </div>
                     </div>
                     <div id="searchResults" class="hidden">
@@ -616,30 +601,10 @@
                     <div class="mt-4 flex flex-wrap gap-2">
                         <button type="button" id="yaraSubmitBtn" class="btn-cmd-primary w-full md:w-auto" data-i18n="yara.submit_btn">Submit YARA Rule</button>
                     </div>
-                    <!-- My uploads - Pending approval (any logged-in analyst) -->
-                    <div id="yaraMyPendingSection" class="hidden mt-6">
-                        <h3 class="text-xl font-bold mb-3 accent-blue" data-i18n="yara.my_pending_title">Your uploads - Pending approval</h3>
-                        <p class="text-secondary text-sm mb-2" data-i18n="yara.my_pending_hint">These rules will appear in the feed after an admin approves them.</p>
-                        <div class="overflow-x-auto rounded-lg border border-white/10 mb-4">
-                            <table class="w-full border-collapse">
-                                <thead>
-                                    <tr class="bg-tertiary">
-                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.name">Rule Name</th>
-                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.comment">Comment</th>
-                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.date">Date</th>
-                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold">Status</th>
-                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.actions">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="yaraMyPendingTableBody">
-                                    <tr><td colspan="5" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">No pending uploads</td></tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                    <!-- Pending approval (admin only) -->
+                    <!-- Pending approval (one section: analyst sees own, admin sees all with Approve/Reject) -->
                     <div id="yaraPendingSection" class="hidden mt-6">
                         <h3 class="text-xl font-bold mb-3 accent-blue" data-i18n="yara.pending_title">Pending Approval</h3>
+                        <p class="text-secondary text-sm mb-2" data-i18n="yara.my_pending_hint">Rules waiting for admin approval. They will appear in the feed once approved.</p>
                         <div class="overflow-x-auto rounded-lg border border-white/10 mb-4">
                             <table class="w-full border-collapse">
                                 <thead>
@@ -768,7 +733,7 @@
                         </aside>
                         <!-- Center: Graph (fills remaining space) -->
                         <div class="flex-1 min-w-0 min-h-0 flex flex-col">
-                            <div id="campaign-network" class="w-full h-full min-h-0 rounded-xl border-2" style="border-color: var(--border-color); background: var(--bg-secondary);"></div>
+                            <div id="campaign-network" class="campaign-network-canvas w-full h-full min-h-0 rounded-xl border-2"></div>
                         </div>
                         <!-- Right Sidebar: Create Campaign + Link IOC -->
                         <aside class="w-[300px] flex-shrink-0 flex flex-col gap-3 min-h-0">
@@ -982,7 +947,7 @@
                         <div class="bg-secondary rounded-lg shadow-xl border border-white/10 w-full max-w-2xl max-h-[85vh] flex flex-col mx-4">
                             <div class="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-white/10">
                                 <h3 class="text-lg font-bold accent-blue" data-i18n="feedpulse.allowlist_title">Allowlist (read-only)</h3>
-                                <button type="button" id="feedPulseAllowlistModalClose" class="text-secondary hover:text-primary p-1 rounded" aria-label="Close">&times;</button>
+                                <button type="button" id="feedPulseAllowlistModalClose" class="btn-cmd-neutral modal-close-btn" aria-label="Close">&times;</button>
                             </div>
                             <div class="flex-1 min-h-0 overflow-hidden p-4">
                                 <p class="text-xs text-secondary mb-2" data-i18n="feedpulse.allowlist_hint">Content managed by Admin. Lines starting with # are comments.</p>
@@ -1032,7 +997,7 @@
                                         <p class="report-section-sub text-xs text-secondary/80 mt-0.5">KPIs • Summary • Trends</p>
                                     </div>
                                     <div id="reportKpiCards" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4"></div>
-                                    <div id="reportExecSummary" class="bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg text-sm text-secondary"></div>
+                                    <div id="reportExecSummary" class="report-card text-sm text-secondary"></div>
                                 </div>
 
                                 <!-- Section 2: Team Operations & IOC Intelligence (Champs-style) -->
@@ -1042,60 +1007,60 @@
                                         <p class="report-section-sub text-xs text-secondary/80 mt-0.5">Charts • Distribution • Intelligence</p>
                                     </div>
                                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-                                        <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0">
+                                        <div class="report-card">
                                             <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.type_dist">IOC Type Distribution</h4>
                                             <div class="h-[200px] relative"><canvas id="reportTypeChart"></canvas></div>
                                         </div>
-                                        <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0">
+                                        <div class="report-card">
                                             <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.sub_rate">Submission Rate</h4>
                                             <div class="report-rate-chart-wrap flex-1 min-h-[260px] relative"><canvas id="reportRateChart"></canvas></div>
                                         </div>
                                     </div>
                                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                                        <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0">
+                                        <div class="report-card">
                                             <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.top_countries">Top Countries</h4>
                                             <div id="reportTopCountries" class="country-leaderboard space-y-1 text-sm"></div>
                                         </div>
-                                        <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0">
+                                        <div class="report-card">
                                             <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.top_campaigns">Top Campaigns</h4>
                                             <div id="reportTopCampaigns" class="country-leaderboard space-y-1 text-sm"></div>
                                         </div>
-                                        <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0">
+                                        <div class="report-card">
                                             <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.sub_methods">Submission Methods</h4>
                                             <div id="reportSubMethods" class="country-leaderboard space-y-1 text-sm"></div>
                                         </div>
                                     </div>
-                                    <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0 mb-4">
+                                    <div class="report-card mb-4">
                                         <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.campaigns_created">Campaigns Created by Analyst</h4>
                                         <div id="reportCampaignsCreated" class="space-y-0 text-sm min-h-[200px] max-h-[400px] overflow-y-auto custom-scrollbar flex flex-col items-stretch"></div>
                                     </div>
                                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                                        <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0">
+                                        <div class="report-card">
                                             <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.expiration">Expiration Policy</h4>
                                             <div id="reportExpiration" class="country-leaderboard space-y-1 text-sm"></div>
                                         </div>
-                                        <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0">
+                                        <div class="report-card">
                                             <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.tld_intel">TLD Intelligence</h4>
                                             <div class="h-[160px] relative"><canvas id="reportTldChart"></canvas></div>
                                         </div>
-                                        <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0">
+                                        <div class="report-card">
                                             <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.ioc_quality">IOC Quality</h4>
                                             <div id="reportIocQuality" class="space-y-1 text-sm"></div>
                                         </div>
                                     </div>
                                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0">
+                                        <div class="report-card">
                                             <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.anomalies">Feed Anomalies</h4>
                                             <div id="reportAnomalies" class="space-y-1 text-sm"></div>
                                         </div>
-                                        <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0">
+                                        <div class="report-card">
                                             <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.yara_quality">YARA Quality</h4>
                                             <div class="flex flex-col gap-3">
                                                 <div class="h-[120px] relative min-h-0"><canvas id="reportYaraChart"></canvas></div>
                                                 <div id="reportYaraQuality" class="space-y-1 text-sm"></div>
                                             </div>
                                         </div>
-                                        <div class="report-card bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg min-w-0">
+                                        <div class="report-card">
                                             <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.rare_finds">Rare Finds</h4>
                                             <div id="reportRareFinds" class="space-y-1 text-sm"></div>
                                         </div>
@@ -1143,7 +1108,7 @@
 
     <!-- Edit Modal -->
     <div id="editModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm">
+        <div class="modal-dialog bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm">
             <h3 class="text-xl font-bold mb-3 accent-blue" data-i18n="edit.title">Edit IOC</h3>
             <form id="editForm" class="space-y-3">
                 <input type="hidden" id="editIocType">
@@ -1200,7 +1165,7 @@
 
     <!-- Delete IOC modal: require reason before revoke -->
     <div id="deleteIocModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm border border-white/10">
+        <div class="modal-dialog bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm border border-white/10">
             <h3 id="deleteIocModalTitle" class="text-xl font-bold text-red-400 mb-2" data-i18n="delete_modal.title">Delete IOC</h3>
             <p id="deleteIocModalMessage" class="text-sm text-white/90 mb-3" data-i18n="delete_modal.message">You must provide a description of why this indicator is being deleted.</p>
             <input type="hidden" id="deleteIocValue">
@@ -1316,7 +1281,7 @@
 
     <!-- Playbook Delete confirmation modal -->
     <div id="playbookDeleteConfirmModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 border border-white/10 shadow-xl">
+        <div class="modal-dialog bg-secondary rounded-lg p-6 max-w-md w-full mx-4 border border-white/10 shadow-xl">
             <div class="flex items-start gap-3">
                 <span class="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/30 flex items-center justify-center text-red-400 text-xl" aria-hidden="true">⚠</span>
                 <div class="flex-1 min-w-0">
@@ -1333,7 +1298,7 @@
 
     <!-- IOC History modal (read-only timeline) - max height + scroll inside list -->
     <div id="iocHistoryModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-secondary rounded-lg p-6 max-w-lg w-full mx-4 max-h-[90vh] flex flex-col border border-white/10 min-w-0 overflow-hidden">
+        <div class="modal-dialog modal-dialog--lg bg-secondary rounded-lg p-6 max-w-lg w-full mx-4 max-h-[90vh] flex flex-col border border-white/10 min-w-0 overflow-hidden">
             <h3 id="iocHistoryTitle" class="text-xl font-bold accent-blue mb-3 flex-shrink-0 min-w-0 break-all">History</h3>
             <div id="iocHistoryList" class="history-modal-scroll overflow-y-auto overflow-x-hidden flex-1 min-h-0 min-w-0 text-sm space-y-2 mb-2 break-all"></div>
             <div id="iocHistoryNotesSection" class="border-t border-white/10 pt-3 mt-1 flex-shrink-0">
@@ -1348,7 +1313,7 @@
 
     <!-- Add Note modal -->
     <div id="addNoteModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 border border-white/10">
+        <div class="modal-dialog bg-secondary rounded-lg p-6 max-w-md w-full mx-4 border border-white/10">
             <h3 id="addNoteTitle" class="text-xl font-bold accent-blue mb-1" data-i18n="notes.modal_title">Add Note</h3>
             <p id="addNoteIocLabel" class="text-xs text-secondary mb-4 font-mono truncate"></p>
             <textarea id="addNoteContent" maxlength="2000" rows="4"
@@ -1788,7 +1753,7 @@
 
     <!-- Global app-style modal for alert/confirm (same as base_app) -->
     <div id="appModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100]">
-        <div class="bg-secondary rounded-xl border border-white/10 p-6 max-w-md w-full mx-4 shadow-xl">
+        <div class="modal-dialog bg-secondary rounded-xl border border-white/10 p-6 max-w-md w-full mx-4 shadow-xl">
             <h3 id="appModalTitle" class="text-lg font-bold accent-blue mb-2"></h3>
             <p id="appModalMessage" class="text-sm text-white/90 mb-4"></p>
             <div id="appModalActions" class="flex gap-2 justify-end"></div>
@@ -1812,7 +1777,7 @@
                     <div id="badgeEarnedList" class="badge-earned-list"></div>
                 </div>
                 <div class="achievement-modal-footer">
-                    <button id="badgeEarnedClose" type="button" class="achievement-modal-btn-close" data-i18n="modal.close">Close</button>
+                    <button id="badgeEarnedClose" type="button" class="achievement-modal-btn-close btn-cmd-neutral" data-i18n="modal.close">Close</button>
                 </div>
             </div>
         </div>
@@ -1823,7 +1788,7 @@
         <div class="relative w-full max-w-md mx-4 rounded-2xl border border-white/15 bg-[#0f172a] shadow-2xl p-6">
             <h3 id="ambitionPopupTitle" class="text-xl font-bold text-amber-300 mb-3">Your focus for today</h3>
             <p id="ambitionPopupMessage" class="text-slate-200 text-left mb-6"></p>
-            <button id="ambitionPopupClose" type="button" class="w-full px-6 py-2.5 rounded-xl font-bold text-sm uppercase tracking-wider bg-cyan-600 hover:bg-cyan-500 text-white transition focus:outline-none focus:ring-2 focus:ring-cyan-400/50">
+            <button id="ambitionPopupClose" type="button" class="btn-cmd-primary w-full">
                 Got it
             </button>
         </div>

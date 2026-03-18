@@ -749,6 +749,25 @@ def _is_champs_leaderboard_cache_invalidated():
         return False
 
 
+def invalidate_champs_leaderboard_cache(user_id=None):
+    """Invalidate Champs leaderboard cache so next load is fresh (e.g. after user activate/deactivate).
+    If user_id is given, also invalidate that analyst's detail cache."""
+    try:
+        from utils.cache import delete_cached
+        method = _get_setting('champs_scoring_method', '1')
+        delete_cached(f'champs_leaderboard_{method}')
+        if user_id is not None:
+            delete_cached(f'champs_analyst_{user_id}_{method}')
+        try:
+            path = _champs_leaderboard_invalidation_path()
+            with open(path, 'a'):
+                os.utime(path, None)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def refresh_champ_score_for_user(user_id):
     """Invalidate Champs cache so next leaderboard/analyst load is fresh. Call after IOC submit/revoke or YARA upload.
     With Gunicorn multi-worker, in-memory cache is per process; we touch a file so all workers skip stale leaderboard cache."""
@@ -813,6 +832,7 @@ def index():
             ambition_popup_disabled = getattr(profile, 'ambition_popup_disabled', False)
             achievement_popup_disabled = getattr(profile, 'achievement_popup_disabled', False)
     user_id = current_user.id if authenticated else None
+    search_comment_rtl_by_script = _get_setting('search_comment_rtl_by_script', 'true').strip().lower() in ('true', '1', 'yes')
     return render_template(
         'index.html',
         authenticated=authenticated,
@@ -823,6 +843,7 @@ def index():
         ambition_popup_disabled=ambition_popup_disabled,
         achievement_popup_disabled=achievement_popup_disabled,
         user_id=user_id,
+        search_comment_rtl_by_script=search_comment_rtl_by_script,
     )
 
 
@@ -946,20 +967,41 @@ def health_check():
             'note': 'GeoIP is optional'
         }
 
-    # LDAP health (Phase 3.7)
+    # LDAP health (Phase 3.7) – uses first server from ldap_servers or legacy single server
     try:
         ldap_enabled = _get_setting('ldap_enabled', 'false').lower() == 'true'
         if ldap_enabled:
-            reachable, msg = check_ldap_reachable(
-                _get_setting('ldap_url', ''),
-                _get_setting('ldap_base_dn', ''),
-                _get_setting('ldap_bind_dn', ''),
-                _get_setting('ldap_bind_password', ''),
-            )
-            health_status['checks']['ldap'] = {
-                'status': 'reachable' if reachable else 'unreachable',
-                'message': msg,
-            }
+            servers = []
+            raw_servers = (_get_setting('ldap_servers', '') or '').strip()
+            if raw_servers and raw_servers != '[]':
+                try:
+                    servers = json.loads(raw_servers)
+                except Exception:
+                    pass
+            if not servers and _get_setting('ldap_url', '').strip():
+                servers = [{
+                    'url': _get_setting('ldap_url', ''),
+                    'base_dn': _get_setting('ldap_base_dn', ''),
+                    'bind_dn': _get_setting('ldap_bind_dn', ''),
+                    'bind_password': _get_setting('ldap_bind_password', ''),
+                }]
+            if servers:
+                s = servers[0]
+                reachable, msg = check_ldap_reachable(
+                    (s.get('url') or '').strip(),
+                    (s.get('base_dn') or '').strip(),
+                    (s.get('bind_dn') or '').strip(),
+                    s.get('bind_password') or '',
+                )
+                health_status['checks']['ldap'] = {
+                    'status': 'reachable' if reachable else 'unreachable',
+                    'message': msg,
+                }
+            else:
+                health_status['checks']['ldap'] = {
+                    'status': 'unreachable',
+                    'message': 'No LDAP servers configured',
+                }
         else:
             health_status['checks']['ldap'] = {
                 'status': 'disabled',

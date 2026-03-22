@@ -1,0 +1,12 @@
+{# Shared brand block (logo + title + description) for main app and admin/base_app header. Single source of truth. #}
+<a href="{{ url_for('index') }}" class="navbar-logo-link" aria-label="Go to Live Stats">
+    <img src="{{ url_for('static', filename='ziochub_smaller.png') }}" alt="ZIoCHub" class="w-14 h-14 object-contain flex-shrink-0" style="filter: drop-shadow(0 0 6px rgba(0, 212, 255, 0.4));">
+</a>
+<div>
+    <h1 class="text-2xl font-bold tracking-wider neon-text flex items-center gap-2">
+        <span class="text-white brand-name">ZIoCHub v{{ version }}</span>
+        <span class="text-xs font-semibold px-2 py-1 rounded commander-badge">IOC & YARA Mgmt</span>
+    </h1>
+    <p class="text-xs text-secondary mt-0.5 tracking-wide">Zwerd Indicators of Compromise Hub platform for SOC Teams</p>
+    <p class="text-xs text-secondary tracking-wide">Created by <a href="https://zwerd.github.io/" target="_blank" rel="noopener noreferrer" class="text-[#00d4ff] font-semibold creator-name hover:underline">Zwerd</a></p>
+</div>

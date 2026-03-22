@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en" id="htmlRoot" data-version="{{ version }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}ZIoCHub v{{ version }}{% endblock %}</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/flag-icons.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind-built.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        /* Override glass for header/nav: solid bg (style.css has .bg-secondary in card rule) */
+        .bg-secondary { background-color: var(--bg-secondary); }
+        .bg-tertiary { background-color: var(--bg-tertiary); }
+    </style>
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="bg-primary text-primary min-h-screen flex flex-col">
+    <header class="border-b-2 border-white/10 bg-secondary sticky top-0 z-50 neon-header backdrop-blur-md flex-shrink-0">
+        <div class="navbar-container">
+            <div class="navbar-left">
+                <div class="navbar-logo">
+                    {% include 'partials/_brand_block.html' %}
+                </div>
+                <nav class="navbar-tabs">
+                    <a href="{{ url_for('index') }}" class="tab-button" data-tab="live-stats" style="text-decoration: none; color: inherit;"><span>Live Stats</span></a>
+                    <a href="{{ url_for('index') }}#feed-pulse" class="tab-button" data-tab="feed-pulse" style="text-decoration: none; color: inherit;"><span>Feed Pulse</span></a>
+                    <a href="{{ url_for('index') }}#search" class="tab-button" data-tab="search" style="text-decoration: none; color: inherit;"><span>Search & Investigate</span></a>
+                    <a href="{{ url_for('index') }}#submit" class="tab-button" data-tab="bulk-unified" style="text-decoration: none; color: inherit;"><span>Submit IOCs</span></a>
+                    <a href="{{ url_for('index') }}#yara" class="tab-button" data-tab="yara" style="text-decoration: none; color: inherit;"><span>YARA Manager</span></a>
+                    <a href="{{ url_for('index') }}#champs" class="tab-button" data-tab="champs" style="text-decoration: none; color: inherit;"><span>Champs Analysis</span></a>
+                    <a href="{{ url_for('index') }}#campaigns" class="tab-button" data-tab="campaigns" style="text-decoration: none; color: inherit;"><span>Campaign Graph</span></a>
+                    <a href="{{ url_for('index') }}#playbook" class="tab-button" data-tab="playbook" style="text-decoration: none; color: inherit;"><span>Hunter's Playbook</span></a>
+                    <a href="{{ url_for('index') }}#reports" class="tab-button" data-tab="reports" style="text-decoration: none; color: inherit;"><span>Intelligence Reports</span></a>
+                </nav>
+            </div>
+            <div class="navbar-right">
+                <div id="authBox" class="flex items-center gap-2 shrink-0">
+                    {% if current_user.is_authenticated %}
+                    <a id="authProfile" href="{{ url_for('auth.profile_page') }}" class="analyst-avatar-btn flex items-center rounded-full transition-all duration-300" title="{{ display_name or current_user.username }}">
+                        {% if avatar_url %}
+                        <img id="authAvatar" class="analyst-avatar-img w-14 h-14 rounded-full object-cover" src="{{ avatar_url }}" alt="">
+                        <span id="authAvatarPlaceholder" class="analyst-avatar-placeholder hidden w-14 h-14 rounded-full flex items-center justify-center text-xl">👤</span>
+                        {% else %}
+                        <img id="authAvatar" class="analyst-avatar-img hidden w-14 h-14 rounded-full object-cover" src="" alt="">
+                        <span id="authAvatarPlaceholder" class="analyst-avatar-placeholder w-14 h-14 rounded-full flex items-center justify-center text-xl">👤</span>
+                        {% endif %}
+                    </a>
+                    {% if current_user.is_admin %}
+                    <a id="authAdmin" href="{{ url_for('admin_pages.admin_index') }}" class="px-3 py-1.5 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400">Admin</a>
+                    {% endif %}
+                    <a id="authLogout" href="{{ url_for('auth.logout') }}" class="px-3 py-1.5 bg-tertiary rounded hover:border-red-400/70 transition text-sm text-red-400">Logout</a>
+                    {% else %}
+                    <a id="authLogin" href="{{ url_for('auth.login') }}" class="px-3 py-1.5 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400">Login</a>
+                    {% endif %}
+                </div>
+                <a href="{{ url_for('index') }}" class="px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm">App</a>
+                <div class="navbar-lang-theme flex flex-col gap-0.5">
+                    <button type="button" id="langToggle" class="w-8 h-7 flex items-center justify-center bg-tertiary rounded hover:border-accent-green transition text-xs">
+                        <span id="langIcon">EN</span>
+                    </button>
+                    <button type="button" id="themeToggle" class="w-8 h-7 flex items-center justify-center bg-tertiary rounded hover:border-accent-green transition text-sm">
+                        <span id="themeIcon">🌙</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 min-h-0 overflow-auto p-6">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Global app-style modal for alert/confirm (replaces browser alert/confirm) -->
+    <div id="appModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100]">
+        <div class="bg-secondary rounded-xl border border-white/10 p-6 max-w-md w-full mx-4 shadow-xl">
+            <h3 id="appModalTitle" class="text-lg font-bold accent-blue mb-2"></h3>
+            <p id="appModalMessage" class="text-sm text-white/90 mb-4"></p>
+            <div id="appModalActions" class="flex gap-2 justify-end"></div>
+        </div>
+    </div>
+
+    <script>
+        (function() {
+            var theme = localStorage.getItem('theme') || 'dark';
+            document.documentElement.setAttribute('data-theme', theme);
+            var themeIcon = document.getElementById('themeIcon');
+            if (themeIcon) themeIcon.textContent = theme === 'light' ? '☀️' : '🌙';
+            var lang = localStorage.getItem('lang') || 'en';
+            var langIcon = document.getElementById('langIcon');
+            if (langIcon) langIcon.textContent = lang === 'he' ? 'HE' : 'EN';
+        })();
+        (function() {
+            var themeToggle = document.getElementById('themeToggle');
+            if (themeToggle) {
+                themeToggle.addEventListener('click', function() {
+                    var root = document.documentElement;
+                    var next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+                    root.setAttribute('data-theme', next);
+                    localStorage.setItem('theme', next);
+                    var icon = document.getElementById('themeIcon');
+                    if (icon) icon.textContent = next === 'light' ? '☀️' : '🌙';
+                });
+            }
+            var langToggle = document.getElementById('langToggle');
+            if (langToggle) {
+                langToggle.addEventListener('click', function() {
+                    var next = (localStorage.getItem('lang') || 'en') === 'he' ? 'en' : 'he';
+                    localStorage.setItem('lang', next);
+                    var icon = document.getElementById('langIcon');
+                    if (icon) icon.textContent = next === 'he' ? 'HE' : 'EN';
+                    window.location.reload();
+                });
+            }
+        })();
+    </script>
+    <script>
+    (function() {
+        var modal = document.getElementById('appModal');
+        var titleEl = document.getElementById('appModalTitle');
+        var messageEl = document.getElementById('appModalMessage');
+        var actionsEl = document.getElementById('appModalActions');
+
+        function hideModal() {
+            modal.classList.add('hidden');
+            modal.style.display = 'none';
+        }
+
+        function showModal(opts) {
+            titleEl.textContent = opts.title || '';
+            messageEl.textContent = opts.message || '';
+            actionsEl.innerHTML = '';
+            var resolveFn;
+            var promise = new Promise(function(r) { resolveFn = r; });
+
+            function close(result) {
+                hideModal();
+                if (resolveFn) resolveFn(result);
+            }
+
+            if (opts.buttons) {
+                opts.buttons.forEach(function(btn) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.textContent = btn.label;
+                    b.className = btn.primary
+                        ? 'px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition'
+                        : 'px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-accent-green transition text-primary';
+                    b.addEventListener('click', function() { close(btn.value); });
+                    actionsEl.appendChild(b);
+                });
+            }
+            modal.classList.remove('hidden');
+            modal.style.display = 'flex';
+            modal.onclick = function(e) { if (e.target === modal) close(false); };
+            return promise;
+        }
+
+        window.appAlert = function(opts) {
+            if (typeof opts === 'string') opts = { message: opts };
+            return showModal({
+                title: opts.title || 'Notice',
+                message: opts.message || '',
+                buttons: [{ label: opts.okText || 'OK', value: true, primary: true }]
+            });
+        };
+
+        window.appConfirm = function(opts) {
+            if (typeof opts === 'string') opts = { message: opts };
+            return showModal({
+                title: opts.title || 'Confirm',
+                message: opts.message || '',
+                buttons: [
+                    { label: opts.cancelText || 'Cancel', value: false, primary: false },
+                    { label: opts.okText || 'OK', value: true, primary: true }
+                ]
+            });
+        };
+    })();
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

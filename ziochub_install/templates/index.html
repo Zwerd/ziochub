@@ -1,0 +1,1922 @@
+<!DOCTYPE html>
+<html lang="en" id="htmlRoot" data-version="{{ version }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZIoCHub v{{ version }} - IOC & YARA Management Portal</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+    <!-- Fonts: system fallbacks only (no external requests). See style.css for Inter/JetBrains Mono fallbacks. -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/flag-icons.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind-built.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/prism-tomorrow.min.css') }}">
+    <script src="{{ url_for('static', filename='js/chart.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/vis-network.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/marked.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/turndown.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/playbook-edit.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/prism.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/prism-clike.min.js') }}"></script>
+    <style>
+        /* Tab fade-in animation (tab-content.hidden and staging moved to style.css) */
+        .tab-content:not(.hidden) {
+            animation: tabFadeIn 0.25s ease-out;
+        }
+        @keyframes tabFadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        /* RTL support */
+        [dir="rtl"] { direction: rtl; }
+    </style>
+</head>
+<body class="bg-primary text-primary h-screen w-screen overflow-hidden flex flex-col" data-authenticated="{{ '1' if authenticated else '0' }}" data-user-id="{{ user_id or '' }}" data-mute-sound="{{ '1' if mute_sound else '0' }}" data-ambition-popup-disabled="{{ '1' if ambition_popup_disabled else '0' }}" data-achievement-popup-disabled="{{ '1' if achievement_popup_disabled else '0' }}" data-search-comment-rtl="{{ '1' if search_comment_rtl_by_script else '0' }}">
+    <!-- Top Bar (header-bar = solid bg, no glass override) -->
+    <header class="header-bar border-b-2 border-white/10 bg-secondary sticky top-0 z-50 neon-header backdrop-blur-md flex-shrink-0">
+        <div class="navbar-container">
+            <!-- LEFT: Logo + Navigation Tabs -->
+            <div class="navbar-left">
+                <div class="navbar-logo">
+                    {% include 'partials/_brand_block.html' %}
+                </div>
+                <nav class="navbar-tabs">
+                    <button class="tab-button" data-tab="live-stats" data-i18n="tab.stats">
+                        <span data-i18n="tab.stats">Live Stats</span>
+                    </button>
+                    <button class="tab-button" data-tab="feed-pulse" data-i18n="tab.feed_pulse">
+                        <span data-i18n="tab.feed_pulse">Feed Pulse</span>
+                    </button>
+                    <button class="tab-button" data-tab="search" data-i18n="tab.search">
+                        <span data-i18n="tab.search">Search & Investigate</span>
+                    </button>
+                    <button class="tab-button" data-tab="bulk-unified" data-i18n="tab.submit"><span data-i18n="tab.submit">Submit IOCs</span></button>
+                    <button class="tab-button" data-tab="yara" data-i18n="tab.yara">
+                        <span data-i18n="tab.yara">YARA Manager</span>
+                    </button>
+                    <button class="tab-button" data-tab="champs" data-i18n="tab.champs">
+                        <span data-i18n="tab.champs">Champs Analysis</span>
+                    </button>
+                    <button class="tab-button" data-tab="campaigns" data-i18n="tab.campaign">
+                        <span data-i18n="tab.campaign">Campaign Graph</span>
+                    </button>
+                    <button class="tab-button" data-tab="playbook" data-i18n="tab.playbook">
+                        <span data-i18n="tab.playbook">Hunter's Playbook</span>
+                    </button>
+                    <button class="tab-button" data-tab="reports" data-i18n="tab.reports">
+                        <span data-i18n="tab.reports">Intelligence Reports</span>
+                    </button>
+                </nav>
+            </div>
+
+            <!-- RIGHT: User Controls -->
+            <div class="navbar-right">
+                <div id="authBox" class="flex items-center gap-2 shrink-0">
+                    <a id="authLogin" href="/login" class="px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400 {% if authenticated %}hidden{% endif %}" data-i18n="auth.login">Login</a>
+                    <button id="authProfile" type="button" class="analyst-avatar-btn flex items-center rounded-full transition-all duration-300 {% if not authenticated %}hidden{% endif %}" title="{{ display_name or '' }}">
+                        {% if avatar_url %}
+                        <img id="authAvatar" class="analyst-avatar-img w-14 h-14 rounded-full object-cover" src="{{ avatar_url }}" alt="">
+                        <span id="authAvatarPlaceholder" class="analyst-avatar-placeholder hidden w-14 h-14 rounded-full flex items-center justify-center text-xl">👤</span>
+                        {% else %}
+                        <img id="authAvatar" class="analyst-avatar-img hidden w-14 h-14 rounded-full object-cover" src="" alt="">
+                        <span id="authAvatarPlaceholder" class="analyst-avatar-placeholder w-14 h-14 rounded-full flex items-center justify-center text-xl">👤</span>
+                        {% endif %}
+                    </button>
+                    <a id="authAdmin" href="/admin" class="px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400 {% if not is_admin %}hidden{% endif %}" data-i18n="auth.admin">Admin</a>
+                    <a id="authLogout" href="/logout" class="px-3 py-1 bg-tertiary rounded hover:border-red-400/70 transition text-sm text-red-400 {% if not authenticated %}hidden{% endif %}" data-i18n="auth.logout">Logout</a>
+                </div>
+                <div class="navbar-lang-theme flex flex-col gap-0.5">
+                    <button id="langToggle" class="w-8 h-7 flex items-center justify-center bg-tertiary rounded hover:border-accent-green transition text-xs">
+                        <span id="langIcon">EN</span>
+                    </button>
+                    <button id="themeToggle" class="w-8 h-7 flex items-center justify-center bg-tertiary rounded hover:border-accent-green transition text-sm">
+                        <span id="themeIcon">🌙</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Layout: Full Width Main Stage -->
+    <div class="flex flex-1 min-h-0">
+        <!-- Main Stage (full width; scroll per tab) -->
+        <div class="w-full flex flex-col flex-1 min-h-0 overflow-hidden">
+
+            <!-- Tab Contents -->
+            <div class="px-3 py-4 flex-1 min-h-0 flex flex-col overflow-hidden">
+                <!-- Tab 1: Live Stats (Default) - Fixed-height cockpit, no page scroll -->
+                <div id="tab-live-stats" class="tab-content hidden flex flex-col h-full overflow-hidden">
+                    <div class="flex justify-between items-center mb-3 flex-shrink-0">
+                        <h2 class="text-2xl font-bold accent-blue" data-i18n="stats.title">Live Statistics</h2>
+                        <div id="liveIndicator" class="flex items-center gap-2 text-sm accent-green" style="display: none;">
+                            <span class="pulse-dot">🟢</span>
+                            <span data-i18n="stats.live_updating">Live Updating...</span>
+                        </div>
+                    </div>
+                    <!-- Sticky Summary Cards (5 metrics) - Power Badge layout -->
+                    <div class="stats-sticky-header flex-shrink-0">
+                        <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--ip">🛡️</span>
+                                <div class="text-right flex flex-col items-end">
+                                    <span class="text-3xl font-bold text-primary" id="statIP">-</span>
+                                    <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.blocked_ips">Total Active IPs</span>
+                                </div>
+                            </div>
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--domain">🌐</span>
+                                <div class="text-right flex flex-col items-end">
+                                    <span class="text-3xl font-bold text-primary" id="statDomain">-</span>
+                                    <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.blocked_domains">Total Active Domains</span>
+                                </div>
+                            </div>
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--hash">☣️</span>
+                                <div class="text-right flex flex-col items-end">
+                                    <span class="text-3xl font-bold text-primary" id="statHash">-</span>
+                                    <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.blocked_hashes">Total Active Hashes</span>
+                                </div>
+                            </div>
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--email">📨</span>
+                                <div class="text-right flex flex-col items-end">
+                                    <span class="text-3xl font-bold text-primary" id="statEmail">-</span>
+                                    <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.blocked_emails">Total Active Emails</span>
+                                </div>
+                            </div>
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--url">🔗</span>
+                                <div class="text-right flex flex-col items-end">
+                                    <span class="text-3xl font-bold text-primary" id="statURL">-</span>
+                                    <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.blocked_urls">Total Active URLs</span>
+                                </div>
+                            </div>
+                            <div class="card-panel bg-tertiary rounded-lg border border-slate-700/50 flex flex-row items-center justify-between p-4">
+                                <span class="stat-icon stat-icon--yara">📜</span>
+                                <div class="text-right flex flex-col items-end">
+                                    <span class="text-3xl font-bold text-primary" id="statYara">-</span>
+                                    <span class="text-xs font-bold text-secondary uppercase tracking-wider mt-0.5" data-i18n="stats.active_yara">Total Active YARA</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Threat Intelligence Dashboard (5-Column Grid: Countries, TLDs, Emails, Campaign Impact, Live Feed) -->
+                    <div class="flex-1 flex flex-col min-h-0">
+                        <h3 class="text-xl font-bold mb-3 accent-blue flex-shrink-0" data-i18n="stats.charts.title">Threat Intelligence Dashboard</h3>
+                        <div class="grid grid-cols-1 lg:grid-cols-5 gap-3 items-stretch flex-1 min-h-0">
+                            <!-- Column 1: Top Countries -->
+                            <div class="bg-tertiary rounded-lg p-4 flex flex-col min-h-0 h-full overflow-hidden">
+                                <h4 class="text-lg font-semibold mb-3 text-secondary flex items-center gap-2 flex-shrink-0">
+                                    <span>🌍</span>
+                                    <span data-i18n="stats.charts.countries">Top Countries</span>
+                                </h4>
+                                <div id="topCountriesList" class="country-leaderboard flex-1 min-h-0 overflow-y-auto"><div class="space-y-3 p-2"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line" style="width:60%"></div></div></div>
+                            </div>
+                            <!-- Column 2: Top TLDs -->
+                            <div class="bg-tertiary rounded-lg p-4 flex flex-col min-h-0 h-full overflow-hidden">
+                                <h4 class="text-lg font-semibold mb-3 text-secondary flex items-center gap-2 flex-shrink-0">
+                                    <span>🌐</span>
+                                    <span data-i18n="stats.charts.tlds">Top TLDs</span>
+                                </h4>
+                                <div id="topTLDsList" class="country-leaderboard flex-1 min-h-0 overflow-y-auto"><div class="space-y-3 p-2"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line" style="width:60%"></div></div></div>
+                            </div>
+                            <!-- Column 3: Top Email Domains -->
+                            <div class="bg-tertiary rounded-lg p-4 flex flex-col min-h-0 h-full overflow-hidden">
+                                <h4 class="text-lg font-semibold mb-3 text-secondary flex items-center gap-2 flex-shrink-0">
+                                    <span>📧</span>
+                                    <span data-i18n="stats.charts.email_domains">Top Email Domains</span>
+                                </h4>
+                                <div id="topEmailDomainsList" class="country-leaderboard flex-1 min-h-0 overflow-y-auto"><div class="space-y-3 p-2"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line" style="width:60%"></div></div></div>
+                            </div>
+                            <!-- Column 4: Campaign Impact -->
+                            <div class="bg-tertiary rounded-lg p-4 flex flex-col min-h-0 h-full overflow-hidden">
+                                <h4 class="text-lg font-semibold mb-3 text-secondary flex items-center gap-2 flex-shrink-0">
+                                    <span>🎯</span>
+                                    <span data-i18n="stats.charts.campaign_impact">Campaign Impact</span>
+                                </h4>
+                                <div id="topCampaignsList" class="country-leaderboard flex-1 min-h-0 overflow-y-auto"><div class="space-y-3 p-2"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line" style="width:60%"></div></div></div>
+                            </div>
+                            <!-- Column 5: Live Feed -->
+                            <div class="bg-tertiary rounded-lg p-4 flex flex-col min-h-0 h-full overflow-hidden">
+                                <h4 class="text-lg font-semibold mb-3 text-secondary flex items-center gap-2 flex-shrink-0">
+                                    <img src="{{ url_for('static', filename='ziochub_smaller.png') }}" alt="" class="w-5 h-5 object-contain">
+                                    <span data-i18n="stats.charts.live_feed">Live Feed</span>
+                                </h4>
+                                <div id="liveFeed" class="flex-1 min-h-0 overflow-y-auto space-y-2">
+                                    <div class="text-center text-secondary py-8 text-sm" data-i18n="feed.loading">Loading...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 2: Search & Investigate -->
+                <div id="tab-search" class="tab-content hidden overflow-y-auto flex-1 min-h-0">
+                    <h2 class="text-2xl font-bold mb-3 accent-blue" data-i18n="search.title">Search & Investigate</h2>
+                    <div class="mb-3">
+                        <div class="flex gap-2 flex-wrap">
+                            <input type="text" id="searchInput" 
+                                   class="flex-1 min-w-[200px]"
+                                   data-i18n-placeholder="search.placeholder">
+                            <select id="searchFilter" 
+                                    class="px-4 py-2 bg-tertiary">
+                                <option value="all" data-i18n="search.filter.all">All</option>
+                                <option value="ioc_value" data-i18n="search.filter.ioc">IOC Value</option>
+                                <option value="ticket_id" data-i18n="search.filter.ticket">Ticket ID</option>
+                                <option value="user" data-i18n="search.filter.user">User</option>
+                                <option value="comment" data-i18n="search.filter.comment">Comment</option>
+                                <option value="tag" data-i18n="search.filter.tag">Tag</option>
+                                <option value="date" data-i18n="search.filter.date">Date</option>
+                                <option value="campaign" data-i18n="search.filter.campaign">Campaign</option>
+                                <option value="file_type" data-i18n="search.filter.found_in">Found in</option>
+                                <option value="expiration_status" data-i18n="search.filter.expiration">Expiration Status</option>
+                                <option value="note" data-i18n="search.filter.note">Analyst Note</option>
+                            </select>
+                            <button id="searchButton" 
+                                    class="btn-cmd-primary"
+                                    data-i18n="search.button">Search</button>
+                            <a href="/api/export-all" id="exportAllCsvBtn" class="btn-cmd-primary" download data-i18n="search.export_all">Export All CSV</a>
+                        </div>
+                    </div>
+                    <div id="searchResults" class="hidden">
+                        <div class="text-sm text-secondary mb-2 flex items-center justify-between flex-wrap gap-2">
+                            <span><span data-i18n="search.found">Found</span> <span id="resultCount">0</span> <span data-i18n="search.results">result(s)</span></span>
+                            <div id="searchPagination" class="flex items-center gap-2">
+                                <button type="button" id="searchPrevPage" class="btn-cmd-neutral text-xs py-1 px-2" disabled data-i18n="search.prev">Prev</button>
+                                <span id="searchPageInfo" class="text-xs font-mono">1 / 1</span>
+                                <button type="button" id="searchNextPage" class="btn-cmd-neutral text-xs py-1 px-2" disabled data-i18n="search.next">Next</button>
+                                <select id="searchPageSize" class="text-xs py-1 px-2 bg-tertiary border border-white/10 rounded">
+                                    <option value="25">25</option>
+                                    <option value="50" selected>50</option>
+                                    <option value="100">100</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full border-collapse">
+                                <thead>
+                                    <tr class="bg-tertiary">
+                                        <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="file_type" title="Sort"><span data-i18n="search.col.found_in">Found in</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
+                                        <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="ioc" title="Sort"><span data-i18n="search.col.ioc">IOC</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
+                                        <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="date" title="Sort"><span data-i18n="search.col.date">Date</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
+                                        <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="user" title="Sort"><span data-i18n="search.col.user">User</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
+                                        <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="ref" title="Sort"><span data-i18n="search.col.ticket">Ticket ID</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
+                                        <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="comment" title="Sort"><span data-i18n="search.col.comment">Comment</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
+                                        <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="tags" title="Sort"><span data-i18n="search.col.tags">Tags</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
+                                        <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="campaign_name" title="Sort"><span data-i18n="search.col.campaign">Campaign</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
+                                        <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="expiration_status" title="Sort"><span data-i18n="search.col.expiration">Expiration Status</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
+                                        <th class="border border-white/10 px-4 py-2 text-left" data-i18n="search.col.actions">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="resultsTableBody">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div id="searchNoResults" class="hidden text-center py-4 text-secondary" data-i18n="search.no_results">No records found</div>
+                </div>
+
+                <!-- Tab: Submit IOCs (Single / TXT / CSV unified) -->
+                <div id="tab-bulk-unified" class="tab-content hidden flex flex-col h-full overflow-hidden">
+                    <div class="flex-shrink-0 mb-3">
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <h2 class="text-2xl font-bold accent-blue" data-i18n="bulk.title">Submit IOCs</h2>
+                            <div class="flex rounded border border-white/10 overflow-hidden bg-tertiary">
+                                <button type="button" id="btnModeSingle" class="text-xs py-1 px-3 font-semibold bg-blue-600 text-white transition" data-i18n="bulk.single_btn">Single</button>
+                                <button type="button" id="btnModeTxt" class="text-xs py-1 px-3 font-semibold bg-transparent text-secondary hover:bg-white/5 transition" data-i18n="bulk.txt_btn">TXT</button>
+                                <button type="button" id="btnModeCsv" class="text-xs py-1 px-3 font-semibold bg-transparent text-secondary hover:bg-white/5 transition" data-i18n="bulk.csv_btn">CSV</button>
+                                <button type="button" id="btnModePaste" class="text-xs py-1 px-3 font-semibold bg-transparent text-secondary hover:bg-white/5 transition" data-i18n="bulk.paste_btn">Paste</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="bulkUploadInfoCard" class="flex-shrink-0 bg-blue-900/20 border border-blue-500/30 p-3 rounded-lg mb-3 text-xs text-blue-100">
+                        <h4 class="font-bold mb-1" data-i18n="submit.title">Single IOC Submission</h4>
+                        <p class="mb-1" data-i18n="bulk.info_single_desc">Submit one IOC at a time. Fill value, type, analyst, optional comment and TTL.</p>
+                    </div>
+
+                    <div id="bulk-wrapper-single" class="flex-shrink-0 flex flex-col gap-3 bg-tertiary p-4 rounded-lg border border-white/10 mb-3">
+                        <form id="iocForm" class="space-y-3">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block mb-2 text-sm font-semibold" data-i18n="submit.ioc_value">IOC Value *</label>
+                                    <input type="text" id="iocValue" required class="w-full" placeholder="e.g., 192.168.1.1" data-i18n-placeholder="submit.ioc_placeholder">
+                                </div>
+                                <div>
+                                    <label class="block mb-2 text-sm font-semibold" data-i18n="submit.ioc_type">IOC Type *</label>
+                                    <select id="iocType" required class="w-full">
+                                        <option value="" data-i18n="submit.select_type">Select Type</option>
+                                        <option value="IP" data-i18n="submit.type_ip">IP Address</option>
+                                        <option value="Domain" data-i18n="submit.type_domain">Domain</option>
+                                        <option value="Hash" data-i18n="submit.type_hash">Hash (MD5/SHA1/SHA256)</option>
+                                        <option value="Email" data-i18n="submit.type_email">Email</option>
+                                        <option value="URL" data-i18n="submit.type_url">URL</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block mb-2 text-sm font-semibold" data-i18n="submit.comment">Comment</label>
+                                <textarea id="iocComment" rows="3" class="w-full" data-i18n-placeholder="submit.comment_placeholder"></textarea>
+                            </div>
+                            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 items-start">
+                                <div class="flex flex-col">
+                                    <label class="block text-xs font-semibold mb-1 leading-normal" data-i18n="search.col.tags">Tags</label>
+                                    <input type="text" id="iocTags" class="w-full h-8 text-sm" placeholder="malware, phishing" data-i18n-placeholder="submit.tags_placeholder">
+                                </div>
+                                <div class="flex flex-col">
+                                    <label class="block text-xs font-semibold mb-1 leading-normal" data-i18n="submit.ticket_id">Ticket ID</label>
+                                    <input type="text" id="iocTicketId" class="w-full h-8 text-sm" placeholder="Auto if empty" data-i18n-placeholder="bulk.ticket_auto_placeholder">
+                                </div>
+                                <div class="flex flex-col">
+                                    <label class="block text-xs font-semibold mb-1 leading-normal" data-i18n="submit.ttl">TTL *</label>
+                                    <select id="iocTTL" required class="w-full text-sm submit-row-select">
+                                        <option value="Permanent" data-i18n="ttl.permanent">Permanent</option>
+                                        <option value="1 Week" data-i18n="ttl.1week">1 Week</option>
+                                        <option value="1 Month" data-i18n="ttl.1month">1 Month</option>
+                                        <option value="3 Months" data-i18n="ttl.3months">3 Months</option>
+                                        <option value="1 Year" data-i18n="ttl.1year">1 Year</option>
+                                    </select>
+                                </div>
+                                <div class="flex flex-col">
+                                    <label class="block text-xs font-semibold mb-1 leading-normal" data-i18n="submit.campaign">Campaign</label>
+                                    <select id="iocCampaignSelect" class="w-full text-sm submit-row-select">
+                                        <option value="" data-i18n="submit.none">- None -</option>
+                                    </select>
+                                </div>
+                                <div class="flex flex-col">
+                                    <label class="block text-xs font-semibold mb-1 leading-normal" data-i18n="submit.assign_to">Assign to user</label>
+                                    <select id="iocAssignTo" class="w-full text-sm submit-row-select">
+                                        <option value="" data-i18n="submit.me">- Me -</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <button type="button" id="singleAddToListBtn" class="w-full md:w-auto btn-cmd-primary" data-i18n="bulk.preview">Preview</button>
+                        </form>
+                    </div>
+
+                    <div id="bulk-wrapper-txt" class="hidden flex-shrink-0 flex flex-wrap items-end gap-3 bg-tertiary p-3 rounded-lg border border-white/10 mb-3">
+                        <div class="flex flex-col">
+                            <label class="text-xs font-semibold mb-0.5" data-i18n="bulktxt.txt_file">TXT File *</label>
+                            <input type="file" id="txtFile" accept=".txt" class="h-8 text-sm w-48">
+                        </div>
+                        <div class="flex flex-col">
+                            <label class="text-xs font-semibold mb-0.5" data-i18n="submit.ticket_id">Ticket ID</label>
+                            <input type="text" id="txtTicketId" class="h-8 text-sm w-32" data-i18n-placeholder="bulk.ticket_auto_placeholder" placeholder="Auto if empty">
+                        </div>
+                        <div class="flex flex-col">
+                            <label class="text-xs font-semibold mb-0.5" data-i18n="bulktxt.ttl">TTL *</label>
+                            <select id="txtTTL" required class="h-8 text-sm w-24">
+                                <option value="Permanent" selected data-i18n="ttl.permanent">Permanent</option>
+                                <option value="1 Week" data-i18n="ttl.1week">1 Week</option>
+                                <option value="1 Month" data-i18n="ttl.1month">1 Month</option>
+                                <option value="3 Months" data-i18n="ttl.3months">3 Months</option>
+                                <option value="1 Year" data-i18n="ttl.1year">1 Year</option>
+                            </select>
+                        </div>
+                        <div class="flex flex-col">
+                            <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.campaign">Campaign</label>
+                            <select id="txtCampaignSelect" class="h-8 text-sm w-32">
+                                <option value="" data-i18n="submit.none">- None -</option>
+                            </select>
+                        </div>
+                        <div class="flex flex-col">
+                            <label class="text-xs font-semibold mb-0.5" data-i18n="submit.assign_to">Assign to user</label>
+                            <select id="txtAssignTo" class="h-8 text-sm w-32">
+                                <option value="" data-i18n="submit.me">- Me -</option>
+                            </select>
+                        </div>
+                        <div class="flex flex-col flex-1 min-w-[120px]">
+                            <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.default_comment">Default Comment</label>
+                            <input type="text" id="txtDefaultComment" placeholder="If line has no comment" class="h-8 text-sm w-full" data-i18n-placeholder="bulk.default_comment_placeholder">
+                        </div>
+                        <div class="flex flex-col flex-1 min-w-[120px]">
+                            <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.tags_for_all">Tags (for all)</label>
+                            <input type="text" id="txtTagsForAll" placeholder="e.g. malware, phishing" class="h-8 text-sm w-full" data-i18n-placeholder="bulk.tags_placeholder">
+                        </div>
+                        <button type="button" id="txtPreviewBtn" class="btn-cmd-primary" data-i18n="bulk.preview">Preview</button>
+                    </div>
+
+                    <div id="bulk-wrapper-paste" class="hidden flex-shrink-0 flex flex-col gap-3 bg-tertiary p-3 rounded-lg border border-white/10 mb-3">
+                        <div class="flex flex-col gap-1">
+                            <label class="text-xs font-semibold" data-i18n="bulk.paste_label">Paste messy text (logs, reports, etc.)</label>
+                            <textarea id="pasteText" rows="8" class="w-full px-3 py-2 rounded-lg bg-dark-800 border border-white/10 text-sm font-mono placeholder-white/40" placeholder="Paste text here... IPs, domains, URLs, emails, hashes will be extracted on Preview." data-i18n-placeholder="bulk.paste_placeholder"></textarea>
+                        </div>
+                        <div class="flex flex-wrap items-end gap-3">
+                            <div class="flex flex-col">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="submit.ticket_id">Ticket ID</label>
+                                <input type="text" id="pasteTicketId" class="h-8 text-sm w-32" data-i18n-placeholder="bulk.ticket_auto_placeholder" placeholder="Auto if empty">
+                            </div>
+                            <div class="flex flex-col">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="bulktxt.ttl">TTL *</label>
+                                <select id="pasteTTL" required class="h-8 text-sm w-24">
+                                    <option value="Permanent" selected data-i18n="ttl.permanent">Permanent</option>
+                                    <option value="1 Week" data-i18n="ttl.1week">1 Week</option>
+                                    <option value="1 Month" data-i18n="ttl.1month">1 Month</option>
+                                    <option value="3 Months" data-i18n="ttl.3months">3 Months</option>
+                                    <option value="1 Year" data-i18n="ttl.1year">1 Year</option>
+                                </select>
+                            </div>
+                            <div class="flex flex-col">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.campaign">Campaign</label>
+                                <select id="pasteCampaignSelect" class="h-8 text-sm w-32">
+                                    <option value="" data-i18n="submit.none">- None -</option>
+                                </select>
+                            </div>
+                            <div class="flex flex-col">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="submit.assign_to">Assign to user</label>
+                                <select id="pasteAssignTo" class="h-8 text-sm w-32">
+                                    <option value="" data-i18n="submit.me">- Me -</option>
+                                </select>
+                            </div>
+                            <div class="flex flex-col flex-1 min-w-[120px]">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.default_comment">Default Comment</label>
+                                <input type="text" id="pasteDefaultComment" placeholder="If no comment" class="h-8 text-sm w-full" data-i18n-placeholder="bulk.default_comment_placeholder">
+                            </div>
+                            <div class="flex flex-col flex-1 min-w-[120px]">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.tags_for_all">Tags (for all)</label>
+                                <input type="text" id="pasteTagsForAll" placeholder="e.g. malware, phishing" class="h-8 text-sm w-full" data-i18n-placeholder="bulk.tags_placeholder">
+                            </div>
+                            <button type="button" id="pastePreviewBtn" class="btn-cmd-primary" data-i18n="bulk.preview">Preview</button>
+                        </div>
+                    </div>
+
+                    <div id="bulk-wrapper-csv" class="hidden flex-shrink-0 flex flex-wrap items-end gap-3 bg-tertiary p-3 rounded-lg border border-white/10 mb-3">
+                        <form id="csvForm" class="contents">
+                            <div class="flex flex-col">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.csv_file">CSV File *</label>
+                                <input type="file" id="csvFile" accept=".csv" required class="h-8 text-sm w-48">
+                            </div>
+                            <div class="flex flex-col">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="submit.ticket_id">Ticket ID</label>
+                                <input type="text" id="csvTicketId" class="h-8 text-sm w-32" data-i18n-placeholder="bulk.ticket_auto_placeholder" placeholder="Auto if empty">
+                            </div>
+                            <div class="flex flex-col">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.ttl">TTL *</label>
+                                <select id="csvTTL" required class="h-8 text-sm w-24">
+                                    <option value="Permanent" data-i18n="ttl.permanent">Permanent</option>
+                                    <option value="1 Week" data-i18n="ttl.1week">1 Week</option>
+                                    <option value="1 Month" data-i18n="ttl.1month">1 Month</option>
+                                    <option value="3 Months" data-i18n="ttl.3months">3 Months</option>
+                                    <option value="1 Year" data-i18n="ttl.1year">1 Year</option>
+                                </select>
+                            </div>
+                            <div class="flex flex-col">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.campaign">Campaign</label>
+                                <select id="csvCampaignSelect" class="h-8 text-sm w-32">
+                                    <option value="" data-i18n="submit.none">- None -</option>
+                                </select>
+                            </div>
+                            <div class="flex flex-col">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="submit.assign_to">Assign to user</label>
+                                <select id="csvAssignTo" class="h-8 text-sm w-32">
+                                    <option value="" data-i18n="submit.me">- Me -</option>
+                                </select>
+                            </div>
+                            <div class="flex flex-col flex-1 min-w-[120px]">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.default_comment">Default Comment</label>
+                                <input type="text" id="csvComment" placeholder="Comment for all" class="h-8 text-sm w-full" data-i18n-placeholder="bulk.comment_all_placeholder">
+                            </div>
+                            <div class="flex flex-col flex-1 min-w-[120px]">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.tags_for_all">Tags (for all)</label>
+                                <input type="text" id="csvTagsForAll" placeholder="e.g. malware, phishing" class="h-8 text-sm w-full" data-i18n-placeholder="bulk.tags_placeholder">
+                            </div>
+                            <button type="button" id="csvPreviewBtn" class="btn-cmd-primary" data-i18n="bulk.preview">Preview</button>
+                        </form>
+                    </div>
+
+                    <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+                        <div id="txtStagingArea" class="hidden flex flex-col h-full min-h-0">
+                            <div class="flex-shrink-0 flex flex-wrap gap-3 items-center py-2 border-b border-white/10">
+                                <button type="button" id="txtApproveAllBtn" class="btn-cmd-primary" data-i18n="bulk.approve_all">Approve All Valid</button>
+                                <button type="button" id="txtDeleteAllBtn" class="btn-cmd-danger" data-i18n="bulk.delete_all">Delete All</button>
+                                <span id="txtStagingCount" class="text-xs text-secondary" data-i18n="bulk.found_items">Found 0 items</span>
+                            </div>
+                            <div class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-white/10">
+                                <table class="w-full border-collapse">
+                                    <thead class="sticky top-0 bg-tertiary z-10">
+                                        <tr>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ioc">IOC</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.type">Type</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="search.col.tags">Tags</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ticket">Ticket</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.analyst">Analyst</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.date">Date</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.comment">Comment</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.expiration">Expiration</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.actions">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="txtStagingTableBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div id="csvStagingArea" class="hidden flex flex-col h-full min-h-0">
+                            <div class="flex-shrink-0 flex flex-wrap gap-3 items-center py-2 border-b border-white/10">
+                                <button type="button" id="csvApproveAllBtn" class="btn-cmd-primary" data-i18n="bulk.approve_all">Approve All Valid</button>
+                                <button type="button" id="csvDeleteAllBtn" class="btn-cmd-danger" data-i18n="bulk.delete_all">Delete All</button>
+                                <span id="csvStagingCount" class="text-xs text-secondary" data-i18n="bulk.found_items">Found 0 items</span>
+                            </div>
+                            <div class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-white/10">
+                                <table class="w-full border-collapse">
+                                    <thead class="sticky top-0 bg-tertiary z-10">
+                                        <tr>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ioc">IOC</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.type">Type</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="search.col.tags">Tags</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ticket">Ticket</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.analyst">Analyst</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.date">Date</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.comment">Comment</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.expiration">Expiration</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.actions">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="csvStagingTableBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div id="singleStagingArea" class="hidden flex flex-col h-full min-h-0">
+                            <div class="flex-shrink-0 flex flex-wrap gap-3 items-center py-2 border-b border-white/10">
+                                <button type="button" id="singleApproveAllBtn" class="btn-cmd-primary" data-i18n="bulk.approve_all">Approve All Valid</button>
+                                <button type="button" id="singleDeleteAllBtn" class="btn-cmd-danger" data-i18n="bulk.delete_all">Delete All</button>
+                                <span id="singleStagingCount" class="text-xs text-secondary" data-i18n="bulk.found_items">Found 0 items</span>
+                            </div>
+                            <div class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-white/10">
+                                <table class="w-full border-collapse">
+                                    <thead class="sticky top-0 bg-tertiary z-10">
+                                        <tr>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ioc">IOC</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.type">Type</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="search.col.tags">Tags</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ticket">Ticket</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.analyst">Analyst</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.date">Date</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.comment">Comment</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.expiration">Expiration</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.actions">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="singleStagingTableBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div id="pasteStagingArea" class="hidden flex flex-col h-full min-h-0">
+                            <div class="flex-shrink-0 flex flex-wrap gap-3 items-center py-2 border-b border-white/10">
+                                <button type="button" id="pasteApproveAllBtn" class="btn-cmd-primary" data-i18n="bulk.approve_all">Approve All Valid</button>
+                                <button type="button" id="pasteDeleteAllBtn" class="btn-cmd-danger" data-i18n="bulk.delete_all">Delete All</button>
+                                <span id="pasteStagingCount" class="text-xs text-secondary" data-i18n="bulk.found_items">Found 0 items</span>
+                            </div>
+                            <div class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-white/10">
+                                <table class="w-full border-collapse">
+                                    <thead class="sticky top-0 bg-tertiary z-10">
+                                        <tr>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ioc">IOC</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.type">Type</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="search.col.tags">Tags</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ticket">Ticket</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.analyst">Analyst</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.date">Date</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.comment">Comment</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.expiration">Expiration</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.actions">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="pasteStagingTableBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 4: YARA Manager -->
+                <div id="tab-yara" class="tab-content hidden overflow-y-auto flex-1 min-h-0">
+                    <h2 class="text-2xl font-bold mb-3 accent-blue" data-i18n="yara.title">YARA Manager</h2>
+                    <form id="yaraForm" class="space-y-3 mb-3">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                                <label class="block mb-2 text-sm font-semibold" data-i18n="submit.ticket_id">Ticket ID</label>
+                                <input type="text" id="yaraTicketId" class="w-full" placeholder="Auto if empty" data-i18n-placeholder="bulk.ticket_auto_placeholder">
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block mb-2 text-sm font-semibold" data-i18n="yara.comment">Comment / Description (Optional)</label>
+                            <textarea id="yaraComment" rows="2" class="w-full" placeholder="Describe the rule's purpose..." data-i18n-placeholder="yara.comment_placeholder"></textarea>
+                        </div>
+                        <div>
+                            <label class="block mb-2 text-sm font-semibold" data-i18n="yara.campaign">Campaign (optional)</label>
+                            <select id="yaraCampaignSelect" class="w-full">
+                                <option value="" data-i18n="submit.none">- None -</option>
+                            </select>
+                        </div>
+                    </form>
+                    <div id="yaraDropZone" class="drag-drop-zone rounded-lg p-4 text-center cursor-pointer">
+                        <input type="file" id="yaraFileInput" accept=".yar" class="hidden">
+                        <div class="space-y-1">
+                            <p class="text-base">📁 <span data-i18n="yara.drag_drop">Drag & Drop YARA Rule File</span></p>
+                            <p class="text-secondary text-xs" data-i18n="yara.or_click">or click to browse</p>
+                            <p class="text-secondary text-xs" data-i18n="yara.only_yar">Only .yar files are accepted</p>
+                            <p id="yaraSelectedFilename" class="text-cyan-400 text-sm font-mono mt-2 hidden"></p>
+                        </div>
+                    </div>
+                    <div class="mt-4 flex flex-wrap gap-2">
+                        <button type="button" id="yaraSubmitBtn" class="btn-cmd-primary w-full md:w-auto" data-i18n="yara.submit_btn">Submit YARA Rule</button>
+                    </div>
+                    <!-- Pending approval (one section: analyst sees own, admin sees all with Approve/Reject) -->
+                    <div id="yaraPendingSection" class="hidden mt-6">
+                        <h3 class="text-xl font-bold mb-3 accent-blue" data-i18n="yara.pending_title">Pending Approval</h3>
+                        <p class="text-secondary text-sm mb-2" data-i18n="yara.my_pending_hint">Rules waiting for admin approval. They will appear in the feed once approved.</p>
+                        <div class="overflow-x-auto rounded-lg border border-white/10 mb-4">
+                            <table class="w-full border-collapse">
+                                <thead>
+                                    <tr class="bg-tertiary">
+                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.name">Rule Name</th>
+                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.comment">Comment</th>
+                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.date">Date</th>
+                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.analyst">Analyst</th>
+                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.ticket">Ticket</th>
+                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.actions">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="yaraPendingTableBody">
+                                    <tr><td colspan="6" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">No pending rules</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <h3 class="text-xl font-bold mt-6 mb-3 accent-blue" data-i18n="yara.active_repo">Active Rules Repository</h3>
+                    <input type="text" id="yaraTableFilter" class="w-full md:w-1/3 bg-dark-800 border border-white/10 rounded px-3 py-2 text-sm text-white focus:border-cyan-400 placeholder-white/30 mb-3" placeholder="🔍 Filter rules by name, comment, analyst, or ticket..." data-i18n-placeholder="yara.filter_placeholder">
+                    <div class="overflow-x-auto rounded-lg border border-white/10">
+                        <table class="w-full border-collapse">
+                            <thead>
+                                <tr class="bg-tertiary">
+                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.name">Rule Name</th>
+                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.comment">Comment</th>
+                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.size">Size</th>
+                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.date">Date</th>
+                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.analyst">Analyst</th>
+                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.ticket">Ticket</th>
+                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.actions">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="yaraRulesTableBody">
+                                <tr>
+                                    <td colspan="7" class="border border-white/10 px-4 py-6 text-center text-secondary text-sm" data-i18n="yara.loading">Loading...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Tab 7: Champs Analysis 5.0 - Operational Hall of Fame -->
+                <div id="tab-champs" class="tab-content hidden flex flex-col h-full overflow-hidden champs-tab">
+                    <div class="champs-hero flex-shrink-0 mb-1">
+                        <h2 class="champs-title text-2xl font-bold accent-blue mb-0" data-i18n="champs.title">Champs Analysis</h2>
+                    </div>
+
+                    <!-- Team HUD - single row: title (left) | bar + % | current/target (far right) -->
+                    <div id="champsTeamHud" class="flex-shrink-0 mb-2">
+                        <div class="champs-hud-card bg-tertiary rounded-xl border border-white/10 py-2 px-4 overflow-hidden shadow-lg">
+                            <div class="flex items-center gap-3">
+                                <h4 id="champsTeamHudTitle" class="champs-hud-title text-xs font-bold uppercase tracking-widest text-secondary truncate shrink-0 max-w-[12rem]"></h4>
+                                <div id="champsTeamHudBarArea" class="flex items-center gap-3 flex-1 min-w-0">
+                                    <div class="champs-hud-track flex-1 h-5 bg-black/40 rounded-full overflow-hidden border border-white/10 relative min-w-0">
+                                        <div id="champsTeamHudBar" class="champs-hud-bar h-full bg-gradient-to-r from-cyan-500 via-emerald-500 to-green-400 rounded-full transition-all duration-700 relative overflow-hidden" style="width: 0%"></div>
+                                    </div>
+                                    <span id="champsTeamHudPercent" class="champs-hud-percent text-sm font-bold font-mono accent-green shrink-0 min-w-[2.5rem] text-right">0%</span>
+                                </div>
+                                <span id="champsTeamHudSub" class="text-xs text-secondary font-medium shrink-0 text-right whitespace-nowrap"></span>
+                                <button id="champsSetGoalBtn" type="button" class="hidden text-xs px-2 py-1 rounded border border-amber-400/50 hover:bg-amber-400/10 text-amber-400 font-medium transition shrink-0" data-i18n="champs.set_goal">Set Goal</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Ladder (left) + Analyst Spotlight (center) -->
+                    <div class="flex-1 min-h-0 flex gap-4 overflow-hidden">
+                        <aside id="champsLadder" class="champs-ladder w-[300px] flex-shrink-0 flex flex-col min-h-0 bg-tertiary rounded-xl border border-white/10 overflow-hidden shadow-lg">
+                            <div class="champs-ladder-header px-4 py-3 border-b border-white/10">
+                                <h3 class="text-sm font-bold uppercase tracking-widest text-secondary" data-i18n="champs.leaderboard">Analysts Leaderboard</h3>
+                                <p class="text-xs text-secondary/80 mt-0.5">Rank • Score • Trend</p>
+                            </div>
+                            <div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2">
+                                <div id="champsLadderList" class="space-y-1">
+                                    <div class="text-secondary text-sm py-4 text-center" data-i18n="champs.loading">Loading...</div>
+                                </div>
+                            </div>
+                        </aside>
+                        <div class="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+                            <div id="champsSpotlight" class="champs-spotlight-wrap flex-1 min-h-0 rounded-xl border border-white/10 p-2 flex flex-col overflow-hidden">
+                                <div id="champsSpotlightPlaceholder" class="champs-spotlight-placeholder flex-1 flex flex-col items-center justify-center text-secondary">
+                                    <span class="text-4xl mb-3 opacity-60">🏆</span>
+                                    <p class="text-center font-medium" data-i18n="champs.spotlight_click">Click an analyst to view details</p>
+                                    <p class="text-xs mt-1 opacity-80">Level, XP, badges & activity</p>
+                                </div>
+                                <div id="champsSpotlightContent" class="champs-spotlight-content hidden flex-1 min-h-0 flex flex-col overflow-hidden"></div>
+                            </div>
+                        </div>
+                        <aside id="champsTrophyCabinet" class="champs-trophy-cabinet w-[300px] flex-shrink-0 flex flex-col min-h-0 bg-tertiary rounded-xl border border-white/10 overflow-hidden shadow-lg">
+                            <div class="champs-trophy-cabinet-header px-4 py-3 border-b border-white/10">
+                                <h3 class="text-sm font-bold uppercase tracking-widest text-secondary">Trophy Cabinet</h3>
+                                <p class="text-xs text-secondary/80 mt-0.5">Achievement badges</p>
+                            </div>
+                            <div id="champsTrophyCabinetList" class="champs-trophy-cabinet-list flex-1 min-h-0 overflow-y-auto custom-scrollbar p-3 flex flex-wrap content-start gap-4">
+                                <div id="champsTrophyCabinetPlaceholder" class="w-full py-8 text-center text-secondary text-sm">Select an analyst</div>
+                            </div>
+                        </aside>
+                    </div>
+
+                    <!-- News Ticker - custom messages (admin) or activity; bold, green | separator, loop -->
+                    <div id="champsTicker" class="champs-ticker flex-shrink-0 mt-2 rounded-lg overflow-hidden flex items-center border border-white/10 bg-black/40">
+                        <span class="champs-ticker-live px-4 py-2 text-sm font-bold uppercase tracking-wider bg-cyan-500/20 text-cyan-400 border-r border-white/10 shrink-0" data-i18n="champs.ticker_label">MSG</span>
+                        <div class="champs-ticker-scroll-wrap flex-1 min-w-0 overflow-hidden">
+                            <div id="champsTickerScroll" class="champs-ticker-scroll">
+                                <span id="champsTickerStrip" class="champs-ticker-strip"></span>
+                            </div>
+                        </div>
+                        <button type="button" id="champsTickerMsgSettingsBtn" class="champs-ticker-msg-settings-btn hidden shrink-0 px-4 py-2 text-sm font-bold border-l border-white/10 hover:bg-white/10 transition-colors" data-i18n="champs.msg_settings">Msg Settings</button>
+                    </div>
+                </div>
+
+                <!-- Tab: Campaign Graph (3-column fixed layout, no page scroll) -->
+                <div id="tab-campaigns" class="tab-content hidden flex flex-col h-full overflow-hidden">
+                    <h2 class="text-2xl font-bold mb-3 accent-blue flex-shrink-0" data-i18n="campaign.title">Campaign Graph</h2>
+                    <div class="flex-1 min-h-0 flex gap-3">
+                        <!-- Left Sidebar: Active Campaigns -->
+                        <aside class="w-[300px] flex-shrink-0 flex flex-col min-h-0 overflow-hidden">
+                            <div class="card bg-tertiary rounded-lg p-4 flex flex-col h-full min-h-0">
+                                <div class="flex items-center justify-between mb-2 flex-shrink-0">
+                                    <h3 class="text-lg font-semibold accent-blue" data-i18n="campaign.active">Active Campaigns</h3>
+                                </div>
+                                <ul id="campaignList" class="space-y-1 overflow-y-auto flex-1 min-h-0 text-sm">
+                                    <li class="text-secondary" data-i18n="campaign.loading">Loading…</li>
+                                </ul>
+                            </div>
+                        </aside>
+                        <!-- Center: Graph (fills remaining space) -->
+                        <div class="flex-1 min-w-0 min-h-0 flex flex-col">
+                            <div id="campaign-network" class="campaign-network-canvas w-full h-full min-h-0 rounded-xl border-2"></div>
+                        </div>
+                        <!-- Right Sidebar: Create Campaign + Link IOC -->
+                        <aside class="w-[300px] flex-shrink-0 flex flex-col gap-3 min-h-0">
+                            <div class="card bg-tertiary rounded-lg p-4 flex-shrink-0">
+                                <h3 class="text-lg font-semibold mb-3 accent-blue" data-i18n="campaign.create">Create Campaign</h3>
+                                <form id="campaignCreateForm" class="space-y-3">
+                                    <div>
+                                        <label class="block mb-1 text-sm font-medium" data-i18n="campaign.name">Name</label>
+                                        <input type="text" id="campaignName" required class="w-full px-3 py-2 rounded" placeholder="Campaign name" data-i18n-placeholder="campaign.name_placeholder">
+                                    </div>
+                                    <div>
+                                        <label class="block mb-1 text-sm font-medium" data-i18n="campaign.description">Description</label>
+                                        <textarea id="campaignDesc" rows="2" class="w-full px-3 py-2 rounded" placeholder="Optional description" data-i18n-placeholder="campaign.desc_placeholder"></textarea>
+                                    </div>
+                                    <button type="submit" class="w-full btn-cmd-primary" data-i18n="campaign.create_btn">Create Campaign</button>
+                                </form>
+                            </div>
+                            <div class="card bg-tertiary rounded-lg p-4 flex-1 min-h-0 flex flex-col">
+                                <h3 class="text-lg font-semibold mb-3 accent-blue flex-shrink-0" data-i18n="campaign.link_ioc">Link IOC</h3>
+                                <form id="campaignLinkForm" class="space-y-3">
+                                    <div>
+                                        <label class="block mb-1 text-sm font-medium" data-i18n="campaign.ioc_value">IOC Value</label>
+                                        <input type="text" id="linkIocValue" required class="w-full px-3 py-2 rounded" placeholder="Exact IOC value" data-i18n-placeholder="campaign.ioc_value_placeholder">
+                                    </div>
+                                    <div>
+                                        <label class="block mb-1 text-sm font-medium" data-i18n="campaign.campaign_label">Campaign</label>
+                                        <select id="linkCampaignSelect" class="w-full px-3 py-2 rounded">
+                                            <option value="" data-i18n="campaign.select_campaign">-- Select campaign --</option>
+                                        </select>
+                                    </div>
+                                    <button type="submit" class="w-full btn-cmd-primary" data-i18n="campaign.link_btn">Link IOC</button>
+                                </form>
+                            </div>
+                            <div class="card bg-tertiary rounded-lg p-4 flex-shrink-0">
+                                <div class="flex flex-col gap-2">
+                                    <button type="button" id="exportCampaignBtn" class="w-full btn-cmd-primary py-3 hidden" title="Export Selected Campaign to CSV" data-i18n="campaign.export_csv">Export Selected Campaign to CSV</button>
+                                    <button type="button" id="exportCampaignJsonBtn" class="w-full btn-cmd-primary py-3 hidden" title="Export Selected Campaign to JSON" data-i18n="campaign.export_json">Export Selected Campaign to JSON</button>
+                                </div>
+                            </div>
+                        </aside>
+                    </div>
+                </div>
+
+                <!-- Tab: Hunter's Playbook (OSINT & Threat Intel Sites - Tabs Layout) -->
+                <div id="tab-playbook" class="tab-content hidden flex flex-col h-full overflow-hidden">
+                    <h2 class="text-2xl font-bold mb-4 accent-blue flex-shrink-0" data-i18n="playbook.title">Hunter's Playbook</h2>
+                    <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 min-h-0">
+                        <!-- Col-4: Site Tabs (scrollable list of site tabs) -->
+                        <aside class="lg:col-span-4 flex flex-col min-h-0 bg-tertiary rounded-xl border border-white/10 overflow-hidden playbook-index">
+                            <div class="p-3 flex-shrink-0 border-b border-white/10 space-y-2">
+                                <input type="text" id="playbookSearch" class="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-primary placeholder-slate-400 focus:border-accent-green focus:outline-none focus:ring-1 focus:ring-accent-green/50" placeholder="Filter sites..." aria-label="Filter sites">
+                                <div id="playbookTagFilters" class="flex flex-wrap gap-1.5">
+                                    <!-- Tag filter buttons rendered by JS -->
+                                </div>
+                                <div id="playbookAdminActions" class="hidden flex gap-2 pt-2 border-t border-white/10">
+                                    <button type="button" onclick="openPlaybookEditModal(null)" class="btn-cmd-neutral text-xs flex-1">+ Add Site</button>
+                                    <button type="button" onclick="openPlaybookEditModal(null, 'group')" class="btn-cmd-neutral text-xs flex-1">+ Add Group</button>
+                                    <button type="button" onclick="openPlaybookEditModal(null, 'workflow')" class="btn-cmd-neutral text-xs flex-1">+ Add Workflow</button>
+                                </div>
+                            </div>
+                            <div id="playbookTabs" class="flex-1 overflow-y-auto p-3 space-y-1 custom-scrollbar">
+                                <!-- Site tabs rendered by JS -->
+                            </div>
+                        </aside>
+                        <!-- Col-8: Site Content (3 sections with green dividers) -->
+                        <main class="lg:col-span-8 flex flex-col min-h-0 bg-tertiary rounded-xl border border-white/10 overflow-hidden playbook-reading-pane">
+                            <div id="playbookContent" class="flex-1 overflow-y-auto p-6 custom-scrollbar playbook-content">
+                                <p class="text-secondary">Select a site from the tabs to view details.</p>
+                            </div>
+                        </main>
+                    </div>
+                </div>
+
+                <!-- Tab: Feed Pulse (Diff view: Incoming vs Outgoing) -->
+                <div id="tab-feed-pulse" class="tab-content hidden flex flex-col h-full overflow-hidden">
+                    <div class="flex-shrink-0 mb-3 flex flex-wrap items-center justify-between gap-3">
+                        <h2 class="text-2xl font-bold accent-blue" data-i18n="feedpulse.title">Feed Pulse</h2>
+                        <div class="flex flex-wrap items-center gap-2">
+                            <label for="feedPulseType" class="feed-pulse-select-label text-sm font-medium text-primary shrink-0" data-i18n="feedpulse.type_label">IOC Type:</label>
+                            <select id="feedPulseType" class="feed-pulse-select h-8 text-sm px-2 py-0.5 rounded bg-tertiary border border-white/10 text-primary min-w-[120px]" aria-label="IOC Type">
+                                <option value="all" selected data-i18n="feedpulse.type_all">All Types</option>
+                                <option value="IP">IP</option>
+                                <option value="Domain">Domain</option>
+                                <option value="URL">URL</option>
+                                <option value="Hash">Hash</option>
+                                <option value="Email">Email</option>
+                            </select>
+                            <label for="feedPulseHours" class="feed-pulse-select-label text-sm font-medium text-primary shrink-0" data-i18n="feedpulse.hours_label">Period:</label>
+                            <select id="feedPulseHours" class="feed-pulse-select h-8 text-sm px-2 py-0.5 rounded bg-tertiary border border-white/10 text-primary min-w-[120px]" aria-label="Time period">
+                                <option value="24" selected data-i18n="feedpulse.hours_24">Last 24h</option>
+                                <option value="48" data-i18n="feedpulse.hours_48">Last 48h</option>
+                                <option value="72" data-i18n="feedpulse.hours_72">Last 72h</option>
+                                <option value="168" data-i18n="feedpulse.hours_168">Last 7 days</option>
+                                <option value="720" data-i18n="feedpulse.hours_720">Last 30 days</option>
+                                <option value="2160" data-i18n="feedpulse.hours_2160">Last 3 months</option>
+                                <option value="8760" data-i18n="feedpulse.hours_8760">Last year</option>
+                            </select>
+                            <button type="button" id="feedPulseRefreshBtn" class="btn-cmd-primary btn-cmd-sm" data-i18n="feedpulse.refresh">Refresh</button>
+                            <button type="button" id="feedPulseExportBtn" class="btn-cmd-primary btn-cmd-sm" data-i18n="feedpulse.export_report">Export Report</button>
+                            <button type="button" id="feedPulseAllowlistBtn" class="hidden btn-cmd-neutral btn-cmd-sm" data-i18n="feedpulse.allowlist_btn">Allowlist</button>
+                            <button type="button" id="feedCatalogBtn" class="btn-cmd-neutral btn-cmd-sm flex items-center gap-1.5">
+                                <img src="{{ url_for('static', filename='ziochub_smaller.png') }}" alt="" class="w-4 h-4 object-contain">
+                                <span data-i18n="feedpulse.feed_catalog">Feed Catalog</span>
+                            </button>
+                            <button type="button" id="taxiiCatalogBtn" class="btn-cmd-neutral btn-cmd-sm flex items-center gap-1.5">
+                                <span>📦</span>
+                                <span data-i18n="taxii_catalog.btn">TAXII Catalog</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Area A: Vitals Header (softened semantic colors for consistency with Live Stats) -->
+                    <div class="flex-shrink-0 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+                        <div class="bg-tertiary border border-green-500/30 rounded-lg p-4 flex flex-col items-center">
+                            <span class="text-2xl font-bold text-green-400" id="feedPulseFresh">+0</span>
+                            <span class="text-xs text-green-200 mt-1" data-i18n="feedpulse.fresh">Fresh Intelligence</span>
+                        </div>
+                        <div class="bg-tertiary border border-red-500/30 rounded-lg p-4 flex flex-col items-center">
+                            <span class="text-2xl font-bold text-red-400" id="feedPulseExpired">-0</span>
+                            <span class="text-xs text-red-200 mt-1" data-i18n="feedpulse.expired">Expired / Deleted</span>
+                        </div>
+                        <div class="bg-tertiary border border-orange-500/30 rounded-lg p-4 flex flex-col items-center">
+                            <span class="text-2xl font-bold text-orange-400" id="feedPulseExcluded">0</span>
+                            <span class="text-xs text-orange-200 mt-1" data-i18n="feedpulse.excluded_count">Excluded</span>
+                        </div>
+                        <div class="bg-tertiary border border-blue-500/30 rounded-lg p-4 flex flex-col items-center">
+                            <span class="text-2xl font-bold text-blue-400" id="feedPulseTotal">0</span>
+                            <span class="text-xs text-blue-200 mt-1" data-i18n="feedpulse.total_active">Total Active IOCs</span>
+                        </div>
+                        <div class="bg-tertiary border border-slate-500/40 rounded-lg p-4 flex flex-col items-center">
+                            <span class="text-2xl font-bold text-slate-300" id="feedPulseTotalAll">0</span>
+                            <span class="text-xs text-slate-200 mt-1" data-i18n="feedpulse.total_all">Total IOCs (All)</span>
+                        </div>
+                    </div>
+
+                    <!-- Area B: Split View (Incoming | Outgoing | Excluded) - Incoming left, Outgoing center, Excluded right -->
+                    <div class="flex-1 min-h-0 flex gap-3 flex-col lg:flex-row">
+                        <div class="flex-1 min-h-0 min-w-0 flex flex-col bg-tertiary border border-green-500/30 rounded-lg overflow-hidden">
+                            <div class="flex-shrink-0 px-3 py-2 bg-tertiary border-b border-green-500/30 font-semibold text-green-200 text-sm">
+                                <span data-i18n="feedpulse.incoming">Incoming Stream</span> <span id="feedPulseIncomingCount" class="opacity-80">(0)</span>
+                            </div>
+                            <div class="flex-1 min-h-0 overflow-y-auto">
+                                <table class="w-full border-collapse text-sm">
+                                    <thead class="sticky top-0 bg-tertiary z-10">
+                                        <tr>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="bulk.staging_col.ioc">IOC</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="bulk.staging_col.type">Type</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="bulk.staging_col.analyst">Analyst</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="bulk.campaign">Campaign</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="feedPulseIncomingBody"></tbody>
+                                </table>
+                                <div id="feedPulseIncomingEmpty" class="hidden px-4 py-8 text-center text-secondary text-sm" data-i18n="feedpulse.no_incoming">No incoming IOCs in this window.</div>
+                            </div>
+                        </div>
+                        <div class="flex-1 min-h-0 min-w-0 flex flex-col bg-tertiary border border-red-500/30 rounded-lg overflow-hidden">
+                            <div class="flex-shrink-0 px-3 py-2 bg-tertiary border-b border-red-500/30 font-semibold text-red-200 text-sm">
+                                <span data-i18n="feedpulse.outgoing">Outgoing Stream</span> <span id="feedPulseOutgoingCount" class="opacity-80">(0)</span>
+                            </div>
+                            <div class="flex-1 min-h-0 overflow-y-auto">
+                                <table class="w-full border-collapse text-sm">
+                                    <thead class="sticky top-0 bg-tertiary z-10">
+                                        <tr>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="bulk.staging_col.ioc">IOC</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="bulk.staging_col.type">Type</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="bulk.staging_col.analyst">Analyst</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="bulk.staging_col.expiration">Expiration</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="feedpulse.reason">Reason</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="feedPulseOutgoingBody"></tbody>
+                                </table>
+                                <div id="feedPulseOutgoingEmpty" class="hidden px-4 py-8 text-center text-secondary text-sm" data-i18n="feedpulse.no_outgoing">No outgoing IOCs in this window.</div>
+                            </div>
+                        </div>
+                        <div class="flex-1 min-h-0 min-w-0 flex flex-col bg-tertiary border border-orange-500/30 rounded-lg overflow-hidden" id="feedPulseExcludedArea">
+                            <div class="flex-shrink-0 px-3 py-2 bg-tertiary border-b border-orange-500/30 font-semibold text-orange-200 text-sm">
+                                <span data-i18n="feedpulse.excluded_stream">Excluded</span> <span id="feedPulseExcludedCount" class="opacity-80">(0)</span>
+                            </div>
+                            <div class="flex-1 min-h-0 overflow-y-auto">
+                                <table class="w-full border-collapse text-sm">
+                                    <thead class="sticky top-0 bg-tertiary z-10">
+                                        <tr>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="bulk.staging_col.ioc">IOC</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="bulk.staging_col.type">Type</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="feedpulse.anomaly_col">Anomaly</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="bulk.staging_col.analyst">Analyst</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold" data-i18n="feedpulse.date">Date</th>
+                                            <th class="border border-white/10 px-2 py-1.5 text-left text-xs font-semibold w-20" data-i18n="feedpulse.un_exclude">Un-exclude</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="feedPulseExcludedBody"></tbody>
+                                </table>
+                                <div id="feedPulseExcludedEmpty" class="hidden px-4 py-8 text-center text-secondary text-sm" data-i18n="feedpulse.no_excluded">No exclusions yet.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Area C: Anomaly Alerts (shows only when anomalies detected) - softened -->
+                    <div id="feedPulseAnomaliesArea" class="hidden flex-shrink-0 mt-4 bg-tertiary border-2 border-amber-500/40 rounded-lg p-4 shadow-lg">
+                        <h4 class="font-bold text-amber-100 mb-3 flex items-center gap-2 text-base">
+                            <span>⚠️</span>
+                            <span data-i18n="feedpulse.anomaly_title_failed">Sanity Check Failed:</span>
+                        </h4>
+                        <ul id="feedPulseAnomaliesList" class="space-y-2 text-sm text-amber-100"></ul>
+                    </div>
+
+                    <!-- Allowlist view popup (read-only; admin edits in Admin → Allowlist) -->
+                    <div id="feedPulseAllowlistModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+                        <div class="bg-secondary rounded-lg shadow-xl border border-white/10 w-full max-w-2xl max-h-[85vh] flex flex-col mx-4">
+                            <div class="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-white/10">
+                                <h3 class="text-lg font-bold accent-blue" data-i18n="feedpulse.allowlist_title">Allowlist (read-only)</h3>
+                                <button type="button" id="feedPulseAllowlistModalClose" class="btn-cmd-neutral modal-close-btn" aria-label="Close">&times;</button>
+                            </div>
+                            <div class="flex-1 min-h-0 overflow-hidden p-4">
+                                <p class="text-xs text-secondary mb-2" data-i18n="feedpulse.allowlist_hint">Content managed by Admin. Lines starting with # are comments.</p>
+                                <pre id="feedPulseAllowlistContent" class="w-full h-full min-h-[200px] max-h-[60vh] overflow-auto p-3 rounded bg-tertiary border border-white/10 text-sm font-mono whitespace-pre-wrap break-words text-primary">Loading...</pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab: Reports (Master-Detail) - Champs-style -->
+                <div id="tab-reports" class="tab-content hidden flex flex-col h-full overflow-hidden reports-tab">
+                    <div class="reports-hero flex items-center justify-between flex-shrink-0 mb-3">
+                        <div>
+                            <h2 class="reports-title text-2xl font-bold accent-blue mb-0" data-i18n="reports.title">Intelligence Reports</h2>
+                            <p class="text-xs text-secondary/80 mt-0.5">Executive dashboard • Team analytics • Analyst spotlight</p>
+                        </div>
+                        <button id="reportExportPdfBtn" class="hidden btn-cmd-primary btn-cmd-sm" onclick="window.exportReportPDF && window.exportReportPDF()">
+                            <span data-i18n="reports.export_pdf">Export PDF</span>
+                        </button>
+                    </div>
+                    <div class="flex flex-1 min-h-0 gap-4">
+                        <!-- Master: Left sidebar (Champs-style) -->
+                        <div class="reports-sidebar w-56 flex-shrink-0 flex flex-col bg-tertiary rounded-xl border border-white/10 overflow-hidden shadow-lg">
+                            <div class="flex border-b border-white/10">
+                                <button class="report-period-btn flex-1 py-2 text-xs font-semibold text-center transition hover:bg-white/5 border-b-2 border-transparent text-secondary" data-period="day" data-i18n="reports.day">Day</button>
+                                <button class="report-period-btn flex-1 py-2 text-xs font-semibold text-center transition hover:bg-white/5 border-b-2 border-accent-green text-primary" data-period="week" data-i18n="reports.week">Week</button>
+                                <button class="report-period-btn flex-1 py-2 text-xs font-semibold text-center transition hover:bg-white/5 border-b-2 border-transparent text-secondary" data-period="month" data-i18n="reports.month">Month</button>
+                            </div>
+                            <div id="reportsList" class="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                                <div class="text-xs text-secondary text-center py-4" data-i18n="reports.loading">Loading reports...</div>
+                            </div>
+                        </div>
+
+                        <!-- Detail: Right main panel (scrollable) -->
+                        <div id="reportDetailPanel" class="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-lg">
+                            <div id="reportEmptyState" class="flex items-center justify-center h-full">
+                                <div class="text-center text-secondary">
+                                    <div class="text-5xl mb-4">📊</div>
+                                    <p class="text-lg" data-i18n="reports.select_report">Select a report from the left panel</p>
+                                </div>
+                            </div>
+                            <div id="reportContent" class="hidden space-y-6 pb-8 min-w-0">
+                                <!-- Section 1: Executive Dashboard (Champs-style) -->
+                                <div class="report-section min-w-0" id="reportExecSection">
+                                    <div class="report-section-hero mb-4">
+                                        <h3 class="report-section-title text-lg font-bold accent-blue uppercase tracking-wider" data-i18n="reports.exec_title">Executive Dashboard</h3>
+                                        <p class="report-section-sub text-xs text-secondary/80 mt-0.5">KPIs • Summary • Trends</p>
+                                    </div>
+                                    <div id="reportKpiCards" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-4"></div>
+                                    <div id="reportExecSummary" class="report-card text-sm text-secondary"></div>
+                                </div>
+
+                                <!-- Section 2: Team Operations & IOC Intelligence (Champs-style) -->
+                                <div class="report-section" id="reportOpsSection">
+                                    <div class="report-section-hero mb-4">
+                                        <h3 class="report-section-title text-lg font-bold accent-blue uppercase tracking-wider" data-i18n="reports.ops_title">Team Operations & IOC Intelligence</h3>
+                                        <p class="report-section-sub text-xs text-secondary/80 mt-0.5">Charts • Distribution • Intelligence</p>
+                                    </div>
+                                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                                        <div class="report-card">
+                                            <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.type_dist">IOC Type Distribution</h4>
+                                            <div class="h-[200px] relative"><canvas id="reportTypeChart"></canvas></div>
+                                        </div>
+                                        <div class="report-card">
+                                            <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.sub_rate">Submission Rate</h4>
+                                            <div class="report-rate-chart-wrap flex-1 min-h-[260px] relative"><canvas id="reportRateChart"></canvas></div>
+                                        </div>
+                                    </div>
+                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                        <div class="report-card">
+                                            <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.top_countries">Top Countries</h4>
+                                            <div id="reportTopCountries" class="country-leaderboard space-y-1 text-sm"></div>
+                                        </div>
+                                        <div class="report-card">
+                                            <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.top_campaigns">Top Campaigns</h4>
+                                            <div id="reportTopCampaigns" class="country-leaderboard space-y-1 text-sm"></div>
+                                        </div>
+                                        <div class="report-card">
+                                            <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.sub_methods">Submission Methods</h4>
+                                            <div id="reportSubMethods" class="country-leaderboard space-y-1 text-sm"></div>
+                                        </div>
+                                    </div>
+                                    <div class="report-card mb-4">
+                                        <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.campaigns_created">Campaigns Created by Analyst</h4>
+                                        <div id="reportCampaignsCreated" class="space-y-0 text-sm min-h-[200px] max-h-[400px] overflow-y-auto custom-scrollbar flex flex-col items-stretch"></div>
+                                    </div>
+                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                        <div class="report-card">
+                                            <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.expiration">Expiration Policy</h4>
+                                            <div id="reportExpiration" class="country-leaderboard space-y-1 text-sm"></div>
+                                        </div>
+                                        <div class="report-card">
+                                            <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.tld_intel">TLD Intelligence</h4>
+                                            <div class="h-[160px] relative"><canvas id="reportTldChart"></canvas></div>
+                                        </div>
+                                        <div class="report-card">
+                                            <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.ioc_quality">IOC Quality</h4>
+                                            <div id="reportIocQuality" class="space-y-1 text-sm"></div>
+                                        </div>
+                                    </div>
+                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div class="report-card">
+                                            <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.anomalies">Feed Anomalies</h4>
+                                            <div id="reportAnomalies" class="space-y-1 text-sm"></div>
+                                        </div>
+                                        <div class="report-card">
+                                            <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.yara_quality">YARA Quality</h4>
+                                            <div class="flex flex-col gap-3">
+                                                <div class="h-[120px] relative min-h-0"><canvas id="reportYaraChart"></canvas></div>
+                                                <div id="reportYaraQuality" class="space-y-1 text-sm"></div>
+                                            </div>
+                                        </div>
+                                        <div class="report-card">
+                                            <h4 class="text-sm font-bold uppercase tracking-wider text-secondary mb-3" data-i18n="reports.rare_finds">Rare Finds</h4>
+                                            <div id="reportRareFinds" class="space-y-1 text-sm"></div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Section 3: Analyst Spotlight (Champs-style) -->
+                                <div class="report-section report-analyst-section min-w-0" id="reportAnalystsSection">
+                                    <div class="report-analyst-hero flex-shrink-0 mb-4">
+                                        <h3 class="report-analyst-title text-lg font-bold accent-blue uppercase tracking-wider" data-i18n="reports.analyst_title">Analyst Spotlight</h3>
+                                        <p class="report-analyst-sub text-xs text-secondary/80 mt-0.5">Top performers • Rank • Score • Streak</p>
+                                    </div>
+                                    <div id="reportPodium" class="report-podium-grid grid grid-cols-1 md:grid-cols-3 gap-4 w-full mb-6"></div>
+                                    <div class="report-leaderboard-wrap bg-tertiary rounded-xl border border-white/10 overflow-hidden shadow-lg mb-4">
+                                        <div class="report-leaderboard-header px-4 py-3 border-b border-white/10">
+                                            <h4 class="text-sm font-bold uppercase tracking-widest text-secondary" data-i18n="champs.leaderboard">Analysts Leaderboard</h4>
+                                            <p class="text-xs text-secondary/80 mt-0.5">Rank • IOCs • YARA • Score • Streak</p>
+                                        </div>
+                                        <table class="w-full text-sm">
+                                            <thead class="bg-white/5">
+                                                <tr>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold text-secondary">#</th>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold text-secondary" data-i18n="reports.analyst">Analyst</th>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold text-secondary">IOCs</th>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold text-secondary">YARA</th>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold text-secondary" data-i18n="reports.cleanups">Cleanups</th>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold text-secondary" data-i18n="reports.score">Score</th>
+                                                    <th class="px-3 py-2 text-left text-xs font-semibold text-secondary" data-i18n="reports.streak">Streak</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="reportLeaderboard"></tbody>
+                                        </table>
+                                    </div>
+                                    <div id="reportTeamGoal" class="hidden bg-tertiary rounded-xl p-4 border border-white/10 shadow-lg mb-4"></div>
+                                    <div id="reportMentorshipInsights" class="hidden bg-tertiary rounded-xl p-4 border border-amber-500/30 shadow-lg"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Modal -->
+    <div id="editModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="modal-dialog bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm">
+            <h3 class="text-xl font-bold mb-3 accent-blue" data-i18n="edit.title">Edit IOC</h3>
+            <form id="editForm" class="space-y-3">
+                <input type="hidden" id="editIocType">
+                <input type="hidden" id="editIocValue">
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="edit.ioc">IOC</label>
+                    <input type="text" id="editIocDisplay" readonly 
+                           class="w-full bg-tertiary opacity-75">
+                </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="edit.comment">Comment</label>
+                    <textarea id="editComment" rows="3" 
+                                       class="w-full"
+                              data-i18n-placeholder="edit.comment_placeholder"></textarea>
+                </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="edit.expiration">Expiration</label>
+                    <input type="text" id="editExpiration" 
+                                       class="w-full"
+                           data-i18n-placeholder="edit.expiration_placeholder">
+                    <p class="text-xs text-secondary mt-1" data-i18n="edit.expiration_hint">Format: YYYY-MM-DD or "Permanent"</p>
+                </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="edit.ticket_id">Ticket ID</label>
+                    <input type="text" id="editTicketId" class="w-full" placeholder="e.g. INC-12345" data-i18n-placeholder="edit.ticket_placeholder">
+                </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="search.col.tags">Tags</label>
+                    <input type="text" id="editTags" class="w-full" placeholder="tag1, tag2" data-i18n-placeholder="submit.tags_placeholder">
+                </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="edit.campaign_assign">Campaign Assignment</label>
+                    <select id="editCampaignSelect" class="w-full bg-tertiary border border-white/10 rounded px-3 py-2">
+                        <option value="" data-i18n="edit.none">None / Unassigned</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="submit.assign_to">Assign to user</label>
+                    <select id="editAssignTo" class="w-full bg-tertiary border border-white/10 rounded px-3 py-2">
+                        <option value="" data-i18n="submit.me">- Me -</option>
+                    </select>
+                </div>
+                <div class="flex gap-2 justify-end">
+                    <button type="button" id="cancelEdit" 
+                            class="btn-cmd-neutral"
+                            data-i18n="edit.cancel">Cancel</button>
+                    <button type="submit" 
+                            class="btn-cmd-primary"
+                            data-i18n="edit.save">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Delete IOC modal: require reason before revoke -->
+    <div id="deleteIocModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="modal-dialog bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm border border-white/10">
+            <h3 id="deleteIocModalTitle" class="text-xl font-bold text-red-400 mb-2" data-i18n="delete_modal.title">Delete IOC</h3>
+            <p id="deleteIocModalMessage" class="text-sm text-white/90 mb-3" data-i18n="delete_modal.message">You must provide a description of why this indicator is being deleted.</p>
+            <input type="hidden" id="deleteIocValue">
+            <input type="hidden" id="deleteIocType">
+            <div class="mb-4">
+                <label class="block mb-2 text-sm font-semibold" data-i18n="delete_modal.reason_label">Reason for deletion</label>
+                <textarea id="deleteIocReason" rows="3" class="w-full bg-tertiary border border-white/10 rounded px-3 py-2" data-i18n-placeholder="delete_modal.reason_placeholder" placeholder="e.g. False positive, migrated to other system..."></textarea>
+                <p id="deleteIocReasonError" class="text-red-400 text-xs mt-1 hidden"></p>
+            </div>
+            <div class="flex gap-2 justify-end">
+                <button type="button" id="deleteIocCancel" class="btn-cmd-neutral" data-i18n="delete_modal.cancel">Cancel</button>
+                <button type="button" id="deleteIocSubmit" class="btn-cmd-danger" data-i18n="delete_modal.submit">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Playbook Edit Modal (Single Item) -->
+    <div id="playbookEditModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] flex flex-col border border-white/10">
+            <div class="flex items-center justify-between mb-4 flex-shrink-0">
+                <h3 id="playbookEditTitle" class="text-xl font-bold accent-blue">Edit Site</h3>
+                <button type="button" onclick="closePlaybookEditModal()" class="text-secondary hover:text-primary text-2xl">&times;</button>
+            </div>
+            <div class="flex-1 overflow-y-auto min-h-0 mb-4">
+                <form id="playbookEditForm" class="space-y-4">
+                    <input type="hidden" id="playbookEditId">
+                    <input type="hidden" id="playbookEditType" value="site">
+                    <div id="playbookEditGroupFields" class="hidden">
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">Group Name</label>
+                            <input type="text" id="playbookEditName" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2" required>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">Group ID</label>
+                            <input type="text" id="playbookEditGroupId" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2 font-mono text-sm" required>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">Tags (comma-separated)</label>
+                            <input type="text" id="playbookEditGroupTags" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2" placeholder="News, Vuln, Reports">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-2">Sites in Group</label>
+                            <div id="playbookEditGroupSites" class="space-y-2 max-h-60 overflow-y-auto">
+                                <!-- Group sites will be rendered here -->
+                            </div>
+                            <button type="button" onclick="addGroupSiteToEdit()" class="btn-cmd-neutral text-xs mt-2">+ Add Site</button>
+                        </div>
+                    </div>
+                    <div id="playbookEditSiteFields">
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-sm font-semibold mb-1">Site Name</label>
+                                <input type="text" id="playbookEditSiteName" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2" required>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-semibold mb-1">Site ID</label>
+                                <input type="text" id="playbookEditSiteId" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2 font-mono text-sm" required>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">URL</label>
+                            <input type="url" id="playbookEditUrl" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2 font-mono text-sm" required>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">Tags (comma-separated)</label>
+                            <input type="text" id="playbookEditTags" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2" placeholder="IP, Domain, Hash">
+                        </div>
+                        <div>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" id="playbookEditEssential" class="w-4 h-4">
+                                <span class="text-sm font-semibold">Essential Tool (🔥 badge)</span>
+                            </label>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">About & Purpose</label>
+                            <textarea id="playbookEditDescription" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2" rows="3"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">Practical Examples</label>
+                            <textarea id="playbookEditExamples" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2" rows="4"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">Tips & Tricks</label>
+                            <textarea id="playbookEditTips" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2" rows="4"></textarea>
+                        </div>
+                    </div>
+                    <div id="playbookEditWorkflowFields" class="hidden">
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">Tab Name</label>
+                            <input type="text" id="playbookEditWorkflowName" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2" required>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">ID</label>
+                            <input type="text" id="playbookEditWorkflowId" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2 font-mono text-sm" required>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold mb-1">Content (Markdown)</label>
+                            <textarea id="playbookEditWorkflowContent" class="w-full bg-black/20 border border-white/10 rounded px-3 py-2 font-mono text-sm" rows="12" placeholder="## Title&#10;&#10;Paragraph with **bold** and [links](url)..."></textarea>
+                            <div class="mt-2">
+                                <label class="block text-sm font-semibold mb-1 text-secondary">Preview</label>
+                                <div id="playbookEditWorkflowPreview" class="w-full min-h-[120px] max-h-60 overflow-y-auto p-3 rounded-lg bg-black/30 border border-white/10 text-sm playbook-content custom-scrollbar"></div>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="flex gap-2 justify-end flex-shrink-0 border-t border-white/10 pt-4">
+                <button type="button" onclick="closePlaybookEditModal()" class="btn-cmd-neutral">Cancel</button>
+                <button type="button" onclick="savePlaybookItem()" class="btn-cmd-primary">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Playbook Delete confirmation modal -->
+    <div id="playbookDeleteConfirmModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="modal-dialog bg-secondary rounded-lg p-6 max-w-md w-full mx-4 border border-white/10 shadow-xl">
+            <div class="flex items-start gap-3">
+                <span class="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/30 flex items-center justify-center text-red-400 text-xl" aria-hidden="true">⚠</span>
+                <div class="flex-1 min-w-0">
+                    <h3 class="text-lg font-bold text-red-400 mb-2" data-i18n="playbook.delete_confirm_title">Delete item?</h3>
+                    <p class="text-sm text-white/90 mb-4" data-i18n="playbook.delete_confirm_message">Are you sure you want to delete this item? This cannot be undone.</p>
+                    <div class="flex gap-2 justify-end">
+                        <button type="button" id="playbookDeleteConfirmCancel" class="btn-cmd-neutral" data-i18n="modal.cancel">Cancel</button>
+                        <button type="button" id="playbookDeleteConfirmYes" class="btn-cmd-danger" data-i18n="playbook.delete_confirm_yes">Delete</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- IOC History modal (read-only timeline) - max height + scroll inside list -->
+    <div id="iocHistoryModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="modal-dialog modal-dialog--lg bg-secondary rounded-lg p-6 max-w-lg w-full mx-4 max-h-[90vh] flex flex-col border border-white/10 min-w-0 overflow-hidden">
+            <h3 id="iocHistoryTitle" class="text-xl font-bold accent-blue mb-3 flex-shrink-0 min-w-0 break-all">History</h3>
+            <div id="iocHistoryList" class="history-modal-scroll overflow-y-auto overflow-x-hidden flex-1 min-h-0 min-w-0 text-sm space-y-2 mb-2 break-all"></div>
+            <div id="iocHistoryNotesSection" class="border-t border-white/10 pt-3 mt-1 flex-shrink-0">
+                <h4 class="text-sm font-semibold text-amber-300 mb-2" data-i18n="notes.title">Analyst Notes</h4>
+                <div id="iocNotesList" class="max-h-48 overflow-y-auto text-sm space-y-2"></div>
+            </div>
+            <div class="flex justify-end flex-shrink-0 mt-3">
+                <button type="button" id="iocHistoryClose" class="btn-cmd-neutral" data-i18n="modal.close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Note modal -->
+    <div id="addNoteModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="modal-dialog bg-secondary rounded-lg p-6 max-w-md w-full mx-4 border border-white/10">
+            <h3 id="addNoteTitle" class="text-xl font-bold accent-blue mb-1" data-i18n="notes.modal_title">Add Note</h3>
+            <p id="addNoteIocLabel" class="text-xs text-secondary mb-4 font-mono truncate"></p>
+            <textarea id="addNoteContent" maxlength="2000" rows="4"
+                      class="w-full px-3 py-2 rounded bg-tertiary text-white text-sm border border-white/10 focus:border-blue-400 outline-none resize-y"
+                      data-i18n-placeholder="notes.placeholder" placeholder="Add a note..."></textarea>
+            <div class="flex gap-2 justify-end mt-4">
+                <button type="button" id="addNoteCancel" class="btn-cmd-neutral" data-i18n="modal.cancel">Cancel</button>
+                <button type="button" id="addNoteSubmitBtn" class="btn-cmd-primary" data-i18n="notes.add">Add</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Private/Internal IOC confirmation modal (two-step warning) -->
+    <div id="privateConfirmModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 border-2 border-red-500/80 shadow-lg shadow-red-500/20">
+            <div class="flex items-start gap-3">
+                <span class="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/30 flex items-center justify-center text-red-400 text-xl" aria-hidden="true">⚠</span>
+                <div class="flex-1 min-w-0">
+                    <h3 id="privateConfirmTitle" class="text-lg font-bold text-red-400 mb-2"></h3>
+                    <p id="privateConfirmMessage" class="text-sm text-white/90 mb-4"></p>
+                    <div class="flex gap-2 justify-end">
+                        <button type="button" id="privateConfirmCancel" class="btn-cmd-neutral" data-i18n="private_confirm.cancel">Cancel</button>
+                        <button type="button" id="privateConfirmYes" class="px-4 py-2 rounded font-semibold bg-red-600 hover:bg-red-500 text-white border border-red-500"></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- YARA File Preview Modal -->
+    <div id="yaraPreviewModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col backdrop-blur-sm">
+            <div class="p-4 border-b border-white/10 flex justify-between items-center flex-shrink-0">
+                <h3 class="text-xl font-bold accent-blue" id="yaraPreviewTitle" data-i18n="modal.yara_preview">File Preview</h3>
+                <button type="button" id="yaraPreviewClose" class="btn-cmd-neutral" data-i18n="modal.close">Close</button>
+            </div>
+            <pre id="yaraPreviewContent" class="p-4 overflow-auto text-sm font-mono whitespace-pre-wrap flex-1 min-h-0 border-custom"></pre>
+        </div>
+    </div>
+
+    <!-- Profile Settings Modal -->
+    <div id="profileModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[90vh] flex flex-col border border-white/10">
+            <div class="flex justify-between items-center mb-4 flex-shrink-0">
+                <h3 class="text-xl font-bold accent-blue">Profile Settings</h3>
+                <button type="button" id="profileModalClose" class="btn-cmd-neutral" data-i18n="modal.close">Close</button>
+            </div>
+            <div class="overflow-y-auto flex-1 min-h-0">
+                <div class="bg-tertiary rounded-xl border border-white/10 p-6 mb-6">
+                    <div class="flex flex-wrap items-center gap-6 mb-6">
+                        <div id="profileAvatarContainer" class="flex-shrink-0">
+                            <div id="profileAvatarPlaceholder" class="w-24 h-24 rounded-full bg-slate-600/50 flex items-center justify-center text-4xl border-2 border-cyan-400/50">👤</div>
+                            <img id="profileAvatarImg" class="w-24 h-24 rounded-full object-cover border-2 border-cyan-400/50 hidden" alt="Avatar">
+                        </div>
+                        <div>
+                            <p id="profileUsername" class="font-semibold text-lg text-primary"></p>
+                            <p id="profileSource" class="text-secondary text-sm"></p>
+                        </div>
+                    </div>
+
+                    <form id="profileForm" class="space-y-4">
+                        <div>
+                            <label for="profileDisplayName" class="block text-sm font-semibold text-secondary mb-1">Display Name</label>
+                            <input type="text" id="profileDisplayName" name="display_name" maxlength="255"
+                                   class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green focus:ring-1 focus:ring-accent-green">
+                        </div>
+                        <div>
+                            <label for="profileRoleDescription" class="block text-sm font-semibold text-secondary mb-1">Role Description</label>
+                            <textarea id="profileRoleDescription" name="role_description" maxlength="500" rows="3"
+                                      class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green focus:ring-1 focus:ring-accent-green resize-y"></textarea>
+                        </div>
+                        <div class="space-y-2">
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" id="profileMuteSound" name="mute_sound" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green">
+                                <span class="text-sm text-secondary">Mute sound in the system</span>
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" id="profileAmbitionPopupDisabled" name="ambition_popup_disabled" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green">
+                                <span class="text-sm text-secondary">Turn off ambition messages on login</span>
+                            </label>
+                            <label class="flex items-center gap-2 cursor-pointer">
+                                <input type="checkbox" id="profileAchievementPopupDisabled" name="achievement_popup_disabled" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green">
+                                <span class="text-sm text-secondary">Disable achievement popups (points, badges, level)</span>
+                            </label>
+                        </div>
+                        <div class="flex gap-2">
+                            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 border border-cyan-400/40 text-white transition btn-cmd-primary">
+                                Save Profile
+                            </button>
+                        </div>
+                    </form>
+                    <div id="profileMessage" class="mt-4 hidden text-sm"></div>
+
+                    <div class="mt-6 pt-6 border-t border-white/10">
+                        <label class="block text-sm font-semibold text-secondary mb-2">Avatar (jpg, png, gif, webp)</label>
+                        <div class="flex flex-wrap items-center gap-3">
+                            <input type="file" id="profileAvatarFile" accept=".jpg,.jpeg,.png,.gif,.webp" class="text-sm text-primary">
+                            <button type="button" id="profileAvatarUploadBtn" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">
+                                Upload Avatar
+                            </button>
+                            <button type="button" id="profileAvatarRemoveBtn" class="px-4 py-2 rounded-lg font-semibold bg-slate-600 hover:bg-slate-500 text-white transition border border-white/10">
+                                Remove Photo
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- YARA Edit Modal -->
+    <div id="yaraEditModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg max-w-3xl w-full mx-4 max-h-[90vh] flex flex-col backdrop-blur-sm">
+            <div class="p-4 border-b border-white/10 flex justify-between items-center flex-shrink-0">
+                <h3 class="text-xl font-bold accent-blue" id="yaraEditTitle" data-i18n="modal.yara_edit">Edit Rule</h3>
+                <div class="flex gap-2">
+                    <button type="button" id="yaraEditCancel" class="btn-cmd-neutral" data-i18n="modal.cancel">Cancel</button>
+                    <button type="button" id="yaraEditSave" class="btn-cmd-primary" data-i18n="modal.save">Save</button>
+                </div>
+            </div>
+            <textarea id="yaraEditContent" class="w-full h-96 p-4 font-mono text-sm bg-tertiary border border-white/10 rounded m-4 mt-0 resize-y" placeholder="YARA rule content..." data-i18n-placeholder="modal.yara_content_placeholder"></textarea>
+        </div>
+    </div>
+
+    <!-- Team Goal Modal (Admin) -->
+    <div id="champsGoalModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 border border-white/10">
+            <h3 class="text-lg font-bold accent-blue mb-4" data-i18n="champs.set_goal_title">Set Team Goal</h3>
+            <form id="champsGoalForm" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-semibold text-secondary mb-1">Title</label>
+                    <input type="text" id="champsGoalTitle" required placeholder="e.g. Add 50 YARA rules" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-secondary mb-1">Description (optional, shown on hover)</label>
+                    <textarea id="champsGoalDescription" rows="2" placeholder="e.g. Monthly target for new IOCs" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 resize-y"></textarea>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-secondary mb-1">Target</label>
+                    <input type="number" id="champsGoalTarget" required min="1" placeholder="50" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-secondary mb-1">Type</label>
+                    <select id="champsGoalType" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10">
+                        <option value="ioc_add">IOCs Added</option>
+                        <option value="yara_add">YARA Rules</option>
+                        <option value="deletion">Expired IOCs Removed</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-secondary mb-1">Period</label>
+                    <select id="champsGoalPeriod" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10">
+                        <option value="weekly">Weekly</option>
+                        <option value="monthly">Monthly</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-secondary mb-1">Unit (optional)</label>
+                    <input type="text" id="champsGoalUnit" placeholder="e.g. IOCs, YARA rules" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10">
+                </div>
+                <div class="flex gap-2 justify-end">
+                    <button type="button" id="champsGoalCancel" class="btn-cmd-neutral">Cancel</button>
+                    <button type="submit" class="btn-cmd-primary">Set Goal</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Ticker Msg Settings Modal (Admin) - up to 5 messages, each with color -->
+    <div id="champsTickerMsgModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-lg w-full mx-4 border border-white/10">
+            <h3 class="text-lg font-bold accent-blue mb-4" data-i18n="champs.msg_settings_title">Ticker Message Settings</h3>
+            <p class="text-sm text-secondary mb-4" data-i18n="champs.msg_settings_hint">Up to 5 messages. They will loop with a green separator. All text is bold.</p>
+            <div id="champsTickerMsgForm" class="space-y-4">
+                <!-- 5 rows: text + color -->
+                <template id="champsTickerMsgRowTpl">
+                    <div class="champs-ticker-msg-row flex gap-2 items-center flex-wrap">
+                        <input type="text" class="champs-ticker-msg-text flex-1 min-w-0 px-3 py-2 rounded-lg bg-tertiary border border-white/10" placeholder="Message text" maxlength="200">
+                        <input type="color" class="champs-ticker-msg-color w-12 h-10 rounded cursor-pointer border border-white/20" value="#ffffff" title="Color">
+                    </div>
+                </template>
+                <div id="champsTickerMsgRows"></div>
+                <div class="flex gap-2 justify-end">
+                    <button type="button" id="champsTickerMsgCancel" class="btn-cmd-neutral" data-i18n="champs.msg_settings_cancel">Cancel</button>
+                    <button type="button" id="champsTickerMsgSave" class="btn-cmd-primary" data-i18n="champs.msg_settings_save">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Campaign Delete confirmation modal -->
+    <div id="campaignDeleteConfirmModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 border border-white/10 shadow-xl">
+            <div class="flex items-start gap-3">
+                <span class="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/30 flex items-center justify-center text-red-400 text-xl" aria-hidden="true">⚠</span>
+                <div class="flex-1 min-w-0">
+                    <h3 class="text-lg font-bold text-red-400 mb-2" data-i18n="campaign.delete_confirm_title">Delete campaign?</h3>
+                    <p id="campaignDeleteConfirmMessage" class="text-sm text-white/90 mb-4"></p>
+                    <div class="flex gap-2 justify-end">
+                        <button type="button" id="campaignDeleteConfirmCancel" class="btn-cmd-neutral" data-i18n="modal.cancel">Cancel</button>
+                        <button type="button" id="campaignDeleteConfirmYes" class="btn-cmd-danger" data-i18n="campaign.delete_confirm_yes">Delete</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Campaign Edit Modal -->
+    <div id="campaignEditModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm">
+            <h3 class="text-xl font-bold mb-3 accent-blue" data-i18n="modal.edit_campaign">Edit Campaign</h3>
+            <form id="campaignEditForm" class="space-y-3">
+                <input type="hidden" id="campaignEditId">
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="modal.campaign_name">Campaign Name</label>
+                    <input type="text" id="campaignEditName" required class="w-full" placeholder="Campaign name" data-i18n-placeholder="modal.campaign_name_placeholder">
+                </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="modal.description">Description</label>
+                    <textarea id="campaignEditDesc" rows="3" class="w-full" placeholder="Optional description" data-i18n-placeholder="modal.desc_placeholder"></textarea>
+                </div>
+                <div class="flex gap-2 justify-end">
+                    <button type="button" id="campaignEditCancel" class="btn-cmd-neutral" data-i18n="modal.cancel">Cancel</button>
+                    <button type="submit" class="btn-cmd-primary" data-i18n="modal.save">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- YARA Metadata Edit Modal -->
+    <div id="yaraMetaEditModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm">
+            <h3 class="text-xl font-bold mb-3 accent-blue" data-i18n="modal.edit_yara_meta">Edit YARA Metadata</h3>
+            <form id="yaraMetaEditForm" class="space-y-3">
+                <input type="hidden" id="yaraMetaFilename">
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="modal.filename">Filename</label>
+                    <input type="text" id="yaraMetaDisplay" readonly class="w-full opacity-70 cursor-not-allowed">
+                </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="modal.ticket_id">Ticket ID</label>
+                    <input type="text" id="yaraMetaTicketId" class="w-full" placeholder="Auto if empty" data-i18n-placeholder="bulk.ticket_auto_placeholder">
+                </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="modal.comment">Comment</label>
+                    <textarea id="yaraMetaComment" rows="2" class="w-full" placeholder="Notes about this rule" data-i18n-placeholder="modal.comment_placeholder"></textarea>
+                </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="modal.campaign_assign">Campaign Assignment</label>
+                    <select id="yaraMetaCampaignSelect" class="w-full">
+                        <option value="" data-i18n="modal.none">-- None --</option>
+                    </select>
+                </div>
+                <div class="flex gap-2 justify-end">
+                    <button type="button" id="yaraMetaEditCancel" class="btn-cmd-neutral" data-i18n="modal.cancel">Cancel</button>
+                    <button type="submit" class="btn-cmd-primary" data-i18n="modal.save">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- YARA Confirm Action Modal (delete / reject) -->
+    <div id="yaraConfirmModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm border border-white/10">
+            <h3 id="yaraConfirmTitle" class="text-xl font-bold text-red-400 mb-2">Confirm</h3>
+            <p id="yaraConfirmMessage" class="text-sm text-white/90 mb-5"></p>
+            <div class="flex gap-2 justify-end">
+                <button type="button" id="yaraConfirmCancel" class="btn-cmd-neutral">Cancel</button>
+                <button type="button" id="yaraConfirmSubmit" class="btn-cmd-danger">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Feed Catalog Modal (static list of available feed endpoints) -->
+    <div id="feedCatalogModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[85vh] flex flex-col border border-white/10">
+            <div class="flex items-center justify-between mb-4 flex-shrink-0">
+                <h3 class="text-xl font-bold accent-blue flex items-center gap-2">
+                    <img src="{{ url_for('static', filename='ziochub_smaller.png') }}" alt="" class="w-7 h-7 object-contain">
+                    <span data-i18n="feed_catalog.title">Available Feed Endpoints</span>
+                </h3>
+                <button type="button" id="feedCatalogClose" class="text-secondary hover:text-primary text-2xl leading-none">&times;</button>
+            </div>
+            <p class="text-sm text-secondary mb-4 flex-shrink-0" data-i18n="feed_catalog.description">Use these URLs to integrate ZIoCHub feeds into your security devices. All feeds serve only active (non-expired) IOCs in plain text.</p>
+            <div class="overflow-y-auto flex-1 min-h-0 space-y-5 text-sm">
+
+                <!-- Standard Plain Text -->
+                <div>
+                    <h4 class="text-base font-semibold text-cyan-400 mb-2 flex items-center gap-2">
+                        <span>📄</span> <span data-i18n="feed_catalog.standard">Standard (Plain Text)</span>
+                    </h4>
+                    <p class="text-xs text-secondary mb-2" data-i18n="feed_catalog.standard_desc">Newline-separated list of IOC values. Compatible with most firewalls and SIEMs.</p>
+                    <div class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs">
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/ip" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/ip</a><span class="text-slate-500">IP Addresses</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/domain" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/domain</a><span class="text-slate-500">Domains</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/url" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/url</a><span class="text-slate-500">URLs</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/hash" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/hash</a><span class="text-slate-500">All Hashes</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/md5" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/md5</a><span class="text-slate-500">MD5 only</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/sha1" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/sha1</a><span class="text-slate-500">SHA-1 only</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/sha256" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/sha256</a><span class="text-slate-500">SHA-256 only</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/email" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/email</a><span class="text-slate-500">Email Addresses</span></div>
+                    </div>
+                </div>
+
+                <!-- Palo Alto EDL -->
+                <div>
+                    <h4 class="text-base font-semibold text-orange-400 mb-2 flex items-center gap-2">
+                        <span>🔥</span> <span data-i18n="feed_catalog.paloalto">Palo Alto EDL</span>
+                    </h4>
+                    <p class="text-xs text-secondary mb-2" data-i18n="feed_catalog.paloalto_desc">External Dynamic List format. URLs are served without the http(s):// protocol prefix.</p>
+                    <div class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs">
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/pa/ip" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/pa/ip</a><span class="text-slate-500">IP Addresses</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/pa/domain" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/pa/domain</a><span class="text-slate-500">Domains</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/pa/url" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/pa/url</a><span class="text-slate-500">URLs (no protocol)</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/pa/md5" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/pa/md5</a><span class="text-slate-500">MD5</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/pa/sha256" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/pa/sha256</a><span class="text-slate-500">SHA-256</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/pa/email" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/pa/email</a><span class="text-slate-500">Email Addresses</span></div>
+                    </div>
+                </div>
+
+                <!-- Check Point CSV -->
+                <div>
+                    <h4 class="text-base font-semibold text-purple-400 mb-2 flex items-center gap-2">
+                        <span>🛡️</span> <span data-i18n="feed_catalog.checkpoint">Check Point (CSV)</span>
+                    </h4>
+                    <p class="text-xs text-secondary mb-2" data-i18n="feed_catalog.checkpoint_desc">CSV format compatible with Check Point IoC feed import.</p>
+                    <div class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs">
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/ip" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/ip</a><span class="text-slate-500">IP Addresses</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/domain" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/domain</a><span class="text-slate-500">Domains</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/url" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/url</a><span class="text-slate-500">URLs</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/md5" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/md5</a><span class="text-slate-500">MD5</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/sha256" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/sha256</a><span class="text-slate-500">SHA-256</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/email" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/email</a><span class="text-slate-500">Email Addresses</span></div>
+                    </div>
+                </div>
+
+                <!-- Cisco ESA -->
+                <div>
+                    <h4 class="text-base font-semibold text-green-400 mb-2 flex items-center gap-2">
+                        <span>📧</span> <span data-i18n="feed_catalog.cisco_esa">Cisco ESA</span>
+                    </h4>
+                    <p class="text-xs text-secondary mb-2" data-i18n="feed_catalog.cisco_esa_desc">Comma-separated email list for Cisco Email Security Appliance content filters.</p>
+                    <div class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs">
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/esa/email" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/esa/email</a><span class="text-slate-500">Email Addresses (CSV)</span></div>
+                    </div>
+                </div>
+
+                <!-- Trellix ePO -->
+                <div>
+                    <h4 class="text-base font-semibold text-red-400 mb-2 flex items-center gap-2">
+                        <span>☣️</span> <span data-i18n="feed_catalog.trellix_epo">Trellix ePO</span>
+                    </h4>
+                    <p class="text-xs text-secondary mb-2" data-i18n="feed_catalog.trellix_epo_desc">CSV hash feeds grouped by Ticket ID for Trellix Endpoint Security / ePO policy import.</p>
+                    <div class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs">
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/epo/files-list" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/epo/files-list</a><span class="text-slate-500">List of Ticket IDs</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><span class="text-slate-300">/feed/epo/&lt;ticket_id&gt;</span><span class="text-slate-500">Hashes for specific ticket</span></div>
+                    </div>
+                </div>
+
+                <!-- TAXII / STIX 2.x: summary + link to TAXII Catalog -->
+                <div>
+                    <h4 class="text-base font-semibold text-indigo-400 mb-2 flex items-center gap-2">
+                        <span>📦</span> <span data-i18n="feed_catalog.stix">TAXII / STIX 2.x</span>
+                    </h4>
+                    <p class="text-xs text-secondary mb-2" data-i18n="feed_catalog.stix_short"></p>
+                    <button type="button" id="feedCatalogOpenTaxiiCatalog" class="btn-cmd-neutral btn-cmd-sm mb-2" data-i18n="feed_catalog.open_taxii_catalog">Open TAXII Catalog</button>
+                    <div class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs">
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/taxii2/" target="_blank" rel="noopener noreferrer" class="text-cyan-300 hover:text-cyan-400 hover:underline">/taxii2/</a><span class="text-slate-500" data-i18n="feed_catalog.stix_discovery">Discovery</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/stix" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/stix</a><span class="text-slate-500" data-i18n="feed_catalog.stix_all">All types (JSON bundle)</span></div>
+                    </div>
+                </div>
+
+                <!-- YARA Rules -->
+                <div>
+                    <h4 class="text-base font-semibold text-yellow-400 mb-2 flex items-center gap-2">
+                        <span>📜</span> <span data-i18n="feed_catalog.yara">YARA Rules</span>
+                    </h4>
+                    <p class="text-xs text-secondary mb-2" data-i18n="feed_catalog.yara_desc">List and download approved YARA rule files for EDR / sandbox integration.</p>
+                    <div class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs">
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/yara-list" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/yara-list</a><span class="text-slate-500">All .yar filenames</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><span class="text-slate-300">/feed/yara-content/&lt;file&gt;</span><span class="text-slate-500">Raw rule content</span></div>
+                    </div>
+                </div>
+
+            </div>
+            <div class="flex justify-end mt-4 flex-shrink-0">
+                <button type="button" id="feedCatalogCloseBottom" class="btn-cmd-neutral" data-i18n="modal.close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- TAXII Catalog Modal (TAXII 2.1 server endpoints) -->
+    <div id="taxiiCatalogModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[85vh] flex flex-col border border-white/10">
+            <div class="flex items-center justify-between mb-4 flex-shrink-0">
+                <h3 class="text-xl font-bold text-indigo-400 flex items-center gap-2">
+                    <span>📦</span>
+                    <span data-i18n="taxii_catalog.title">TAXII 2.1 Server Endpoints</span>
+                </h3>
+                <button type="button" id="taxiiCatalogClose" class="text-secondary hover:text-primary text-2xl leading-none">&times;</button>
+            </div>
+            <p class="text-sm text-secondary mb-4 flex-shrink-0" data-i18n="taxii_catalog.description">ZIoCHub exposes active IOCs as STIX 2.1 indicators over TAXII 2.1. Use these URLs in TAXII clients (e.g. Cisco IronPort ESA, ThreatConnect). Send <code class="text-cyan-400">Accept: application/taxii+json;version=2.1</code>.</p>
+            <div class="overflow-y-auto flex-1 min-h-0 space-y-4 text-sm">
+                <div>
+                    <h4 class="text-sm font-semibold text-slate-300 mb-1" data-i18n="taxii_catalog.server_info">Server information</h4>
+                    <div class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs">
+                        <div class="px-3 py-1.5 flex justify-between items-center gap-2"><a href="/taxii2/" target="_blank" rel="noopener noreferrer" class="text-cyan-300 hover:text-cyan-400 hover:underline truncate">/taxii2/</a><span class="text-slate-500 flex-shrink-0" data-i18n="taxii_catalog.discovery">Discovery</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center gap-2"><a href="/taxii2/ziochub/" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline truncate">/taxii2/ziochub/</a><span class="text-slate-500 flex-shrink-0" data-i18n="taxii_catalog.api_root">API Root</span></div>
+                    </div>
+                </div>
+                <div>
+                    <h4 class="text-sm font-semibold text-slate-300 mb-1" data-i18n="taxii_catalog.collections">Collections</h4>
+                    <div class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs">
+                        <div class="px-3 py-1.5 flex justify-between items-center gap-2"><a href="/taxii2/ziochub/collections/" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline truncate">/taxii2/ziochub/collections/</a><span class="text-slate-500 flex-shrink-0">List collections</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center gap-2"><a href="/taxii2/ziochub/collections/indicators/" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline truncate">/taxii2/ziochub/collections/indicators/</a><span class="text-slate-500 flex-shrink-0">Collection: indicators</span></div>
+                    </div>
+                </div>
+                <div>
+                    <h4 class="text-sm font-semibold text-slate-300 mb-1" data-i18n="taxii_catalog.objects">Objects &amp; manifest</h4>
+                    <div class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs">
+                        <div class="px-3 py-1.5 flex justify-between items-center gap-2"><a href="/taxii2/ziochub/collections/indicators/objects/" target="_blank" rel="noopener noreferrer" class="text-cyan-300 hover:text-cyan-400 hover:underline truncate">/taxii2/ziochub/collections/indicators/objects/</a><span class="text-slate-500 flex-shrink-0" data-i18n="taxii_catalog.get_objects">Get Objects (paginated)</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center gap-2"><a href="/taxii2/ziochub/collections/indicators/manifest/" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline truncate">/taxii2/ziochub/collections/indicators/manifest/</a><span class="text-slate-500 flex-shrink-0" data-i18n="taxii_catalog.manifest">Get Manifests</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center gap-2"><span class="text-slate-400 truncate">/taxii2/ziochub/collections/indicators/objects/&lt;id&gt;/</span><span class="text-slate-500 flex-shrink-0" data-i18n="taxii_catalog.get_object">Get an Object</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center gap-2"><span class="text-slate-400 truncate">/taxii2/ziochub/collections/indicators/objects/&lt;id&gt;/versions/</span><span class="text-slate-500 flex-shrink-0" data-i18n="taxii_catalog.versions">Get Object Versions</span></div>
+                    </div>
+                </div>
+                <p class="text-xs text-slate-500" data-i18n="taxii_catalog.ironport_hint">For Cisco IronPort ESA: set External Threat Feed URL to the Discovery endpoint above (use HTTPS in production).</p>
+            </div>
+            <div class="flex justify-end mt-4 flex-shrink-0">
+                <button type="button" id="taxiiCatalogCloseBottom" class="btn-cmd-neutral" data-i18n="modal.close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer"></div>
+
+    <!-- Global app-style modal for alert/confirm (same as base_app) -->
+    <div id="appModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100]">
+        <div class="modal-dialog bg-secondary rounded-xl border border-white/10 p-6 max-w-md w-full mx-4 shadow-xl">
+            <h3 id="appModalTitle" class="text-lg font-bold accent-blue mb-2"></h3>
+            <p id="appModalMessage" class="text-sm text-white/90 mb-4"></p>
+            <div id="appModalActions" class="flex gap-2 justify-end"></div>
+        </div>
+    </div>
+
+    <!-- Achievement Modal: points, level gauge, badges - professional UI -->
+    <div id="badgeEarnedModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4 achievement-modal-overlay">
+        <div class="badge-earned-card relative w-full max-w-md mx-auto rounded-2xl overflow-hidden flex flex-col max-h-[90vh] achievement-modal-card">
+            <div class="badge-earned-glow absolute inset-0 pointer-events-none" aria-hidden="true"></div>
+            <div class="achievement-modal-inner relative flex flex-col min-h-0 flex-1">
+                <div class="achievement-modal-header">
+                    <h3 id="badgeEarnedTitle" class="achievement-modal-title">Achievement Unlocked!</h3>
+                </div>
+                <div class="achievement-modal-body">
+                    <div id="achievementPointsEarned" class="hidden achievement-points-earned"></div>
+                    <div id="achievementLevelGauge" class="hidden achievement-level-gauge achievement-gauge-block"></div>
+                    <div id="achievementLevelUp" class="hidden achievement-level-up achievement-milestone"></div>
+                    <div id="achievementRankUp" class="hidden achievement-rank-up achievement-milestone"></div>
+                    <div id="achievementNewNickname" class="hidden achievement-new-nickname achievement-milestone"></div>
+                    <div id="badgeEarnedList" class="badge-earned-list"></div>
+                </div>
+                <div class="achievement-modal-footer">
+                    <button id="badgeEarnedClose" type="button" class="achievement-modal-btn-close btn-cmd-neutral" data-i18n="modal.close">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ambition popup (on login) - one message per session -->
+    <div id="ambitionPopupModal" class="hidden fixed inset-0 z-[9998] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div class="relative w-full max-w-md mx-4 rounded-2xl border border-white/15 bg-[#0f172a] shadow-2xl p-6">
+            <h3 id="ambitionPopupTitle" class="text-xl font-bold text-amber-300 mb-3">Your focus for today</h3>
+            <p id="ambitionPopupMessage" class="text-slate-200 text-left mb-6"></p>
+            <button id="ambitionPopupClose" type="button" class="btn-cmd-primary w-full">
+                Got it
+            </button>
+        </div>
+    </div>
+    <script>
+    (function() {
+        function showAmbitionPopup() {
+            if (document.body.getAttribute('data-authenticated') !== '1') return;
+            if (document.body.getAttribute('data-ambition-popup-disabled') === '1') return;
+            var userId = document.body.getAttribute('data-user-id') || '';
+            var storageKey = 'ambition_popup_shown_' + userId;
+            if (sessionStorage.getItem(storageKey)) return;
+            var modal = document.getElementById('ambitionPopupModal');
+            var msgEl = document.getElementById('ambitionPopupMessage');
+            if (!modal || !msgEl) return;
+            fetch('/api/ambition-message', { method: 'GET', credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.success && data.message) {
+                        msgEl.textContent = data.message;
+                        modal.classList.remove('hidden');
+                        sessionStorage.setItem(storageKey, '1');
+                    }
+                })
+                .catch(function() {});
+        }
+        function hideAmbitionPopup() {
+            var modal = document.getElementById('ambitionPopupModal');
+            if (modal) modal.classList.add('hidden');
+        }
+        document.getElementById('ambitionPopupClose').addEventListener('click', hideAmbitionPopup);
+        document.getElementById('ambitionPopupModal').addEventListener('click', function(e) { if (e.target === this) hideAmbitionPopup(); });
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', showAmbitionPopup);
+        } else {
+            showAmbitionPopup();
+        }
+    })();
+    </script>
+
+    <script>
+    (function() {
+        var modal = document.getElementById('appModal');
+        if (!modal) return;
+        var titleEl = document.getElementById('appModalTitle');
+        var messageEl = document.getElementById('appModalMessage');
+        var actionsEl = document.getElementById('appModalActions');
+        function hideModal() { modal.classList.add('hidden'); modal.style.display = 'none'; }
+        function showModal(opts) {
+            titleEl.textContent = opts.title || '';
+            messageEl.textContent = opts.message || '';
+            actionsEl.innerHTML = '';
+            var resolveFn;
+            var promise = new Promise(function(r) { resolveFn = r; });
+            function close(result) { hideModal(); if (resolveFn) resolveFn(result); }
+            if (opts.buttons) {
+                opts.buttons.forEach(function(btn) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.textContent = btn.label;
+                    b.className = btn.primary ? 'px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition' : 'px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-accent-green transition text-primary';
+                    b.addEventListener('click', function() { close(btn.value); });
+                    actionsEl.appendChild(b);
+                });
+            }
+            modal.classList.remove('hidden');
+            modal.style.display = 'flex';
+            modal.onclick = function(e) { if (e.target === modal) close(false); };
+            return promise;
+        }
+        window.appAlert = function(opts) {
+            if (typeof opts === 'string') opts = { message: opts };
+            return showModal({ title: opts.title || 'Notice', message: opts.message || '', buttons: [{ label: opts.okText || 'OK', value: true, primary: true }] });
+        };
+        window.appConfirm = function(opts) {
+            if (typeof opts === 'string') opts = { message: opts };
+            return showModal({ title: opts.title || 'Confirm', message: opts.message || '', buttons: [{ label: opts.cancelText || 'Cancel', value: false, primary: false }, { label: opts.okText || 'OK', value: true, primary: true }] });
+        };
+    })();
+    </script>
+    <script>
+    (function(){
+        var h = (location.hash || '').replace(/^#/,'');
+        var valid = ['live-stats','feed-pulse','search','bulk-unified','yara','champs','campaigns','playbook','reports'];
+        var tab = valid.indexOf(h) !== -1 ? h : 'live-stats';
+        var el = document.getElementById('tab-' + tab);
+        if (el) el.classList.remove('hidden');
+        var btn = document.querySelector('.tab-button[data-tab="' + tab + '"]');
+        if (btn) btn.classList.add('active');
+    })();
+    </script>
+    <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/api.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/live-stats.js') }}"></script>
+    <script>
+    window.TG_CONFIG = {
+        i18nBase: "{{ url_for('static', filename='i18n/') }}",
+        scriptUrls: {
+            champs:    '{{ url_for("static", filename="js/champs.js") }}',
+            search:    '{{ url_for("static", filename="js/search.js") }}',
+            yara:      '{{ url_for("static", filename="js/yara.js") }}',
+            feedPulse: '{{ url_for("static", filename="js/feed-pulse.js") }}',
+            campaigns: '{{ url_for("static", filename="js/campaigns.js") }}',
+            reports:   '{{ url_for("static", filename="js/reports.js") }}'
+        }
+    };
+    </script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/playbook.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/submit.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/profile.js') }}"></script>
+</body>
+</html>

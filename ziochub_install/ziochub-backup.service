@@ -1,0 +1,15 @@
+[Unit]
+Description=ZIoCHub database backup (local, offline)
+After=ziochub.service
+
+[Service]
+Type=oneshot
+User=ziochub
+Group=ziochub
+# Use same data dir as main app (set by environment or default in script)
+Environment=ZIOCHUB_DATA_DIR=/opt/ziochub/data
+ExecStart=/opt/ziochub/backup_ziochub.sh
+ReadWritePaths=/opt/ziochub/data/backups
+
+[Install]
+WantedBy=multi-user.target

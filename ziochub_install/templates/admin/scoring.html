@@ -1,0 +1,67 @@
+{% extends "admin/base.html" %}
+{% block title %}Scoring Method{% endblock %}
+
+{% block admin_content %}
+<div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+    <h3 class="text-lg font-semibold accent-blue mb-2">Champs Scoring Method</h3>
+    <p class="text-secondary text-sm mb-6">Choose how analyst points are calculated for the Champs ladder. Each method is described below.</p>
+
+    <form id="scoringForm" class="space-y-4">
+        {% for m in scoring_methods %}
+        <label class="flex items-start gap-3 p-4 rounded-lg border border-white/10 hover:border-cyan-400/40 cursor-pointer transition {% if current == m.id %}ring-2 ring-cyan-400/60 border-cyan-400/50 bg-cyan-500/5{% endif %}">
+            <input type="radio" name="scoring_method" value="{{ m.id }}" class="mt-1.5 flex-shrink-0" {% if current == m.id %}checked{% endif %}>
+            <div class="flex-1 min-w-0">
+                <span class="font-semibold text-primary">{{ m.name }}</span>
+                <p class="text-sm text-secondary mt-1">{{ m.description }}</p>
+            </div>
+        </label>
+        {% endfor %}
+        <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Scoring Method</button>
+    </form>
+    <div id="scoringMessage" class="mt-4 hidden text-sm"></div>
+</div>
+<script>
+document.querySelectorAll('input[name="scoring_method"]').forEach(function(radio) {
+    radio.closest('label').addEventListener('click', function() {
+        document.querySelectorAll('#scoringForm label').forEach(function(l) {
+            l.classList.remove('ring-2', 'ring-cyan-400/60', 'border-cyan-400/50', 'bg-cyan-500/5');
+        });
+        radio.closest('label').classList.add('ring-2', 'ring-cyan-400/60', 'border-cyan-400/50', 'bg-cyan-500/5');
+    });
+});
+document.getElementById('scoringForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('scoringMessage');
+    msgEl.classList.add('hidden');
+    var selected = document.querySelector('input[name="scoring_method"]:checked');
+    if (!selected) {
+        msgEl.classList.remove('hidden');
+        msgEl.classList.add('text-red-400');
+        msgEl.textContent = 'Please select a scoring method.';
+        return;
+    }
+    try {
+        var res = await fetch('/api/admin/scoring-method', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ method: selected.value })
+        });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        if (data.success) {
+            msgEl.classList.add('text-green-400');
+            msgEl.classList.remove('text-red-400');
+            msgEl.textContent = 'Scoring method saved.';
+        } else {
+            msgEl.classList.add('text-red-400');
+            msgEl.classList.remove('text-green-400');
+            msgEl.textContent = data.message || 'Failed to save.';
+        }
+    } catch (err) {
+        msgEl.classList.remove('hidden');
+        msgEl.classList.add('text-red-400');
+        msgEl.textContent = 'Network error.';
+    }
+});
+</script>
+{% endblock %}

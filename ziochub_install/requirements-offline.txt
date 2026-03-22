@@ -1,0 +1,10 @@
+# Core dependencies for offline install when DXL wheels are not in packages/
+# (DXL/TIE are optional; add dxlclient, dxltieclient to packages/ for full offline.)
+Flask==3.0.0
+Flask-Login==0.6.3
+Flask-SQLAlchemy==3.1.1
+Werkzeug==3.0.1
+geoip2>=4.7.0
+maxminddb>=2.3.0
+ldap3>=2.9
+pymisp>=2.4.187

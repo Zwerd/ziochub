@@ -60,11 +60,13 @@ SSL_KEY_FILE = os.path.join(SSL_DIR, 'key.pem')
 SSL_CA_FILE = os.path.join(SSL_DIR, 'ca.pem')
 GEOIP_DB_PATH = os.path.join(_data_dir, 'GeoLite2-City.mmdb')
 DXL_DIR = os.path.join(_data_dir, 'dxl')
+DATA_CAMPAIGN_IMAGES = os.path.join(_data_dir, 'campaign_images')
 os.makedirs(DATA_MAIN, exist_ok=True)
 os.makedirs(DATA_YARA, exist_ok=True)
 os.makedirs(DATA_YARA_PENDING, exist_ok=True)
 os.makedirs(SSL_DIR, exist_ok=True)
 os.makedirs(DXL_DIR, exist_ok=True)
+os.makedirs(DATA_CAMPAIGN_IMAGES, exist_ok=True)
 
 app = Flask(__name__)
 
@@ -142,6 +144,23 @@ app.register_blueprint(search_bp)
 app.register_blueprint(stats_bp)
 app.register_blueprint(ioc_bp)
 app.register_blueprint(reports_bp)
+
+
+def _log_yara_python_availability():
+    """Log once at startup: yara-python is required for YARA Manager → Write → Check syntax."""
+    try:
+        import yara  # type: ignore[import-untyped]
+        ver = getattr(yara, '__version__', '?')
+        app.logger.info('yara-python OK (syntax check enabled), version %s', ver)
+    except Exception as e:
+        app.logger.warning(
+            'yara-python not importable — "Check syntax" in YARA Manager will fail. '
+            'Install: pip install -r requirements.txt (same Python as this process). Error: %s',
+            e,
+        )
+
+
+_log_yara_python_availability()
 
 # --- Flask-Login ---
 login_manager = LoginManager()
@@ -1200,12 +1219,21 @@ def _history_deleted_to_search_result(h):
     comment = (payload.get('comment') or '') if payload else ''
     expiration_str = (payload.get('expiration_date') or '')[:10] if payload.get('expiration_date') else 'NEVER'
     date_str = h.at.isoformat() if h.at else None
+    user_out = h.username or ''
+    ref_out = ''
+    if h.ioc_type == 'YARA':
+        comment = (payload.get('original_comment') or '').strip()
+        dr = (payload.get('reason') or '').strip()
+        if dr:
+            comment = (comment + ('\n\n' if comment else '')) + dr
+        user_out = (payload.get('original_analyst') or '').strip() or user_out
+        ref_out = (payload.get('ticket_id') or '').strip()
     return {
         'ioc': h.ioc_value,
         'value': h.ioc_value,
         'date': date_str,
-        'user': h.username or '',
-        'ref': '',
+        'user': user_out,
+        'ref': ref_out,
         'comment': comment,
         'expiration': expiration_str,
         'file_type': h.ioc_type,
@@ -1229,6 +1257,8 @@ def _deleted_history_matches(h, query_lower, filter_type):
         except (TypeError, ValueError):
             pass
     comment = (payload.get('comment') or '').lower()
+    reason_l = (payload.get('reason') or '').lower()
+    orig_user = (payload.get('original_analyst') or '').lower()
     value_lower = (h.ioc_value or '').lower()
     user_lower = (h.username or '').lower()
     date_str = (h.at.isoformat() if h.at else '').lower()
@@ -1236,17 +1266,19 @@ def _deleted_history_matches(h, query_lower, filter_type):
         return (
             query_lower in value_lower or
             query_lower in user_lower or
+            query_lower in orig_user or
             query_lower in date_str or
             query_lower in comment or
+            query_lower in reason_l or
             query_lower in (h.ioc_type or '').lower() or
             query_lower in 'deleted'
         )
     if filter_type == 'ioc_value':
         return query_lower in value_lower
     if filter_type == 'user':
-        return query_lower in user_lower
+        return query_lower in user_lower or query_lower in orig_user
     if filter_type == 'comment':
-        return query_lower in comment
+        return query_lower in comment or query_lower in reason_l
     if filter_type == 'date':
         return query_lower in date_str
     if filter_type == 'file_type':
@@ -1623,6 +1655,24 @@ def _ensure_campaign_created_by_column():
         print(f"[Migration] campaigns created_by: {e}")
 
 
+def _ensure_campaign_reference_image_ext_column():
+    """Add reference_image_ext (jpg/png/...) to campaigns for optional reference screenshot."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(campaigns)"))
+        rows = result.fetchall()
+        if not rows:
+            return
+        if any((row[1] == 'reference_image_ext' for row in rows)):
+            return
+        db.session.execute(text(
+            "ALTER TABLE campaigns ADD COLUMN reference_image_ext VARCHAR(8)"
+        ))
+        _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] campaigns reference_image_ext: {e}")
+
+
 def _init_db():
     """Create tables and run legacy migration if DB is empty."""
     with app.app_context():
@@ -1648,6 +1698,7 @@ def _init_db():
         _ensure_team_goal_description_column()
         _ensure_campaign_dir_column()
         _ensure_campaign_created_by_column()
+        _ensure_campaign_reference_image_ext_column()
         _ensure_ioc_history_type_value_index()
         _ensure_ioc_notes_type_value_index()
         _ensure_champ_scores_streak_days_column()

@@ -389,7 +389,7 @@
 <div id="settings-tab-automation" class="settings-tab-pane hidden">
     <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
         <h3 class="text-lg font-semibold accent-blue mb-4">Automation - Push YARA to external APIs</h3>
-        <p class="text-secondary text-sm mb-4">When an admin approves a YARA rule, the file is sent in the background to each configured target (any product that accepts YARA via HTTP and API key). Failures are written to logs; the user sees on-screen feedback (uploading, then SUCCESS or ERROR).</p>
+        <p class="text-secondary text-sm mb-4">When an admin approves a YARA rule, the file is sent in the background to each configured target (any product that accepts YARA via HTTP and API key). Failures are written to logs; the user sees on-screen feedback (uploading, then SUCCESS or ERROR). When an admin deletes an approved rule, the server sends HTTP DELETE to each target at <code class="px-1 rounded bg-white/10">base_url + path + /filename</code> (optional JSON field <code class="px-1 rounded bg-white/10">delete_path</code> with <code class="px-1 rounded bg-white/10">{filename}</code> for custom endpoints).</p>
 
         <form id="automationForm" class="space-y-4">
             <div>
@@ -399,15 +399,28 @@
                     <option value="true" {% if settings.automation_fireeye_enabled == 'true' %}selected{% endif %}>Yes</option>
                 </select>
             </div>
+            <div class="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-3">
+                <input type="checkbox" id="automation_fireeye_ignore_ssl" name="automation_fireeye_ignore_ssl" class="mt-1 h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600 focus:ring-cyan-500"
+                       {% if settings.automation_fireeye_ignore_ssl == 'true' %}checked{% endif %}>
+                <div>
+                    <label for="automation_fireeye_ignore_ssl" class="block text-sm font-semibold text-primary cursor-pointer">Allow self-signed / untrusted TLS (skip certificate verification)</label>
+                    <p class="text-secondary text-xs mt-1">Enable only for lab or internal targets that use HTTPS with a private or self-signed certificate. When checked, the server does not validate the TLS certificate on POST/DELETE to automation targets (same as <code class="px-1 rounded bg-white/10">curl -k</code>). Default: strict verification.</p>
+                </div>
+            </div>
             <div>
                 <label class="block text-sm font-semibold text-secondary mb-2">Targets (name, base URL, path, API key)</label>
                 <p class="text-secondary text-xs mb-3">Add any product that accepts YARA via HTTP (e.g. FireEye NX, ESM, or other). For each: display name, base URL (e.g. <code class="px-1 rounded bg-white/10">https://product.local:8443</code>), path (e.g. <code class="px-1 rounded bg-white/10">/api/v1/yara</code>), and API key if required. Request: POST with body = YARA content, optional <code class="px-1 rounded bg-white/10">X-API-Key</code> header.</p>
                 <div id="fireeyeAppliancesList" class="space-y-3" data-initial="{{ settings.automation_fireeye_appliances | e }}"></div>
                 <button type="button" id="fireeyeAddAppliance" class="mt-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition">+ Add target</button>
             </div>
-            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save automation settings</button>
+            <div class="flex flex-wrap gap-2 items-center">
+                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save automation settings</button>
+                <button type="button" id="automationTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-cyan-500/40 hover:bg-cyan-900/30 text-cyan-200 transition">Test connection</button>
+            </div>
+            <p class="text-secondary text-xs mt-2">Test connection sends a minimal valid YARA rule to each target using the same POST as when an admin approves a rule. TLS verification matches the checkbox above (saved setting is used if you do not change the box before testing). Save is not required first — uses the targets currently in the form.</p>
         </form>
         <div id="automationMessage" class="mt-4 hidden text-sm"></div>
+        <div id="automationTestResult" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-3 text-sm space-y-1"></div>
     </div>
 </div>
 
@@ -881,8 +894,7 @@ document.getElementById('dxlTestBtn').addEventListener('click', async function()
     });
     renderAppliances();
 
-    document.getElementById('automationForm').addEventListener('submit', async function(e) {
-        e.preventDefault();
+    function collectAutomationAppliances() {
         var collected = [];
         listEl.querySelectorAll('.fireeye-row').forEach(function(row) {
             var nameIn = row.querySelector('.fireeye-name');
@@ -898,6 +910,12 @@ document.getElementById('dxlTestBtn').addEventListener('click', async function()
                 });
             }
         });
+        return collected;
+    }
+
+    document.getElementById('automationForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var collected = collectAutomationAppliances();
         var msgEl = document.getElementById('automationMessage');
         msgEl.classList.add('hidden');
         try {
@@ -906,7 +924,8 @@ document.getElementById('dxlTestBtn').addEventListener('click', async function()
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     automation_fireeye_enabled: document.getElementById('automation_fireeye_enabled').value,
-                    automation_fireeye_appliances: collected
+                    automation_fireeye_appliances: collected,
+                    automation_fireeye_ignore_ssl: document.getElementById('automation_fireeye_ignore_ssl').checked ? 'true' : 'false'
                 })
             });
             var data = await res.json();
@@ -925,6 +944,62 @@ document.getElementById('dxlTestBtn').addEventListener('click', async function()
             msgEl.classList.add('text-red-400');
             msgEl.textContent = 'Network error.';
         }
+    });
+
+    document.getElementById('automationTestBtn').addEventListener('click', async function() {
+        var outEl = document.getElementById('automationTestResult');
+        var collected = collectAutomationAppliances();
+        outEl.classList.add('hidden');
+        outEl.innerHTML = '';
+        if (!collected.length) {
+            outEl.classList.remove('hidden');
+            outEl.innerHTML = '<div class="text-amber-400">Add at least one target row with name, base URL, and path, then test again.</div>';
+            return;
+        }
+        this.disabled = true;
+        outEl.classList.remove('hidden');
+        outEl.innerHTML = '<div class="text-secondary">Testing ' + collected.length + ' target(s)…</div>';
+        try {
+            var res = await fetch('/api/admin/automation-test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({
+                    appliances: collected,
+                    ignore_ssl: document.getElementById('automation_fireeye_ignore_ssl').checked
+                })
+            });
+            var data = await res.json().catch(function() { return {}; });
+            var lines = [];
+            if (!res.ok) {
+                lines.push('<div class="text-red-400">' + (data.message || ('HTTP ' + res.status)) + '</div>');
+            } else if (data.success) {
+                if (data.message) {
+                    lines.push('<div class="text-amber-400">' + String(data.message).replace(/</g, '&lt;') + '</div>');
+                }
+                if (data.overall_success) {
+                    lines.push('<div class="text-green-400 font-semibold mb-2">All targets responded successfully.</div>');
+                } else {
+                    lines.push('<div class="text-amber-400 font-semibold mb-2">One or more targets failed — see below.</div>');
+                }
+                if (data.results && data.results.length) {
+                    data.results.forEach(function(r) {
+                        var ok = r.success;
+                        var icon = ok ? '\u2713' : '\u2717';
+                        var color = ok ? 'text-green-400' : 'text-red-400';
+                        var msg = (r.message || '').replace(/</g, '&lt;').replace(/&/g, '&amp;');
+                        var name = (r.name || 'Target').replace(/</g, '&lt;');
+                        lines.push('<div class="' + color + '">[' + icon + '] <strong>' + name + '</strong> — ' + msg + '</div>');
+                    });
+                }
+            } else {
+                lines.push('<div class="text-red-400">' + (data.message || 'Test failed.') + '</div>');
+            }
+            outEl.innerHTML = lines.join('');
+        } catch (err) {
+            outEl.innerHTML = '<div class="text-red-400">Network error: ' + String(err.message || err).replace(/</g, '&lt;') + '</div>';
+        }
+        this.disabled = false;
     });
 })();
 

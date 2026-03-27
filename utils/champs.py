@@ -16,6 +16,19 @@ YARA_MIN = 10
 YARA_MAX = 50
 DELETION = 1
 STREAK_DAYS = 3
+
+
+def _deletion_event_adds_score(payload) -> bool:
+    """ioc_deletion grants +1 unless skip_deletion_bonus (self-delete own IOC)."""
+    if not payload:
+        return True
+    try:
+        p = json.loads(payload) if isinstance(payload, str) else payload
+    except (json.JSONDecodeError, TypeError):
+        return True
+    if not isinstance(p, dict):
+        return True
+    return not bool(p.get('skip_deletion_bonus'))
 STREAK_BONUS_PERCENT = 10
 SCORING_SMART = '8'
 # Per-badge: max days of inactivity before this badge is lost. Analyst loses badges gradually, not all at once.
@@ -445,19 +458,20 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
         analyst_deletions[a] = int(r[3] or 0)
         analyst_user_id[a] = r[1]
 
-    # 4b) Deletion events per day so deleter gets +1 per deletion and last_activity/streak update
+    # 4b) Deletion events per day so deleter gets +1 per deletion (not self-delete) and last_activity/streak update
     q4b = text(f"""
-        SELECT ae.user_id, LOWER(TRIM(u.username)) AS analyst, DATE(ae.created_at) AS d
+        SELECT ae.user_id, LOWER(TRIM(u.username)) AS analyst, DATE(ae.created_at) AS d, ae.payload
         FROM activity_events ae
         JOIN users u ON ae.user_id = u.id
         WHERE ae.event_type = 'ioc_deletion' {del_where}
     """)
     rows4b = db.session.execute(q4b, params).fetchall()
     for r in rows4b:
-        uid, a, d = r[0], (r[1] or '').strip().lower(), _ensure_date(r[2]) if r[2] else None
+        uid, a, d, payload = r[0], (r[1] or '').strip().lower(), _ensure_date(r[2]) if r[2] else None, r[3]
         if not a or not d:
             continue
-        analyst_daily[a][d] = analyst_daily[a].get(d, 0) + DELETION
+        if _deletion_event_adds_score(payload):
+            analyst_daily[a][d] = analyst_daily[a].get(d, 0) + DELETION
         prev_last = analyst_last.get(a)
         analyst_last[a] = max(prev_last, d) if prev_last else d
         analyst_user_id[a] = uid
@@ -529,7 +543,7 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
 def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_map=None, scoring_method='1', exclude_usernames=None, start_dt=None, end_dt=None):
     """
     Compute weighted scores for all analysts using Champs 5.0 scoring.
-    Includes deletion: deleter gets +1 per ioc_deletion; assigned analyst loses points when IOC is removed.
+    Includes deletion: deleter gets +1 per ioc_deletion (except self-delete own IOC); assigned analyst loses IOC points when row removed.
     scoring_method: '1'-'8' (admin setting). Smart Effort (#8) gives full YARA points only
     for approved rules; pending rules receive YARA_MIN.
     exclude_usernames: set of lowercase usernames to filter out (e.g. MISP sync user).
@@ -631,13 +645,13 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
         analyst_yara[a] = analyst_yara[a] + 1
 
     # Deletion and activity points (ActivityEvent)
-    # - ioc_deletion: deleter gets +1 per deletion (any); assigned analyst loses points because IOC is removed from table
+    # - ioc_deletion: deleter gets +1 per deletion (not self-delete own IOC); assigned analyst loses IOC points when row removed
     # - ioc_note_add (Smart Effort only): reward rich, non-trivial notes
     # - ioc_campaign_link (Smart Effort only): reward linking IOCs to campaigns (first link)
     if ActivityEvent:
         users = {u.id: u.username.lower() for u in User.query.all() if u.username}
 
-        # Deletions: deleter gets +1 per deletion (any); expired count kept for display/badges
+        # Deletions: deleter gets +1 per deletion (except self-delete own IOC: skip_deletion_bonus); expired count kept for display/badges
         del_q = db.session.query(
             ActivityEvent.user_id,
             ActivityEvent.payload,
@@ -653,6 +667,7 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
                 p = json.loads(payload or '{}')
                 was_expired = p.get('was_expired', False)
             except (json.JSONDecodeError, TypeError):
+                p = {}
                 was_expired = False
             a = users.get(uid, 'unknown')
             analyst_deletions_total[a] = analyst_deletions_total.get(a, 0) + 1
@@ -660,7 +675,8 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
                 analyst_deletions[a] = analyst_deletions.get(a, 0) + 1
             d = _to_date(created_at)
             if d:
-                analyst_daily[a][d] = analyst_daily[a].get(d, 0) + DELETION
+                if _deletion_event_adds_score(payload):
+                    analyst_daily[a][d] = analyst_daily[a].get(d, 0) + DELETION
                 analyst_last[a] = max(analyst_last.get(a, d), d) if analyst_last.get(a) else d
             if uid:
                 analyst_user_id[a] = uid
@@ -1122,7 +1138,8 @@ def _compute_team_daily_totals(db, IOC, YaraRule, ActivityEvent, today, days_bac
         ).all()
         for created_at, payload in del_rows:
             try:
-                if json.loads(payload or '{}').get('was_expired'):
+                p = json.loads(payload or '{}')
+                if p.get('was_expired') and _deletion_event_adds_score(payload):
                     d = _ensure_date(created_at)
                     if d:
                         team_daily[d] = team_daily.get(d, 0) + DELETION
@@ -1242,7 +1259,7 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
         ).all()
         for created_at, payload in del_evts:
             d = _ensure_date(created_at)
-            if d:
+            if d and _deletion_event_adds_score(payload):
                 analyst_daily[d] = analyst_daily.get(d, 0) + DELETION
 
     # Chart: show submission counts (IOC + YARA per day) by analyst name so admin-submitted-on-behalf count

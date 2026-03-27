@@ -4,6 +4,7 @@ IOC validation and type detection.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlsplit
 
 # Strict regex patterns for validation
 # URL: http(s), ftp, sftp with path/query; Domain: hostname only (must contain a dot + TLD)
@@ -32,7 +33,22 @@ def validate_ioc(value: str, ioc_type: str) -> bool:
     pattern = REGEX_PATTERNS.get(ioc_type)
     if not pattern:
         return False
-    return bool(re.match(pattern, value.strip()))
+    v = (value or '').strip()
+    if not re.match(pattern, v):
+        return False
+    if ioc_type == 'URL':
+        # Extra guard: reject "glued" URLs (scheme appears again inside path/query/fragment).
+        # Example: http://evil.com/malwarehttps://malware.site/payload
+        try:
+            p = urlsplit(v)
+        except Exception:
+            return False
+        if not p.scheme or not p.netloc:
+            return False
+        tail = (p.path or '') + (p.query or '') + (p.fragment or '')
+        if '://' in tail:
+            return False
+    return True
 
 
 def detect_ioc_type(value: str) -> str | None:

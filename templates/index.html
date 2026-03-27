@@ -377,6 +377,12 @@
                                 <option value="" data-i18n="submit.none">- None -</option>
                             </select>
                         </div>
+                        <div class="flex flex-col">
+                            <label class="text-xs font-semibold mb-0.5" data-i18n="submit.assign_to">Assign to user</label>
+                            <select id="txtAssignTo" class="h-8 text-sm w-32">
+                                <option value="" data-i18n="submit.me">- Me -</option>
+                            </select>
+                        </div>
                         <div class="flex flex-col flex-1 min-w-[120px]">
                             <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.default_comment">Default Comment</label>
                             <input type="text" id="txtDefaultComment" placeholder="If line has no comment" class="h-8 text-sm w-full" data-i18n-placeholder="bulk.default_comment_placeholder">
@@ -412,6 +418,12 @@
                                 <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.campaign">Campaign</label>
                                 <select id="pasteCampaignSelect" class="h-8 text-sm w-32">
                                     <option value="" data-i18n="submit.none">- None -</option>
+                                </select>
+                            </div>
+                            <div class="flex flex-col">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="submit.assign_to">Assign to user</label>
+                                <select id="pasteAssignTo" class="h-8 text-sm w-32">
+                                    <option value="" data-i18n="submit.me">- Me -</option>
                                 </select>
                             </div>
                             <div class="flex flex-col flex-1 min-w-[120px]">
@@ -450,6 +462,12 @@
                                 <label class="text-xs font-semibold mb-0.5" data-i18n="bulk.campaign">Campaign</label>
                                 <select id="csvCampaignSelect" class="h-8 text-sm w-32">
                                     <option value="" data-i18n="submit.none">- None -</option>
+                                </select>
+                            </div>
+                            <div class="flex flex-col">
+                                <label class="text-xs font-semibold mb-0.5" data-i18n="submit.assign_to">Assign to user</label>
+                                <select id="csvAssignTo" class="h-8 text-sm w-32">
+                                    <option value="" data-i18n="submit.me">- Me -</option>
                                 </select>
                             </div>
                             <div class="flex flex-col flex-1 min-w-[120px]">
@@ -568,82 +586,150 @@
                     </div>
                 </div>
 
-                <!-- Tab 4: YARA Manager -->
-                <div id="tab-yara" class="tab-content hidden overflow-y-auto flex-1 min-h-0">
-                    <h2 class="text-2xl font-bold mb-3 accent-blue" data-i18n="yara.title">YARA Manager</h2>
-                    <form id="yaraForm" class="space-y-3 mb-3">
+                <!-- Tab 4: YARA Manager (Upload | Write | Status — same pattern as Submit IOCs) -->
+                <div id="tab-yara" class="tab-content hidden overflow-y-auto flex-1 min-h-0 flex flex-col">
+                    <div class="flex-shrink-0 mb-3">
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <h2 class="text-2xl font-bold accent-blue" data-i18n="yara.title">YARA Manager</h2>
+                            <div class="flex rounded border border-white/10 overflow-hidden bg-tertiary">
+                                <button type="button" id="btnModeYaraUpload" class="text-xs py-1 px-3 font-semibold bg-blue-600 text-white transition" data-i18n="yara.mode_upload_btn">Upload</button>
+                                <button type="button" id="btnModeYaraWrite" class="text-xs py-1 px-3 font-semibold bg-transparent text-secondary hover:bg-white/5 transition" data-i18n="yara.mode_write_btn">Write</button>
+                                <button type="button" id="btnModeYaraStatus" class="text-xs py-1 px-3 font-semibold bg-transparent text-secondary hover:bg-white/5 transition" data-i18n="yara.mode_status_btn">Status</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="yaraModeInfoCard" class="flex-shrink-0 bg-blue-900/20 border border-blue-500/30 p-3 rounded-lg mb-3 text-xs text-blue-100">
+                        <h4 class="font-bold mb-1" data-i18n="yara.info_upload_title">Upload a rule file</h4>
+                        <p class="mb-1" data-i18n="yara.info_upload_desc">Submit a .yar file with optional ticket, comment, and campaign.</p>
+                    </div>
+
+                    <div id="yara-wrapper-upload" class="flex-shrink-0 flex flex-col gap-3">
+                        <form id="yaraForm" class="space-y-3 mb-0">
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <div>
+                                    <label class="block mb-2 text-sm font-semibold" data-i18n="submit.ticket_id">Ticket ID</label>
+                                    <input type="text" id="yaraTicketId" class="w-full" placeholder="Auto if empty" data-i18n-placeholder="bulk.ticket_auto_placeholder">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block mb-2 text-sm font-semibold" data-i18n="yara.comment">Comment / Description (Optional)</label>
+                                <textarea id="yaraComment" rows="2" class="w-full" placeholder="Describe the rule's purpose..." data-i18n-placeholder="yara.comment_placeholder"></textarea>
+                            </div>
+                            <div>
+                                <label class="block mb-2 text-sm font-semibold" data-i18n="yara.campaign">Campaign (optional)</label>
+                                <select id="yaraCampaignSelect" class="w-full">
+                                    <option value="" data-i18n="submit.none">- None -</option>
+                                </select>
+                            </div>
+                        </form>
+                        <div id="yaraDropZone" class="drag-drop-zone rounded-lg p-4 text-center cursor-pointer">
+                            <input type="file" id="yaraFileInput" accept=".yar" class="hidden">
+                            <div class="space-y-1">
+                                <p class="text-base">📁 <span data-i18n="yara.drag_drop">Drag & Drop YARA Rule File</span></p>
+                                <p class="text-secondary text-xs" data-i18n="yara.or_click">or click to browse</p>
+                                <p class="text-secondary text-xs" data-i18n="yara.only_yar">Only .yar files are accepted</p>
+                                <p id="yaraSelectedFilename" class="text-cyan-400 text-sm font-mono mt-2 hidden"></p>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap gap-2 items-center">
+                            <button type="button" id="yaraUploadCheckSyntaxBtn" class="btn-cmd-neutral w-full sm:w-auto" data-i18n="yara.syntax_check_btn">Check syntax</button>
+                        </div>
+                        <div id="yaraUploadSyntaxResult" class="hidden mt-1 p-3 rounded-lg border text-sm whitespace-pre-wrap break-words font-mono" role="status" aria-live="polite"></div>
+                        <div class="flex flex-wrap gap-2">
+                            <button type="button" id="yaraSubmitBtn" class="btn-cmd-primary yara-submit-locked w-full md:w-auto" aria-disabled="true" data-i18n="yara.submit_btn">Submit YARA Rule</button>
+                        </div>
+                    </div>
+
+                    <div id="yara-wrapper-write" class="hidden flex-shrink-0 flex flex-col gap-3 bg-tertiary p-4 rounded-lg border border-white/10 mb-3">
+                        <div>
+                            <label class="block mb-2 text-sm font-semibold" data-i18n="yara.write_filename_label">Rule filename</label>
+                            <input type="text" id="yaraWriteFilename" class="w-full font-mono" placeholder="my_rule.yar" data-i18n-placeholder="yara.write_filename_placeholder" autocomplete="off">
+                        </div>
+                        <div>
+                            <label class="block mb-2 text-sm font-semibold" data-i18n="yara.write_source_label">Rule source</label>
+                            <div class="grid grid-cols-1 lg:grid-cols-2 gap-3 items-stretch" dir="ltr">
+                                <div class="flex flex-col min-h-0">
+                                    <span class="text-xs text-secondary mb-1" data-i18n="yara.write_editor_label">Edit</span>
+                                    <textarea id="yaraWriteSource" rows="12" dir="ltr" spellcheck="false" class="w-full font-mono text-sm flex-1 min-h-[280px] bg-dark-800 border border-white/10 rounded-lg px-3 py-2 focus:border-cyan-400 focus:outline-none resize-y" placeholder="rule example { ... }" data-i18n-placeholder="yara.write_source_placeholder"></textarea>
+                                </div>
+                                <div class="flex flex-col min-h-[280px]">
+                                    <span class="text-xs text-secondary mb-1" data-i18n="yara.write_live_preview">Syntax preview</span>
+                                    <pre id="yaraWritePrismWrap" class="yara-write-syntax-preview m-0 p-3 rounded-lg border border-white/10 overflow-auto flex-1 min-h-0 bg-black/40"><code id="yaraWriteHighlighted" class="language-clike whitespace-pre text-sm block"></code></pre>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap gap-2 items-center">
+                            <button type="button" id="yaraWriteCheckSyntaxBtn" class="btn-cmd-neutral w-full sm:w-auto" data-i18n="yara.syntax_check_btn">Check syntax</button>
+                        </div>
+                        <div id="yaraWriteSyntaxResult" class="hidden mt-1 p-3 rounded-lg border text-sm whitespace-pre-wrap break-words font-mono" role="status" aria-live="polite"></div>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                             <div>
                                 <label class="block mb-2 text-sm font-semibold" data-i18n="submit.ticket_id">Ticket ID</label>
-                                <input type="text" id="yaraTicketId" class="w-full" placeholder="Auto if empty" data-i18n-placeholder="bulk.ticket_auto_placeholder">
+                                <input type="text" id="yaraWriteTicketId" class="w-full" placeholder="Auto if empty" data-i18n-placeholder="bulk.ticket_auto_placeholder">
+                            </div>
+                            <div>
+                                <label class="block mb-2 text-sm font-semibold" data-i18n="yara.campaign">Campaign (optional)</label>
+                                <select id="yaraWriteCampaignSelect" class="w-full">
+                                    <option value="" data-i18n="submit.none">- None -</option>
+                                </select>
                             </div>
                         </div>
                         <div>
                             <label class="block mb-2 text-sm font-semibold" data-i18n="yara.comment">Comment / Description (Optional)</label>
-                            <textarea id="yaraComment" rows="2" class="w-full" placeholder="Describe the rule's purpose..." data-i18n-placeholder="yara.comment_placeholder"></textarea>
+                            <textarea id="yaraWriteComment" rows="2" class="w-full" placeholder="Describe the rule's purpose..." data-i18n-placeholder="yara.comment_placeholder"></textarea>
                         </div>
                         <div>
-                            <label class="block mb-2 text-sm font-semibold" data-i18n="yara.campaign">Campaign (optional)</label>
-                            <select id="yaraCampaignSelect" class="w-full">
-                                <option value="" data-i18n="submit.none">- None -</option>
-                            </select>
-                        </div>
-                    </form>
-                    <div id="yaraDropZone" class="drag-drop-zone rounded-lg p-4 text-center cursor-pointer">
-                        <input type="file" id="yaraFileInput" accept=".yar" class="hidden">
-                        <div class="space-y-1">
-                            <p class="text-base">📁 <span data-i18n="yara.drag_drop">Drag & Drop YARA Rule File</span></p>
-                            <p class="text-secondary text-xs" data-i18n="yara.or_click">or click to browse</p>
-                            <p class="text-secondary text-xs" data-i18n="yara.only_yar">Only .yar files are accepted</p>
-                            <p id="yaraSelectedFilename" class="text-cyan-400 text-sm font-mono mt-2 hidden"></p>
+                            <button type="button" id="yaraWriteSubmitBtn" class="btn-cmd-primary yara-submit-locked w-full md:w-auto" aria-disabled="true" data-i18n="yara.write_submit_btn">Submit written rule</button>
                         </div>
                     </div>
-                    <div class="mt-4 flex flex-wrap gap-2">
-                        <button type="button" id="yaraSubmitBtn" class="btn-cmd-primary w-full md:w-auto" data-i18n="yara.submit_btn">Submit YARA Rule</button>
-                    </div>
-                    <!-- Pending approval (one section: analyst sees own, admin sees all with Approve/Reject) -->
-                    <div id="yaraPendingSection" class="hidden mt-6">
-                        <h3 class="text-xl font-bold mb-3 accent-blue" data-i18n="yara.pending_title">Pending Approval</h3>
-                        <p class="text-secondary text-sm mb-2" data-i18n="yara.my_pending_hint">Rules waiting for admin approval. They will appear in the feed once approved.</p>
-                        <div class="overflow-x-auto rounded-lg border border-white/10 mb-4">
-                            <table class="w-full border-collapse">
-                                <thead>
-                                    <tr class="bg-tertiary">
-                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.name">Rule Name</th>
-                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.comment">Comment</th>
-                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.date">Date</th>
-                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.analyst">Analyst</th>
-                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.ticket">Ticket</th>
-                                        <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.actions">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="yaraPendingTableBody">
-                                    <tr><td colspan="6" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">No pending rules</td></tr>
-                                </tbody>
-                            </table>
+
+                    <div id="yara-wrapper-status" class="hidden flex flex-col gap-4 flex-1 min-h-0">
+                        <!-- Pending approval (analyst: own; admin: all with Approve/Reject) -->
+                        <div id="yaraPendingSection" class="hidden">
+                            <h3 class="text-xl font-bold mb-3 accent-blue" data-i18n="yara.pending_title">Pending Approval</h3>
+                            <p class="text-secondary text-sm mb-2" data-i18n="yara.my_pending_hint">Rules waiting for admin approval. They will appear in the feed once approved.</p>
+                            <div class="overflow-x-auto rounded-lg border border-white/10 mb-2">
+                                <table class="w-full border-collapse">
+                                    <thead>
+                                        <tr class="bg-tertiary">
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.name">Rule Name</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.comment">Comment</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.date">Date</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.analyst">Analyst</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.ticket">Ticket</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.actions">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="yaraPendingTableBody">
+                                        <tr><td colspan="6" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">No pending rules</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
-                    </div>
-                    <h3 class="text-xl font-bold mt-6 mb-3 accent-blue" data-i18n="yara.active_repo">Active Rules Repository</h3>
-                    <input type="text" id="yaraTableFilter" class="w-full md:w-1/3 bg-dark-800 border border-white/10 rounded px-3 py-2 text-sm text-white focus:border-cyan-400 placeholder-white/30 mb-3" placeholder="🔍 Filter rules by name, comment, analyst, or ticket..." data-i18n-placeholder="yara.filter_placeholder">
-                    <div class="overflow-x-auto rounded-lg border border-white/10">
-                        <table class="w-full border-collapse">
-                            <thead>
-                                <tr class="bg-tertiary">
-                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.name">Rule Name</th>
-                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.comment">Comment</th>
-                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.size">Size</th>
-                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.date">Date</th>
-                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.analyst">Analyst</th>
-                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.ticket">Ticket</th>
-                                    <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.actions">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="yaraRulesTableBody">
-                                <tr>
-                                    <td colspan="7" class="border border-white/10 px-4 py-6 text-center text-secondary text-sm" data-i18n="yara.loading">Loading...</td>
-                                </tr>
-                            </tbody>
-                        </table>
+                        <div>
+                            <h3 class="text-xl font-bold mb-3 accent-blue" data-i18n="yara.active_repo">Active Rules Repository</h3>
+                            <input type="text" id="yaraTableFilter" class="w-full md:w-1/3 bg-dark-800 border border-white/10 rounded px-3 py-2 text-sm text-white focus:border-cyan-400 placeholder-white/30 mb-3" placeholder="🔍 Filter rules by name, comment, analyst, or ticket..." data-i18n-placeholder="yara.filter_placeholder">
+                            <div class="overflow-x-auto rounded-lg border border-white/10">
+                                <table class="w-full border-collapse">
+                                    <thead>
+                                        <tr class="bg-tertiary">
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.name">Rule Name</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.comment">Comment</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.size">Size</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.date">Date</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.analyst">Analyst</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.ticket">Ticket</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.actions">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="yaraRulesTableBody">
+                                        <tr>
+                                            <td colspan="7" class="border border-white/10 px-4 py-6 text-center text-secondary text-sm" data-i18n="yara.loading">Loading...</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -747,6 +833,11 @@
                                     <div>
                                         <label class="block mb-1 text-sm font-medium" data-i18n="campaign.description">Description</label>
                                         <textarea id="campaignDesc" rows="2" class="w-full px-3 py-2 rounded" placeholder="Optional description" data-i18n-placeholder="campaign.desc_placeholder"></textarea>
+                                    </div>
+                                    <div>
+                                        <label class="block mb-1 text-sm font-medium" data-i18n="campaign.ref_image_label">Reference image (optional)</label>
+                                        <input type="file" id="campaignCreateRefFile" accept="image/jpeg,image/png,image/gif,image/webp" class="w-full text-sm file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-tertiary">
+                                        <p class="text-xs text-secondary mt-1" data-i18n="campaign.ref_image_hint">Screenshot or email excerpt (JPG, PNG, GIF, WebP, max 8 MB).</p>
                                     </div>
                                     <button type="submit" class="w-full btn-cmd-primary" data-i18n="campaign.create_btn">Create Campaign</button>
                                 </form>
@@ -1434,7 +1525,12 @@
                     <button type="button" id="yaraEditSave" class="btn-cmd-primary" data-i18n="modal.save">Save</button>
                 </div>
             </div>
-            <textarea id="yaraEditContent" class="w-full h-96 p-4 font-mono text-sm bg-tertiary border border-white/10 rounded m-4 mt-0 resize-y" placeholder="YARA rule content..." data-i18n-placeholder="modal.yara_content_placeholder"></textarea>
+            <div class="flex flex-col flex-1 min-h-0 overflow-y-auto px-4 pb-4 pt-2 gap-2">
+                <label for="yaraEditContent" class="text-sm font-semibold text-secondary shrink-0" data-i18n="modal.yara_content_label">Rule source</label>
+                <textarea id="yaraEditContent" class="w-full min-h-[12rem] p-4 font-mono text-sm bg-tertiary border border-white/10 rounded resize-y" placeholder="YARA rule content..." data-i18n-placeholder="modal.yara_content_placeholder"></textarea>
+                <label for="yaraEditChangeReason" class="text-sm font-semibold text-secondary shrink-0 mt-1" data-i18n="modal.yara_edit_reason_label">Why did you change the rule?</label>
+                <textarea id="yaraEditChangeReason" rows="3" class="w-full p-3 text-sm bg-tertiary border border-white/10 rounded resize-y" placeholder="Required when the rule text changes" data-i18n-placeholder="modal.yara_edit_reason_placeholder"></textarea>
+            </div>
         </div>
     </div>
 
@@ -1488,6 +1584,19 @@
             <h3 class="text-lg font-bold accent-blue mb-4" data-i18n="champs.msg_settings_title">Ticker Message Settings</h3>
             <p class="text-sm text-secondary mb-4" data-i18n="champs.msg_settings_hint">Up to 5 messages. They will loop with a green separator. All text is bold.</p>
             <div id="champsTickerMsgForm" class="space-y-4">
+                <div class="pb-4 border-b border-white/10">
+                    <p class="text-sm text-secondary mb-2" data-i18n="champs.msg_banner_direction">Banner scroll direction</p>
+                    <div class="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="radio" name="champsTickerBannerDir" value="rtl" class="rounded" checked>
+                            <span data-i18n="champs.msg_banner_rtl">RTL (default)</span>
+                        </label>
+                        <label class="flex items-center gap-2 cursor-pointer">
+                            <input type="radio" name="champsTickerBannerDir" value="ltr" class="rounded">
+                            <span data-i18n="champs.msg_banner_ltr">LTR (reversed)</span>
+                        </label>
+                    </div>
+                </div>
                 <!-- 5 rows: text + color -->
                 <template id="champsTickerMsgRowTpl">
                     <div class="champs-ticker-msg-row flex gap-2 items-center flex-wrap">
@@ -1535,11 +1644,32 @@
                     <label class="block mb-2 text-sm font-semibold" data-i18n="modal.description">Description</label>
                     <textarea id="campaignEditDesc" rows="3" class="w-full" placeholder="Optional description" data-i18n-placeholder="modal.desc_placeholder"></textarea>
                 </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="campaign.ref_image_label">Reference image (optional)</label>
+                    <input type="file" id="campaignEditRefFile" accept="image/jpeg,image/png,image/gif,image/webp" class="w-full text-sm file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-black/20">
+                    <label id="campaignEditRemoveRefWrap" class="hidden mt-2 flex items-center gap-2 text-sm cursor-pointer">
+                        <input type="checkbox" id="campaignEditRemoveRef" class="rounded">
+                        <span data-i18n="campaign.ref_image_remove">Remove current reference image</span>
+                    </label>
+                </div>
                 <div class="flex gap-2 justify-end">
                     <button type="button" id="campaignEditCancel" class="btn-cmd-neutral" data-i18n="modal.cancel">Cancel</button>
                     <button type="submit" class="btn-cmd-primary" data-i18n="modal.save">Save Changes</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Campaign reference image (view-only) -->
+    <div id="campaignReferenceImageModal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[60] p-4" role="dialog" aria-modal="true" aria-labelledby="campaignReferenceImageModalTitle">
+        <div class="relative bg-secondary rounded-lg border border-white/10 shadow-xl max-w-[min(96vw,56rem)] max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between gap-2 px-4 py-2 border-b border-white/10 flex-shrink-0">
+                <h3 id="campaignReferenceImageModalTitle" class="text-sm font-semibold accent-blue" data-i18n="campaign.ref_image_modal_title">Reference image</h3>
+                <button type="button" id="campaignReferenceImageModalClose" class="btn-cmd-neutral px-3 py-1 text-lg leading-none" aria-label="Close">&times;</button>
+            </div>
+            <div class="p-3 overflow-auto flex justify-center items-center min-h-[120px] max-h-[calc(90vh-3.5rem)]">
+                <img id="campaignReferenceImageModalImg" src="" alt="" class="max-w-full max-h-[min(80vh,720px)] object-contain rounded">
+            </div>
         </div>
     </div>
 
@@ -1583,6 +1713,19 @@
             <div class="flex gap-2 justify-end">
                 <button type="button" id="yaraConfirmCancel" class="btn-cmd-neutral">Cancel</button>
                 <button type="button" id="yaraConfirmSubmit" class="btn-cmd-danger">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin: YARA delete requires reason (audit + Search history) -->
+    <div id="yaraAdminDeleteModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-lg w-full mx-4 backdrop-blur-sm border border-white/10">
+            <h3 id="yaraAdminDeleteTitle" class="text-xl font-bold text-red-400 mb-2" data-i18n="yara.admin_delete_title">Delete YARA rule</h3>
+            <p class="text-sm text-secondary mb-3" data-i18n="yara.admin_delete_hint">A reason is required. It will appear in Search → History for this rule and in audit logs.</p>
+            <textarea id="yaraAdminDeleteReason" rows="4" class="w-full rounded-lg bg-dark-800 border border-white/10 px-3 py-2 text-sm text-primary focus:border-cyan-400 focus:outline-none" placeholder="Reason for deletion..." data-i18n-placeholder="yara.admin_delete_placeholder"></textarea>
+            <div class="flex gap-2 justify-end mt-4">
+                <button type="button" id="yaraAdminDeleteCancel" class="btn-cmd-neutral" data-i18n="actions.cancel">Cancel</button>
+                <button type="button" id="yaraAdminDeleteSubmit" class="btn-cmd-danger" data-i18n="actions.delete">Delete</button>
             </div>
         </div>
     </div>
@@ -1644,9 +1787,10 @@
                         <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/ip" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/ip</a><span class="text-slate-500">IP Addresses</span></div>
                         <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/domain" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/domain</a><span class="text-slate-500">Domains</span></div>
                         <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/url" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/url</a><span class="text-slate-500">URLs</span></div>
-                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/md5" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/md5</a><span class="text-slate-500">MD5</span></div>
-                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/sha256" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/sha256</a><span class="text-slate-500">SHA-256</span></div>
-                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/email" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/email</a><span class="text-slate-500">Email Addresses</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/hash" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/hash</a><span class="text-slate-500" data-i18n="feed_catalog.cp_hashes">MD5, SHA-1, SHA-256, SHA-512 (all hashes)</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/md5" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/md5</a><span class="text-slate-500" data-i18n="feed_catalog.cp_md5">MD5 only</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/sha1" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/sha1</a><span class="text-slate-500" data-i18n="feed_catalog.cp_sha1">SHA-1 only</span></div>
+                        <div class="px-3 py-1.5 flex justify-between items-center"><a href="/feed/cp/sha256" target="_blank" rel="noopener noreferrer" class="text-slate-300 hover:text-cyan-400 hover:underline">/feed/cp/sha256</a><span class="text-slate-500" data-i18n="feed_catalog.cp_sha2">SHA-256 only (SHA-2)</span></div>
                     </div>
                 </div>
 
@@ -1896,6 +2040,7 @@
         }
     };
     </script>
+    <script src="{{ url_for('static', filename='js/tags-autocomplete.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     <script src="{{ url_for('static', filename='js/playbook.js') }}"></script>
     <script src="{{ url_for('static', filename='js/submit.js') }}"></script>

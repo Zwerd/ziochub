@@ -80,6 +80,9 @@ function setLanguage(lang) {
         html.setAttribute('dir', 'ltr');
     }
     updateTranslations();
+    if (typeof window.setYaraMode === 'function' && window._yaraCurrentMode) {
+        window.setYaraMode(window._yaraCurrentMode, { skipReload: true });
+    }
 }
 
 function updateTranslations() {
@@ -436,7 +439,7 @@ window.addEventListener('hashchange', () => {
 // ---------------------------------------------------------------------------
 // Toast notification system
 // ---------------------------------------------------------------------------
-function showToast(message, type = 'success') {
+function showToast(message, type = 'success', durationMs = 3000) {
     const icons = { success: '\u2713', error: '\u2717', warning: '\u26A0' };
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
@@ -450,6 +453,7 @@ function showToast(message, type = 'success') {
     }
     const progressSpan = document.createElement('span');
     progressSpan.className = 'toast-progress';
+    progressSpan.style.animation = `toastProgress ${durationMs}ms linear forwards`;
     toast.appendChild(iconSpan);
     toast.appendChild(msgSpan);
     toast.appendChild(progressSpan);
@@ -457,7 +461,7 @@ function showToast(message, type = 'success') {
     setTimeout(() => {
         toast.classList.add('removing');
         setTimeout(() => toast.remove(), 300);
-    }, 3000);
+    }, durationMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -750,3 +754,8 @@ document.addEventListener('keydown', (e) => {
         });
     }
 });
+
+// IOC tag fields: autocomplete + lowercase on blur (server also normalizes)
+if (typeof initTagAutocomplete === 'function') {
+    initTagAutocomplete(['iocTags', 'editTags', 'txtTagsForAll', 'pasteTagsForAll', 'csvTagsForAll']);
+}

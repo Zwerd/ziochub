@@ -9,6 +9,7 @@
 
     let selectedYaraFile = null;
     let editingYaraFilename = null;
+    let yaraEditOriginalContent = '';
     const yaraDropZone = document.getElementById('yaraDropZone');
     const yaraFileInput = document.getElementById('yaraFileInput');
     const yaraSelectedFilename = document.getElementById('yaraSelectedFilename');
@@ -42,6 +43,8 @@
 
     function setYaraSelected(file) {
         selectedYaraFile = file;
+        invalidateYaraUploadValidation();
+        clearYaraSyntaxBanner('yaraUploadSyntaxResult');
         if (yaraSelectedFilename) {
             if (file) {
                 yaraSelectedFilename.textContent = t('yara.selected') + ': ' + file.name;
@@ -84,14 +87,116 @@
         });
     }
 
-    document.getElementById('yaraSubmitBtn')?.addEventListener('click', () => {
+    let yaraWriteHighlightTimer = null;
+    /** Source string that last passed /api/yara/validate-syntax (exact match required to enable Submit). */
+    let yaraWriteValidatedSource = null;
+    /** Upload: validated file text + fingerprint (name|size|lastModified) after successful Check syntax. */
+    let yaraUploadValidatedSource = null;
+    let yaraUploadValidatedFileKey = '';
+
+    function readFileAsText(file) {
+        return new Promise(function (resolve, reject) {
+            if (!file) { reject(new Error('No file')); return; }
+            const r = new FileReader();
+            r.onload = function () { resolve(String(r.result || '')); };
+            r.onerror = function () { reject(r.error || new Error('read failed')); };
+            r.readAsText(file);
+        });
+    }
+
+    function yaraUploadFileFingerprint(file) {
+        if (!file) return '';
+        return file.name + '|' + file.size + '|' + file.lastModified;
+    }
+
+    var YARA_SUBMIT_TOAST_MS = 5500;
+
+    function setYaraWriteSubmitEnabled(enabled) {
+        const btn = document.getElementById('yaraWriteSubmitBtn');
+        if (!btn) return;
+        btn.removeAttribute('disabled');
+        btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+        if (enabled) {
+            btn.classList.remove('yara-submit-locked');
+            btn.title = '';
+        } else {
+            btn.classList.add('yara-submit-locked');
+            btn.title = t('yara.syntax_required_hint') || '';
+        }
+    }
+
+    function setYaraUploadSubmitEnabled(enabled) {
+        const btn = document.getElementById('yaraSubmitBtn');
+        if (!btn) return;
+        btn.removeAttribute('disabled');
+        btn.setAttribute('aria-disabled', enabled ? 'false' : 'true');
+        if (enabled) {
+            btn.classList.remove('yara-submit-locked');
+            btn.title = '';
+        } else {
+            btn.classList.add('yara-submit-locked');
+            btn.title = t('yara.syntax_required_hint') || '';
+        }
+    }
+
+    function toastYaraSubmitBlocked() {
+        const msg = t('yara.submit_blocked_toast') || t('yara.submit_requires_valid_syntax') || 'Run Check syntax successfully before submitting.';
+        if (typeof showToast === 'function') {
+            showToast(msg, 'error', YARA_SUBMIT_TOAST_MS);
+        }
+    }
+
+    function invalidateYaraWriteValidation() {
+        yaraWriteValidatedSource = null;
+        setYaraWriteSubmitEnabled(false);
+    }
+
+    function invalidateYaraUploadValidation() {
+        yaraUploadValidatedSource = null;
+        yaraUploadValidatedFileKey = '';
+        setYaraUploadSubmitEnabled(false);
+    }
+
+    function refreshYaraWriteHighlight() {
+        const ta = document.getElementById('yaraWriteSource');
+        const codeEl = document.getElementById('yaraWriteHighlighted');
+        if (!ta || !codeEl) return;
+        codeEl.textContent = ta.value;
+        if (typeof Prism !== 'undefined' && typeof Prism.highlightElement === 'function') {
+            try {
+                Prism.highlightElement(codeEl);
+            } catch (e) {
+                console.warn('YARA write Prism highlight:', e);
+            }
+        }
+    }
+
+    function scheduleYaraWriteHighlight() {
+        if (yaraWriteHighlightTimer) clearTimeout(yaraWriteHighlightTimer);
+        yaraWriteHighlightTimer = setTimeout(function () {
+            yaraWriteHighlightTimer = null;
+            refreshYaraWriteHighlight();
+        }, 120);
+    }
+
+    document.getElementById('yaraSubmitBtn')?.addEventListener('click', async () => {
         if (!selectedYaraFile) {
             showToast(t('toast.select_yara_file'), 'error');
             return;
         }
-        handleYaraUpload(selectedYaraFile);
-        setYaraSelected(null);
-        if (yaraFileInput) yaraFileInput.value = '';
+        let text = '';
+        try {
+            text = await readFileAsText(selectedYaraFile);
+        } catch (e) {
+            showToast((e && e.message) ? e.message : 'Could not read file', 'error');
+            return;
+        }
+        const fp = yaraUploadFileFingerprint(selectedYaraFile);
+        if (yaraUploadValidatedSource !== text || yaraUploadValidatedFileKey !== fp) {
+            toastYaraSubmitBlocked();
+            return;
+        }
+        await handleYaraUpload(selectedYaraFile);
     });
 
     function filterYaraTable() {
@@ -170,15 +275,58 @@
         }
     }
 
+    function showYaraDeleteReasonModal(filename) {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('yaraAdminDeleteModal');
+            const titleEl = document.getElementById('yaraAdminDeleteTitle');
+            const ta = document.getElementById('yaraAdminDeleteReason');
+            const submitBtn = document.getElementById('yaraAdminDeleteSubmit');
+            const cancelBtn = document.getElementById('yaraAdminDeleteCancel');
+            if (!modal || !ta) { resolve(null); return; }
+            const titleBase = t('yara.admin_delete_title') || 'Delete YARA rule';
+            titleEl.textContent = titleBase + ': ' + filename;
+            ta.value = '';
+            modal.classList.remove('hidden');
+            function finish(val) {
+                submitBtn.removeEventListener('click', onOk);
+                cancelBtn.removeEventListener('click', onCancel);
+                modal.classList.add('hidden');
+                resolve(val);
+            }
+            function onOk() {
+                const v = ta.value.trim();
+                if (!v) {
+                    showToast(t('yara.admin_delete_reason_required') || 'Enter a deletion reason.', 'error');
+                    return;
+                }
+                finish(v);
+            }
+            function onCancel() { finish(null); }
+            submitBtn.addEventListener('click', onOk);
+            cancelBtn.addEventListener('click', onCancel);
+            ta.focus();
+        });
+    }
+
     async function deleteYaraRule(filename) {
         if (!filename) return;
-        const ok = await showYaraConfirm('Delete YARA Rule', `Are you sure you want to delete "${filename}"? This cannot be undone.`, 'Delete');
-        if (!ok) return;
+        const auth = global.authState || {};
+        let reason = '';
+        if (auth.is_admin) {
+            const r = await showYaraDeleteReasonModal(filename);
+            if (r === null) return;
+            reason = r;
+        } else {
+            const ok = await showYaraConfirm('Delete YARA Rule', `Are you sure you want to delete "${filename}"? This cannot be undone.`, 'Delete');
+            if (!ok) return;
+        }
         try {
+            const body = { filename: filename };
+            if (reason) body.reason = reason;
             const response = await fetch('/api/delete-yara', {
                 method: 'DELETE',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename: filename })
+                body: JSON.stringify(body)
             });
             const result = await response.json();
             if (result.success) {
@@ -226,8 +374,11 @@
         const modal = document.getElementById('yaraEditModal');
         const titleEl = document.getElementById('yaraEditTitle');
         const textarea = document.getElementById('yaraEditContent');
+        const reasonEl = document.getElementById('yaraEditChangeReason');
         if (!modal || !titleEl || !textarea) return;
         editingYaraFilename = filename;
+        yaraEditOriginalContent = '';
+        if (reasonEl) reasonEl.value = '';
         titleEl.textContent = t('modal.yara_edit') + ': ' + filename;
         textarea.value = '';
         modal.classList.remove('hidden');
@@ -236,6 +387,7 @@
             const result = await response.json();
             if (result.success) {
                 textarea.value = result.content ?? '';
+                yaraEditOriginalContent = textarea.value;
             } else {
                 showToast(result.message || 'Failed to load rule', 'error');
                 modal.classList.add('hidden');
@@ -249,19 +401,28 @@
     async function saveYaraRule() {
         if (!editingYaraFilename) return;
         const textarea = document.getElementById('yaraEditContent');
+        const reasonEl = document.getElementById('yaraEditChangeReason');
         const modal = document.getElementById('yaraEditModal');
         if (!textarea || !modal) return;
+        const reason = reasonEl ? reasonEl.value.trim() : '';
+        if (textarea.value !== yaraEditOriginalContent && !reason) {
+            showToast(t('toast.yara_edit_reason_required') || 'Describe why you changed the rule', 'error');
+            if (reasonEl) reasonEl.focus();
+            return;
+        }
         try {
             const response = await fetch('/api/update-yara', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename: editingYaraFilename, content: textarea.value })
+                body: JSON.stringify({ filename: editingYaraFilename, content: textarea.value, reason: reason })
             });
             const result = await response.json();
             if (result.success) {
                 showToast(result.message, 'success');
                 modal.classList.add('hidden');
                 editingYaraFilename = null;
+                yaraEditOriginalContent = '';
+                if (reasonEl) reasonEl.value = '';
                 loadYaraRules();
                 if (result.moved_to_pending || (result.message && result.message.indexOf('pending') !== -1)) {
                     const pendingSec = document.getElementById('yaraPendingSection');
@@ -280,10 +441,19 @@
     document.getElementById('yaraEditCancel')?.addEventListener('click', () => {
         document.getElementById('yaraEditModal')?.classList.add('hidden');
         editingYaraFilename = null;
+        yaraEditOriginalContent = '';
+        const re = document.getElementById('yaraEditChangeReason');
+        if (re) re.value = '';
     });
     document.getElementById('yaraEditSave')?.addEventListener('click', saveYaraRule);
 
-    async function handleYaraUpload(file) {
+    async function handleYaraUpload(file, opts) {
+        opts = opts || {};
+        const ticketElId = opts.ticketId || 'yaraTicketId';
+        const commentElId = opts.comment || 'yaraComment';
+        const campaignElId = opts.campaign || 'yaraCampaignSelect';
+        const clearWrite = !!opts.clearWrite;
+
         const authState = global.authState || {};
         if (!authState.authenticated) {
             showToast(t('auth.login_required') || 'Please log in to submit YARA rules', 'error');
@@ -293,10 +463,15 @@
             showToast(t('toast.invalid_file_type'), 'error');
             return;
         }
+        const ticketEl = document.getElementById(ticketElId);
+        const commentEl = document.getElementById(commentElId);
+        const campaignEl = document.getElementById(campaignElId);
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('ticket_id', document.getElementById('yaraTicketId').value.trim());
-        formData.append('comment', document.getElementById('yaraComment').value.trim());
+        formData.append('ticket_id', (ticketEl && ticketEl.value ? ticketEl.value : '').trim());
+        formData.append('comment', (commentEl && commentEl.value ? commentEl.value : '').trim());
+        const cn = (campaignEl && campaignEl.value ? campaignEl.value : '').trim();
+        if (cn) formData.append('campaign_name', cn);
         try {
             const response = await fetch('/api/upload-yara', { method: 'POST', body: formData });
             const result = await response.json().catch(() => ({}));
@@ -306,6 +481,19 @@
             }
             if (result.success) {
                 showToast(result.message, 'success');
+                if (clearWrite) {
+                    const ws = document.getElementById('yaraWriteSource');
+                    const wf = document.getElementById('yaraWriteFilename');
+                    if (ws) ws.value = '';
+                    if (wf) wf.value = '';
+                    refreshYaraWriteHighlight();
+                    clearYaraSyntaxResult();
+                    invalidateYaraWriteValidation();
+                } else {
+                    clearYaraSyntaxBanner('yaraUploadSyntaxResult');
+                    setYaraSelected(null);
+                    if (yaraFileInput) yaraFileInput.value = '';
+                }
                 if (typeof loadLiveFeed === 'function') loadLiveFeed();
                 loadYaraRules();
                 if (authState.authenticated) {
@@ -319,6 +507,229 @@
             }
         } catch (error) {
             showToast(t('toast.error_upload_yara') + ': ' + error.message, 'error');
+        }
+    }
+
+    function clearYaraSyntaxBanner(bannerId) {
+        const el = document.getElementById(bannerId || 'yaraWriteSyntaxResult');
+        if (!el) return;
+        el.classList.add('hidden');
+        el.textContent = '';
+        ['border-emerald-500/40', 'bg-emerald-950/30', 'text-emerald-100',
+            'border-amber-500/40', 'bg-amber-950/30', 'text-amber-100',
+            'border-red-500/40', 'bg-red-950/30', 'text-red-100'].forEach(function (c) {
+            el.classList.remove(c);
+        });
+    }
+
+    function showYaraSyntaxBanner(kind, text, bannerId) {
+        const id = bannerId || 'yaraWriteSyntaxResult';
+        const el = document.getElementById(id);
+        if (!el) return;
+        clearYaraSyntaxBanner(id);
+        el.classList.remove('hidden');
+        el.textContent = text || '';
+        const palette = {
+            ok: ['border-emerald-500/40', 'bg-emerald-950/30', 'text-emerald-100'],
+            warn: ['border-amber-500/40', 'bg-amber-950/30', 'text-amber-100'],
+            err: ['border-red-500/40', 'bg-red-950/30', 'text-red-100']
+        };
+        (palette[kind] || palette.err).forEach(function (c) { el.classList.add(c); });
+    }
+
+    function clearYaraSyntaxResult() {
+        clearYaraSyntaxBanner('yaraWriteSyntaxResult');
+    }
+
+    function showYaraSyntaxResult(kind, text) {
+        showYaraSyntaxBanner(kind, text, 'yaraWriteSyntaxResult');
+    }
+
+    async function handleYaraSyntaxCheck() {
+        const authState = global.authState || {};
+        if (!authState.authenticated) {
+            showToast(t('auth.login_required') || 'Login required', 'error');
+            return;
+        }
+        const source = document.getElementById('yaraWriteSource') ? document.getElementById('yaraWriteSource').value : '';
+        const btn = document.getElementById('yaraWriteCheckSyntaxBtn');
+        if (btn) btn.disabled = true;
+        setYaraWriteSubmitEnabled(false);
+        const bannerId = 'yaraWriteSyntaxResult';
+        try {
+            const response = await fetch('/api/yara/validate-syntax', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source: source })
+            });
+            const result = await response.json().catch(function () { return {}; });
+            if (!response.ok) {
+                showYaraSyntaxBanner('err', (result && result.message) ? result.message : 'Request failed', bannerId);
+                invalidateYaraWriteValidation();
+                return;
+            }
+            if (result.success && result.valid) {
+                yaraWriteValidatedSource = source;
+                setYaraWriteSubmitEnabled(true);
+                showYaraSyntaxBanner('ok', t('yara.syntax_ok'), bannerId);
+                return;
+            }
+            if (result.code === 'no_compiler') {
+                showYaraSyntaxBanner('warn', (result && result.message) ? result.message : 'Compiler unavailable', bannerId);
+                invalidateYaraWriteValidation();
+                return;
+            }
+            showYaraSyntaxBanner('err', (result && result.message) ? result.message : (t('yara.syntax_invalid') || 'Invalid'), bannerId);
+            invalidateYaraWriteValidation();
+        } catch (err) {
+            showYaraSyntaxBanner('err', err && err.message ? err.message : 'Network error', bannerId);
+            invalidateYaraWriteValidation();
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function handleYaraUploadSyntaxCheck() {
+        const authState = global.authState || {};
+        if (!authState.authenticated) {
+            showToast(t('auth.login_required') || 'Login required', 'error');
+            return;
+        }
+        if (!selectedYaraFile) {
+            showToast(t('toast.select_yara_file'), 'error');
+            return;
+        }
+        const btn = document.getElementById('yaraUploadCheckSyntaxBtn');
+        if (btn) btn.disabled = true;
+        setYaraUploadSubmitEnabled(false);
+        const bannerId = 'yaraUploadSyntaxResult';
+        let source = '';
+        try {
+            source = await readFileAsText(selectedYaraFile);
+            const response = await fetch('/api/yara/validate-syntax', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source: source })
+            });
+            const result = await response.json().catch(function () { return {}; });
+            if (!response.ok) {
+                showYaraSyntaxBanner('err', (result && result.message) ? result.message : 'Request failed', bannerId);
+                invalidateYaraUploadValidation();
+                return;
+            }
+            if (result.success && result.valid) {
+                yaraUploadValidatedSource = source;
+                yaraUploadValidatedFileKey = yaraUploadFileFingerprint(selectedYaraFile);
+                setYaraUploadSubmitEnabled(true);
+                showYaraSyntaxBanner('ok', t('yara.syntax_ok'), bannerId);
+                return;
+            }
+            if (result.code === 'no_compiler') {
+                showYaraSyntaxBanner('warn', (result && result.message) ? result.message : 'Compiler unavailable', bannerId);
+                invalidateYaraUploadValidation();
+                return;
+            }
+            showYaraSyntaxBanner('err', (result && result.message) ? result.message : (t('yara.syntax_invalid') || 'Invalid'), bannerId);
+            invalidateYaraUploadValidation();
+        } catch (err) {
+            showYaraSyntaxBanner('err', err && err.message ? err.message : 'Network error', bannerId);
+            invalidateYaraUploadValidation();
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function handleYaraWriteSubmit() {
+        const rawName = (document.getElementById('yaraWriteFilename') && document.getElementById('yaraWriteFilename').value || '').trim();
+        const ta = document.getElementById('yaraWriteSource');
+        const sourceRaw = ta ? ta.value : '';
+        const source = sourceRaw.trim();
+        if (!rawName) {
+            showToast(t('yara.write_error_empty_filename'), 'error');
+            return;
+        }
+        if (!source) {
+            showToast(t('yara.write_error_empty_source'), 'error');
+            return;
+        }
+        if (yaraWriteValidatedSource !== sourceRaw) {
+            toastYaraSubmitBlocked();
+            return;
+        }
+        const base = rawName.split(/[/\\]/).pop() || rawName;
+        const finalName = base.toLowerCase().endsWith('.yar') ? base : (base + '.yar');
+        const file = new File([source], finalName, { type: 'text/plain' });
+        await handleYaraUpload(file, {
+            ticketId: 'yaraWriteTicketId',
+            comment: 'yaraWriteComment',
+            campaign: 'yaraWriteCampaignSelect',
+            clearWrite: true
+        });
+    }
+
+    function getYaraInfoUploadHtml() {
+        return `<h4 class="font-bold mb-1">${t('yara.info_upload_title')}</h4>
+                <p class="mb-1">${t('yara.info_upload_desc')}</p>`;
+    }
+    function getYaraInfoWriteHtml() {
+        return `<h4 class="font-bold mb-1">${t('yara.info_write_title')}</h4>
+                <p class="mb-1">${t('yara.info_write_desc')}</p>`;
+    }
+    function getYaraInfoStatusHtml() {
+        return `<h4 class="font-bold mb-1">${t('yara.info_status_title')}</h4>
+                <p class="mb-1">${t('yara.info_status_desc')}</p>`;
+    }
+
+    function setYaraMode(mode, options) {
+        const skipReload = options && options.skipReload;
+        const prevYaraMode = global._yaraCurrentMode;
+        global._yaraCurrentMode = mode;
+        const isUpload = mode === 'upload';
+        const isWrite = mode === 'write';
+        const isStatus = mode === 'status';
+        const wUpload = document.getElementById('yara-wrapper-upload');
+        const wWrite = document.getElementById('yara-wrapper-write');
+        const wStatus = document.getElementById('yara-wrapper-status');
+        const btnU = document.getElementById('btnModeYaraUpload');
+        const btnW = document.getElementById('btnModeYaraWrite');
+        const btnS = document.getElementById('btnModeYaraStatus');
+        const infoCard = document.getElementById('yaraModeInfoCard');
+        const authState = global.authState || {};
+
+        if (wUpload) wUpload.classList.toggle('hidden', !isUpload);
+        if (wWrite) wWrite.classList.toggle('hidden', !isWrite);
+        if (wStatus) wStatus.classList.toggle('hidden', !isStatus);
+
+        function setActive(btn, active) {
+            if (!btn) return;
+            if (active) { btn.classList.add('bg-blue-600', 'text-white'); btn.classList.remove('bg-transparent', 'text-secondary'); }
+            else { btn.classList.remove('bg-blue-600', 'text-white'); btn.classList.add('bg-transparent', 'text-secondary'); }
+        }
+        setActive(btnU, isUpload);
+        setActive(btnW, isWrite);
+        setActive(btnS, isStatus);
+
+        if (infoCard) {
+            if (isUpload) infoCard.innerHTML = getYaraInfoUploadHtml();
+            else if (isWrite) infoCard.innerHTML = getYaraInfoWriteHtml();
+            else infoCard.innerHTML = getYaraInfoStatusHtml();
+        }
+
+        if (isWrite && prevYaraMode !== 'write') {
+            invalidateYaraWriteValidation();
+            clearYaraSyntaxResult();
+        }
+
+        if (isUpload && prevYaraMode !== 'upload') {
+            invalidateYaraUploadValidation();
+            clearYaraSyntaxBanner('yaraUploadSyntaxResult');
+        }
+
+        if (isStatus && !skipReload) {
+            loadYaraRules();
+            if (authState.authenticated) loadYaraPending();
         }
     }
 
@@ -529,9 +940,26 @@
         } catch (err) { showToast(t('toast.error_generic') + ': ' + err.message, 'error'); }
     });
 
-    if (typeof applyAutoDir === 'function') applyAutoDir(document.getElementById('yaraMetaComment'));
+    if (typeof applyAutoDir === 'function') {
+        applyAutoDir(document.getElementById('yaraMetaComment'));
+        applyAutoDir(document.getElementById('yaraWriteComment'));
+    }
+
+    document.getElementById('btnModeYaraUpload')?.addEventListener('click', () => setYaraMode('upload'));
+    document.getElementById('btnModeYaraWrite')?.addEventListener('click', () => setYaraMode('write'));
+    document.getElementById('btnModeYaraStatus')?.addEventListener('click', () => setYaraMode('status'));
+    document.getElementById('yaraWriteSubmitBtn')?.addEventListener('click', () => { handleYaraWriteSubmit(); });
+    document.getElementById('yaraWriteCheckSyntaxBtn')?.addEventListener('click', () => { handleYaraSyntaxCheck(); });
+    document.getElementById('yaraUploadCheckSyntaxBtn')?.addEventListener('click', () => { handleYaraUploadSyntaxCheck(); });
+    document.getElementById('yaraWriteSource')?.addEventListener('input', function () {
+        clearYaraSyntaxResult();
+        invalidateYaraWriteValidation();
+        scheduleYaraWriteHighlight();
+    });
 
     global.loadYaraRules = loadYaraRules;
     global.loadYaraPending = loadYaraPending;
     global.openYaraMetaEditModal = openYaraMetaEditModal;
+    global.setYaraMode = setYaraMode;
+    setYaraMode('upload');
 })(typeof window !== 'undefined' ? window : this);

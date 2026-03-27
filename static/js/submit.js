@@ -285,7 +285,11 @@ async function addSingleToStaging() {
     const comment = (document.getElementById('iocComment') && document.getElementById('iocComment').value) ? document.getElementById('iocComment').value.trim() : '';
     const expiration = (document.getElementById('iocTTL') && document.getElementById('iocTTL').value) ? document.getElementById('iocTTL').value : 'Permanent';
     const tagsInput = document.getElementById('iocTags');
-    const tagsStr = (tagsInput && tagsInput.value) ? tagsInput.value.trim() : '';
+    const tagsStr = (tagsInput && tagsInput.value)
+        ? (typeof normalizeTagsInputValue === 'function'
+            ? normalizeTagsInputValue(tagsInput.value)
+            : tagsInput.value.trim())
+        : '';
 
     const tbody = document.getElementById('singleStagingTableBody');
     const countEl = document.getElementById('singleStagingCount');
@@ -355,6 +359,7 @@ async function addSingleToStaging() {
         countEl.textContent = t('bulk.found_count', { count: n });
         area.classList.remove('hidden');
         attachStagingRowActionsForRow(row, 'iocTTL', 'iocCampaignSelect', 'single');
+        fetchStagingAnalystUsers().catch(() => {});
         const privateWarnings = getClientPrivateWarnings(value, type);
         const sanityWarnings = [];
         if (type === 'URL' && /[a-fA-F0-9]{32}|[a-fA-F0-9]{40}|[a-fA-F0-9]{64}/.test(value)) sanityWarnings.push(t('sanity.url_hash') || 'URL contains hash-like string. Verify.');
@@ -400,14 +405,60 @@ document.getElementById('csvForm').addEventListener('submit', (e) => { e.prevent
 const TXT_STAGING_TTL_OPTIONS = ['Permanent', '1 Week', '1 Month', '3 Months', '1 Year'];
 const STAGING_EDITABLE_FIELDS = new Set(['ticket_id', 'comment', 'expiration', 'tags']);
 
+let _cachedStagingAnalystUsers = null;
+
+/** Load analysts for staging row edit (same source as Assign-to dropdowns). Cached until invalidateStagingAnalystCache. */
+async function fetchStagingAnalystUsers() {
+    if (_cachedStagingAnalystUsers !== null) return _cachedStagingAnalystUsers;
+    try {
+        const res = await fetch('/api/users');
+        const data = await res.json().catch(() => ({}));
+        _cachedStagingAnalystUsers = (data.success && Array.isArray(data.users)) ? data.users : [];
+    } catch (e) {
+        _cachedStagingAnalystUsers = [];
+    }
+    return _cachedStagingAnalystUsers;
+}
+
+function _buildStagingAnalystSelectHtml(selectedUsername) {
+    const users = _cachedStagingAnalystUsers || [];
+    const meLabel = (typeof t === 'function' && t('submit.me')) ? t('submit.me') : '- Me -';
+    const escAttr = typeof escapeAttr === 'function' ? escapeAttr : function (s) {
+        return String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    };
+    const raw = (selectedUsername || '').trim();
+    const selLower = raw.toLowerCase();
+    let html = '<select class="staging-analyst-select w-full max-w-[14rem] bg-tertiary border border-white/20 text-white rounded px-2 py-1 text-sm">';
+    html += `<option value=""${!selLower ? ' selected' : ''}>${escapeHtml(meLabel)}</option>`;
+    const seen = new Set(['']);
+    users.forEach((u) => {
+        const un = (u && u.username) ? String(u.username).trim() : '';
+        if (!un || seen.has(un.toLowerCase())) return;
+        seen.add(un.toLowerCase());
+        const optSel = un.toLowerCase() === selLower ? ' selected' : '';
+        html += `<option value="${escAttr(un)}"${optSel}>${escapeHtml(un)}</option>`;
+    });
+    if (selLower && !seen.has(selLower)) {
+        html += `<option value="${escAttr(raw)}" selected>${escapeHtml(raw)}</option>`;
+    }
+    html += '</select>';
+    return html;
+}
+
 function validateStagingItem(item) {
     if (!item || !item.ioc || !item.type) return 'IOC value and type are required';
     const { cleaned } = clientRefanger(item.ioc);
     return validateIocFormat(cleaned, item.type);
 }
 
-function _enableStagingEdit(row, btn) {
+async function _enableStagingEdit(row, btn) {
     row.classList.add('txt-staging-row-editing');
+    await fetchStagingAnalystUsers();
+    const analystCell = row.querySelector('td[data-field="analyst"]');
+    if (analystCell) {
+        const currentVal = (analystCell.textContent || '').trim();
+        analystCell.innerHTML = _buildStagingAnalystSelectHtml(currentVal);
+    }
     const cells = row.querySelectorAll('td[data-field]');
     const expCell = row.querySelector('td[data-field="expiration"]');
     cells.forEach((c) => {
@@ -425,8 +476,12 @@ function _enableStagingEdit(row, btn) {
         const options = TXT_STAGING_TTL_OPTIONS.map(o => `<option value="${escapeHtml(o)}"${o === match ? ' selected' : ''}>${escapeHtml(o)}</option>`).join('');
         expCell.innerHTML = `<select class="w-full bg-tertiary border border-white/20 text-white rounded px-2 py-1 text-sm">${options}</select>`;
     }
-    const firstEditable = row.querySelector('td[data-field="ticket_id"]');
-    if (firstEditable) firstEditable.focus();
+    const analystSel = row.querySelector('select.staging-analyst-select');
+    if (analystSel) analystSel.focus();
+    else {
+        const firstEditable = row.querySelector('td[data-field="ticket_id"]');
+        if (firstEditable) firstEditable.focus();
+    }
     btn.classList.add('ring-2', 'ring-blue-400');
 }
 
@@ -434,7 +489,15 @@ function _disableStagingEdit(row, btn) {
     row.classList.remove('txt-staging-row-editing');
     const cells = row.querySelectorAll('td[data-field]');
     const expCell = row.querySelector('td[data-field="expiration"]');
+    const analystCell = row.querySelector('td[data-field="analyst"]');
     cells.forEach(c => { c.setAttribute('contenteditable', 'false'); });
+    if (analystCell) {
+        const asel = analystCell.querySelector('select.staging-analyst-select');
+        if (asel) {
+            const v = (asel.value || '').trim();
+            analystCell.textContent = v || ((typeof authState !== 'undefined' && authState && authState.username) ? authState.username : '');
+        }
+    }
     if (expCell) {
         const sel = expCell.querySelector('select');
         if (sel) expCell.textContent = sel.value;
@@ -482,12 +545,12 @@ function attachStagingRowActionsForRow(tr, ttlSelectId, campaignSelectId, source
             });
         });
         row.querySelectorAll('.txt-staging-edit').forEach(btn => {
-            btn.addEventListener('click', () => {
+            btn.addEventListener('click', async () => {
                 const isEditing = row.classList.contains('txt-staging-row-editing');
                 if (isEditing) {
                     _disableStagingEdit(row, btn);
                 } else {
-                    _enableStagingEdit(row, btn);
+                    await _enableStagingEdit(row, btn);
                 }
             });
         });
@@ -506,7 +569,16 @@ function attachStagingRowActionsForRow(tr, ttlSelectId, campaignSelectId, source
 function getTagsForAllFromInput(inputId) {
     const el = document.getElementById(inputId);
     if (!el || !el.value) return [];
-    return el.value.split(',').map(s => s.trim()).filter(Boolean).slice(0, 50);
+    const raw = typeof normalizeTagsInputValue === 'function'
+        ? normalizeTagsInputValue(el.value)
+        : el.value.trim();
+    return raw.split(',').map(s => s.trim()).filter(Boolean).slice(0, 50);
+}
+
+/** Assign-to dropdown value for bulk preview; empty = current user (server resolves like Single). */
+function getBulkAssignToValue(selectId) {
+    const el = document.getElementById(selectId);
+    return (el && el.value) ? el.value.trim() : '';
 }
 
 /** Attach Approve/Edit/Delete to staging rows in a tbody. ttlSelectId, campaignSelectId, source; optional tagsInputId for "Tags (for all)". */
@@ -555,14 +627,14 @@ function attachStagingRowActions(tbody, ttlSelectId, campaignSelectId, source, t
         });
     });
     tbody.querySelectorAll('.txt-staging-edit').forEach(btn => {
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', async () => {
             const tr = btn.closest('tr');
             if (!tr) return;
             const isEditing = tr.classList.contains('txt-staging-row-editing');
             if (isEditing) {
                 _disableStagingEdit(tr, btn);
             } else {
-                _enableStagingEdit(tr, btn);
+                await _enableStagingEdit(tr, btn);
             }
         });
     });
@@ -588,6 +660,7 @@ document.getElementById('csvPreviewBtn').addEventListener('click', async () => {
     formData.append('file', file);
     formData.append('ttl', document.getElementById('csvTTL').value);
     formData.append('comment', document.getElementById('csvComment').value);
+    formData.append('assign_to', getBulkAssignToValue('csvAssignTo'));
     const csvTicket = document.getElementById('csvTicketId');
     if (csvTicket && csvTicket.value.trim()) formData.append('ticket_id', csvTicket.value.trim());
     try {
@@ -640,6 +713,7 @@ document.getElementById('csvPreviewBtn').addEventListener('click', async () => {
             countEl.textContent = t('bulk.found_count', {count: result.items.length});
             area.classList.remove('hidden');
             attachStagingRowActions(tbody, 'csvTTL', 'csvCampaignSelect', 'csv', 'csvTagsForAll');
+            fetchStagingAnalystUsers().catch(() => {});
         } else {
             showToast(result.message || 'Preview failed', 'error');
         }
@@ -761,7 +835,13 @@ function getTxtStagingRowData(tr) {
     const tagsRaw = (cells[2] && cells[2].textContent) ? cells[2].textContent.trim() : '';
     const tags = tagsRaw ? tagsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
     const ticket_id = (cells[3] && cells[3].textContent) ? cells[3].textContent.trim() : '';
-    const analyst = (cells[4] && cells[4].textContent) ? cells[4].textContent.trim() : '';
+    let analyst = '';
+    const analystCell = cells[4];
+    if (analystCell) {
+        const asel = analystCell.querySelector('select.staging-analyst-select');
+        if (asel) analyst = (asel.value || '').trim();
+        else analyst = (analystCell.textContent || '').trim();
+    }
     const date = (cells[5] && cells[5].textContent) ? cells[5].textContent.trim() : '';
     const comment = (cells[6] && cells[6].textContent) ? cells[6].textContent.trim() : '';
     const expCell = cells[7];
@@ -792,6 +872,7 @@ document.getElementById('txtPreviewBtn').addEventListener('click', async () => {
     formData.append('default_ticket', document.getElementById('txtTicketId').value.trim());
     formData.append('default_ttl', document.getElementById('txtTTL').value);
     formData.append('default_comment', document.getElementById('txtDefaultComment').value.trim());
+    formData.append('assign_to', getBulkAssignToValue('txtAssignTo'));
     try {
         showToast(t('toast.parsing_file'), 'success');
         const response = await fetch('/api/preview-txt', { method: 'POST', body: formData });
@@ -842,6 +923,7 @@ document.getElementById('txtPreviewBtn').addEventListener('click', async () => {
             countEl.textContent = t('bulk.found_count', {count: result.items.length});
             area.classList.remove('hidden');
             attachStagingRowActions(tbody, 'txtTTL', 'txtCampaignSelect', 'txt', 'txtTagsForAll');
+            fetchStagingAnalystUsers().catch(() => {});
         } else {
             showToast(result.message || 'Preview failed', 'error');
         }
@@ -918,7 +1000,8 @@ document.getElementById('pastePreviewBtn').addEventListener('click', async () =>
                 text: text,
                 default_ticket: document.getElementById('pasteTicketId').value.trim(),
                 default_ttl: document.getElementById('pasteTTL').value,
-                default_comment: document.getElementById('pasteDefaultComment').value.trim()
+                default_comment: document.getElementById('pasteDefaultComment').value.trim(),
+                assign_to: getBulkAssignToValue('pasteAssignTo') || undefined
             })
         });
         const result = await response.json().catch(() => ({}));
@@ -967,6 +1050,7 @@ document.getElementById('pastePreviewBtn').addEventListener('click', async () =>
             countEl.textContent = t('bulk.found_count', { count: result.items.length });
             area.classList.remove('hidden');
             attachStagingRowActions(tbody, 'pasteTTL', 'pasteCampaignSelect', 'paste', 'pasteTagsForAll');
+            fetchStagingAnalystUsers().catch(() => {});
         } else {
             showToast(result.message || 'Preview failed', 'error');
         }
@@ -1045,6 +1129,7 @@ window.attachStagingRowActionsForRow = attachStagingRowActionsForRow;
 window.validateStagingItem = validateStagingItem;
 window.setBulkUploadMode = setBulkUploadMode;
 window.addSingleToStaging = addSingleToStaging;
+window.invalidateStagingAnalystCache = function () { _cachedStagingAnalystUsers = null; };
 
 // Auto-detect RTL/LTR direction for all comment fields
 if (typeof initAutoDirFields === 'function') {
@@ -1054,5 +1139,6 @@ if (typeof initAutoDirFields === 'function') {
         'csvComment',          // CSV mode
         'pasteDefaultComment', // Paste mode
         'yaraComment',         // YARA upload
+        'yaraWriteComment',    // YARA write
     ]);
 }

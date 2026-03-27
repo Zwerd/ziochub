@@ -499,6 +499,14 @@ else
 fi
 ok "Dependencies installed."
 
+# YARA syntax validation in the UI requires yara-python import.
+if "${VENV_DIR}/bin/python" -c "import yara" 2>/dev/null; then
+    ok "yara-python import check passed (YARA syntax validation enabled)."
+else
+    warn "yara-python import check failed."
+    warn "YARA Manager -> Write -> Check syntax may fail until yara-python is installed."
+fi
+
 # ── 5c. Verify Python module imports ───────────────────────────────────────
 info "Verifying Python module imports..."
 
@@ -516,7 +524,7 @@ if [[ ${#MISSING_MODULES[@]} -gt 0 ]]; then
 fi
 
 # Verify utils submodules (Reports, Admin Settings, CEF logging, etc.)
-REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "misp_sync" "cef_logger" "mentorship" "ambition")
+REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "mentorship" "ambition")
 MISSING_UTILS=()
 
 for util in "${REQUIRED_UTILS[@]}"; do

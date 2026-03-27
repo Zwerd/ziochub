@@ -1415,6 +1415,13 @@ tbody tr:hover {
     to   { width: 0%; }
 }
 
+/* YARA Submit: clickable for feedback toast; visually locked until Check syntax passes */
+button.yara-submit-locked {
+    opacity: 0.52;
+    cursor: not-allowed;
+    filter: grayscale(0.12);
+}
+
 /* Neon Text Effect (dark theme) */
 .neon-text {
     color: #FFFFFF;
@@ -1786,6 +1793,7 @@ button:focus-visible {
 }
 
 /* ========== Champs Analysis Tab - Operational Hall of Fame (motivating, competitive) ========== */
+/* Bilingual UI: Segoe UI reads well for Hebrew + Latin on Windows; Arial/system-ui elsewhere. Overrides global Inter so LDAP/DC Hebrew names don’t fall back to David. */
 .champs-tab {
     --champs-cyan: #00d4ff;
     --champs-green: #00ff41;
@@ -1793,6 +1801,46 @@ button:focus-visible {
     --champs-gold: #fbbf24;
     --champs-silver: #94a3b8;
     --champs-bronze: #d97706;
+    --champs-ui-font: "Segoe UI", Arial, Helvetica, system-ui, sans-serif;
+    font-family: var(--champs-ui-font);
+}
+
+#tab-champs.champs-tab {
+    font-family: var(--champs-ui-font) !important;
+}
+
+/* Form controls inherit Inter from global body,button rule — force Champs UI font inside tab */
+#tab-champs.champs-tab button:not(.font-mono),
+#tab-champs.champs-tab input,
+#tab-champs.champs-tab select,
+#tab-champs.champs-tab textarea {
+    font-family: var(--champs-ui-font);
+}
+
+/* JS-rendered spotlight / ladder: explicit stack beats any stray Inter inheritance */
+#champsSpotlightContent,
+#champsSpotlightPlaceholder,
+#champsLadderList,
+#champsTeamHud,
+#champsTrophyCabinetList,
+#champsTicker,
+.champs-spotlight-name-area,
+.champs-spotlight-card {
+    font-family: var(--champs-ui-font);
+}
+
+/* Keep monospace for scores and numeric stats only */
+#tab-champs.champs-tab .font-mono,
+#tab-champs.champs-tab .champs-hud-percent,
+#tab-champs.champs-tab .champs-spotlight-points-value {
+    font-family: 'JetBrains Mono', Consolas, Monaco, 'Courier New', monospace !important;
+}
+
+/* Champs modals live outside #tab-champs */
+#champsGoalModal,
+#champsTickerMsgModal {
+    --champs-ui-font: "Segoe UI", Arial, Helvetica, system-ui, sans-serif;
+    font-family: var(--champs-ui-font);
 }
 
 .champs-hero {
@@ -2378,6 +2426,10 @@ button:focus-visible {
 }
 .champs-ticker-scroll.champs-ticker-marquee {
     animation: champs-ticker-marquee 70s linear infinite;
+}
+/* Admin setting: LTR = reverse marquee direction vs default RTL motion */
+.champs-ticker-scroll.champs-ticker-marquee.champs-ticker-marquee-reversed {
+    animation-direction: reverse;
 }
 .champs-ticker-strip {
     display: inline-flex;
@@ -3222,6 +3274,19 @@ button:focus-visible {
     background: #ffffff !important;
     color: #1e293b !important;
     border-color: rgba(0, 0, 0, 0.15) !important;
+}
+
+/* YARA Write: Prism live preview (same highlighter as View modal) */
+.yara-write-syntax-preview {
+    margin: 0;
+    min-height: 280px;
+}
+.yara-write-syntax-preview code {
+    font-family: 'JetBrains Mono', Consolas, Monaco, 'Courier New', monospace;
+}
+[data-theme="light"] #yaraWritePrismWrap {
+    background: #f1f5f9 !important;
+    border-color: rgba(0, 0, 0, 0.12) !important;
 }
 
 /* --- 18. Amber/pending badge on light --- */

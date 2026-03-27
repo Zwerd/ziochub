@@ -18,13 +18,15 @@ from sqlalchemy.exc import IntegrityError
 from extensions import db
 from models import Campaign, IOC, IocHistory, User, ActivityEvent, _utcnow
 from utils.decorators import login_required
-from utils.validation import validate_ioc, detect_ioc_type, AUTO_DETECT_PATTERNS, PRIORITY_ORDER, REGEX_PATTERNS
+from utils.validation import validate_ioc, detect_ioc_type, AUTO_DETECT_PATTERNS, REGEX_PATTERNS
 from utils.refanger import refanger, sanitize_comment
 from utils.ioc_decode import prepare_text_for_ioc_extraction
 from utils.validation_warnings import get_ioc_warnings
 from utils.validation_messages import MSG_MISSING_FIELDS, MSG_MISSING_FIELDS_TYPE_VALUE, MSG_INVALID_IOC_TYPE, MSG_IOC_EXISTS
 from utils.sanity_checks import check_critical as check_sanity_critical, get_sanity_warnings
 from constants import IOC_FILES
+from utils.tags import normalize_tags_from_input
+from utils.upload_text_encoding import decode_uploaded_text_bytes
 
 bp = Blueprint('ioc_bp', __name__)
 
@@ -176,11 +178,37 @@ def _extract_iocs_from_text(text: str):
         seen.add(key)
         out.append((raw, ioc_type))
 
+    def _split_glued_urls(raw_url: str) -> list[str]:
+        """
+        If multiple schemes are glued together without whitespace (e.g. 'http://a/xxxhttps://b/y'),
+        split into separate URL candidates at every subsequent scheme occurrence.
+        """
+        s = (raw_url or '').strip()
+        if not s:
+            return []
+        # Find all scheme occurrences; keep the first as-is, split at later ones.
+        scheme_re = re.compile(r'(?i)(?:https?|ftp|sftp)://')
+        starts = [m.start() for m in scheme_re.finditer(s)]
+        if not starts:
+            return [s]
+        # Only split when we have a second scheme not at position 0.
+        splits = [i for i in starts if i > 0]
+        if not splits:
+            return [s]
+        parts = []
+        idxs = [0] + splits + [len(s)]
+        for a, b in zip(idxs, idxs[1:]):
+            part = s[a:b].strip()
+            if part:
+                parts.append(part)
+        return parts
+
     # URL: with protocol (after refang: http, https, ftp, sftp)
     for m in re.finditer(r'(?:https?|ftp|sftp)://[^\s<>"\']+', t, flags=re.IGNORECASE):
         raw = m.group(0)
-        raw = re.sub(r'[\)\]\}\.,;:!?]+$', '', raw)
-        _add(raw, 'URL')
+        for part in _split_glued_urls(raw):
+            part = re.sub(r'[\)\]\}\.,;:!?]+$', '', part)
+            _add(part, 'URL')
 
     # URL without protocol: domain/path -> https:// (same as TXT/CSV/Single)
     for m in re.finditer(r'(?<![/@])(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}/[^\s#?]+', t):
@@ -222,6 +250,85 @@ def _extract_iocs_from_text(text: str):
         _add(m.group(0), 'Domain')
 
     return out
+
+
+# Column titles that indicate row 1 is a spreadsheet header (not an IOC line)
+_CSV_KNOWN_HEADER_LABELS = frozenset({
+    'ioc', 'iocvalue', 'ioc_value', 'value', 'values', 'indicator', 'indicators', 'type', 'ioctype',
+    'ioc_type', 'ioc type', 'domain', 'url', 'hash', 'email', 'ip', 'ticket', 'ticketid', 'ticket_id',
+    'ticket id', 'ref', 'reference', 'reportid', 'report_id', 'report id', 'id', 'description', 'comment',
+    'source', 'confidence', 'ttl', 'tags', 'severity', 'firstseen', 'lastseen', 'threat',
+})
+
+
+def _cell_looks_like_ioc_value(cell: str) -> bool:
+    """Heuristic: cell content looks like an IOC (not a column name)."""
+    s = (cell or '').replace('\ufeff', '').strip()
+    if not s:
+        return False
+    if re.search(r'(?i)(?:https?|ftp|sftp)://|hxxp|h\*\*p|h-t-t-p', s):
+        return True
+    if '//' in s and not s.lower().startswith(('ioc', 'url', 'ref')):
+        return True
+    # domain.tld/path — common in IOC lists without scheme
+    if re.search(
+        r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}/[^\s]+',
+        s,
+    ):
+        return True
+    if re.search(r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b', s):
+        return True
+    if re.search(r'\b[a-fA-F0-9]{32}\b|\b[a-fA-F0-9]{40}\b|\b[a-fA-F0-9]{64}\b', s):
+        return True
+    if '@' in s and '.' in (s.split('@')[-1] or ''):
+        return True
+    return False
+
+
+def _row_looks_like_column_header_row(row: list) -> bool:
+    """True if any non-empty cell matches a typical CSV column title."""
+    for cell in row:
+        c = (cell or '').replace('\ufeff', '').strip().lower()
+        if not c:
+            continue
+        compact = re.sub(r'[\s_-]+', '', c)
+        if compact in _CSV_KNOWN_HEADER_LABELS or c in _CSV_KNOWN_HEADER_LABELS:
+            return True
+    return False
+
+
+def _csv_first_row_is_data_not_header(row: list) -> bool:
+    """
+    If True, row 1 is treated as IOC data (same as other rows).
+    If False, row 1 is treated as a header row (column names) and skipped for IOC extraction.
+    """
+    if not row:
+        return True
+    if any(_cell_looks_like_ioc_value(c) for c in row):
+        return True
+    if _row_looks_like_column_header_row(row):
+        return False
+    # Ambiguous (e.g. single bare domain): prefer data so we never drop the first line of a headerless dump.
+    return True
+
+
+def _extract_iocs_from_csv_cell(cell: str) -> list:
+    """
+    Extract IOCs from one CSV cell using the same pipeline as Paste / bulk paste:
+    URL and other high-priority types before bare domains; deduped within the cell.
+    """
+    if not (cell or '').strip():
+        return []
+    expanded = prepare_text_for_ioc_extraction(cell)
+    text = (expanded if expanded else cell or '').strip()
+    if not text:
+        return []
+    return _extract_iocs_from_text(text)
+
+
+def _preview_staging_dedup_key(ioc_type: str, ioc_cleaned: str):
+    """Key for deduplicating preview rows; aligns with case-insensitive IOC match in DB."""
+    return (ioc_type, (ioc_cleaned or '').strip().lower())
 
 
 def _parse_date_from_staging(date_str):
@@ -410,14 +517,8 @@ def submit_ioc():
             c = Campaign.query.filter_by(name=campaign_name).first()
             if c:
                 campaign_id = c.id
-        tags_raw = data.get('tags')
-        if isinstance(tags_raw, list):
-            tags_list = [str(t).strip() for t in tags_raw if str(t).strip()]
-        elif isinstance(tags_raw, str):
-            tags_list = [t.strip() for t in tags_raw.split(',') if t.strip()]
-        else:
-            tags_list = []
-        tags_json = json.dumps(tags_list[:50]) if tags_list else '[]'  # cap at 50 tags
+        tags_list = normalize_tags_from_input(data.get('tags'))
+        tags_json = json.dumps(tags_list) if tags_list else '[]'
         
         # Validation
         if not value or not ioc_type:
@@ -659,12 +760,12 @@ def bulk_csv():
         _commit_with_retry, audit_log, _log_ioc_history,
         check_allowlist, calculate_expiration_date,
         _create_ioc, _compute_rare_find_fields,
-        _auto_ticket_id,
+        _auto_ticket_id, _data_dir, _get_setting,
     ) = _from_app(
         '_commit_with_retry', 'audit_log', '_log_ioc_history',
         'check_allowlist', 'calculate_expiration_date',
         '_create_ioc', '_compute_rare_find_fields',
-        '_auto_ticket_id',
+        '_auto_ticket_id', '_data_dir', '_get_setting',
     )
     try:
         if 'file' not in request.files:
@@ -675,8 +776,9 @@ def bulk_csv():
         username = current_user.username.lower()
         ttl = request.form.get('ttl', 'Permanent')
         campaign_name = (request.form.get('campaign_name') or '').strip() or None
-        tags_raw = request.form.get('tags') or request.form.get('tags_for_all') or ''
-        tags_list = [t.strip() for t in tags_raw.split(',') if t.strip()][:50]
+        tags_list = normalize_tags_from_input(
+            request.form.get('tags') or request.form.get('tags_for_all') or ''
+        )
         tags_json = json.dumps(tags_list) if tags_list else '[]'
         campaign_id = None
         if campaign_name:
@@ -686,30 +788,39 @@ def bulk_csv():
         
         if file.filename == '':
             return jsonify({'success': False, 'message': 'No file selected'}), 400
-        
-        # Stream CSV content line-by-line (avoids loading entire file into memory)
-        stream = io.TextIOWrapper(file.stream, encoding='utf-8', errors='replace')
+
+        sanity_mode = _get_setting('sanity_check_mode', 'block_non_admin')
+        is_admin = getattr(current_user, 'is_admin', False)
+
+        # Read full CSV; do not treat line 1 as a header when it is IOC data (headerless lists).
+        text = decode_uploaded_text_bytes(file.read())
+        stream = io.StringIO(text)
         csv_reader = csv.reader(stream)
-        
-        # Read header row to detect ticket ID column
-        header_row = next(csv_reader, None)
+        all_rows = list(csv_reader)
         ticket_id_column_index = None
-        if header_row:
-            def _norm(s):
-                s = (s or '').replace('\ufeff', '').strip().lower()
-                return ' '.join(s.split())
-            header_lower = [_norm(c) for c in header_row]
-            for idx, col in enumerate(header_lower):
-                if col in ('reportid', 'ticket_id', 'ref', 'reference', 'ticket', 'report id', 'id') or (col and ('ticket' in col or 'report' in col or col == 'ref')):
-                    if ticket_id_column_index is None:
-                        ticket_id_column_index = idx
-            if ticket_id_column_index is None:
-                for idx, col_name in enumerate(header_row):
-                    c = _norm(col_name)
-                    if c in ('reportid', 'ticket_id', 'ref', 'reference') or (c and ('ticket' in c or 'report' in c)):
-                        ticket_id_column_index = idx
-                        break
-        
+        if not all_rows:
+            data_rows = []
+        elif _csv_first_row_is_data_not_header(all_rows[0]):
+            data_rows = all_rows
+        else:
+            header_row = all_rows[0]
+            data_rows = all_rows[1:]
+            if header_row:
+                def _norm(s):
+                    s = (s or '').replace('\ufeff', '').strip().lower()
+                    return ' '.join(s.split())
+                header_lower = [_norm(c) for c in header_row]
+                for idx, col in enumerate(header_lower):
+                    if col in ('reportid', 'ticket_id', 'ref', 'reference', 'ticket', 'report id', 'id') or (col and ('ticket' in col or 'report' in col or col == 'ref')):
+                        if ticket_id_column_index is None:
+                            ticket_id_column_index = idx
+                if ticket_id_column_index is None:
+                    for idx, col_name in enumerate(header_row):
+                        c = _norm(col_name)
+                        if c in ('reportid', 'ticket_id', 'ref', 'reference') or (c and ('ticket' in c or 'report' in c)):
+                            ticket_id_column_index = idx
+                            break
+
         exp_date = calculate_expiration_date(ttl)
         
         # Collect all findings with ticket IDs
@@ -721,8 +832,8 @@ def bulk_csv():
             'URL': {}
         }
         
-        # Process every row in the CSV
-        for row in csv_reader:
+        # Process every data row in the CSV
+        for row in data_rows:
             # Extract ticket ID from the row if column was found
             ticket_id = None
             if ticket_id_column_index is not None and ticket_id_column_index < len(row):
@@ -730,29 +841,26 @@ def bulk_csv():
                 if not ticket_id:
                     ticket_id = None
             
-            # Process every cell in the row (decode hex/entities, refang, normalize domain/path -> URL)
+            # Process every cell: same IOC extraction as Paste (URL before bare domain, deduped per cell)
             for cell in row:
+                cell = (cell or '').replace('\ufeff', '').strip()
                 if not cell:
                     continue
-                expanded_cell = prepare_text_for_ioc_extraction(cell)
-                refanged_cell, _ = refanger((expanded_cell or cell).strip())
-                if not refanged_cell:
-                    continue
-                for ioc_type, pattern in AUTO_DETECT_PATTERNS.items():
-                    matches = re.findall(pattern, refanged_cell)
-                    for match in matches:
-                        final_value, final_type = _normalize_txt_ioc(match)
-                        if final_type is None:
-                            final_type = ioc_type
-                            final_value = match
-                        if not validate_ioc(final_value, final_type):
-                            continue
-                        is_blocked, _ = check_allowlist(final_value, final_type)
-                        if not is_blocked:
-                            if final_value not in findings[final_type]:
-                                findings[final_type][final_value] = ticket_id
-                        break
-        
+                for raw_value, ioc_type in _extract_iocs_from_csv_cell(cell):
+                    final_value, final_type = _normalize_txt_ioc(raw_value)
+                    if final_type is None:
+                        final_type = ioc_type
+                        final_value = raw_value
+                    if not validate_ioc(final_value, final_type):
+                        continue
+                    is_crit, _ = check_sanity_critical(final_value, final_type, _data_dir)
+                    if _sanity_should_block_else_warn(is_crit, is_admin, sanity_mode)[0]:
+                        continue
+                    is_blocked, _ = check_allowlist(final_value, final_type)
+                    if not is_blocked:
+                        if final_value not in findings[final_type]:
+                            findings[final_type][final_value] = ticket_id
+
         comment = sanitize_comment(global_comment)
         csv_fallback_ticket = _auto_ticket_id(current_user.id)
         summary = {}
@@ -847,8 +955,9 @@ def bulk_csv():
 def preview_csv():
     """
     Parse CSV using same logic as bulk_csv; return JSON items for staging (no DB write).
-    Accepts: file, username, ttl, comment, optional ticket_id (fallback when CSV has no ticket column).
+    Accepts: file, ttl, comment, optional ticket_id, optional assign_to (analyst username; empty = submitter).
     For each IOC: existing_permanent=True if DB row exists (any expiration); UI disables Approve and shows "Already exists".
+    Per-cell IOC extraction matches Paste (URL before bare domain, deduped within the cell).
     """
     (
         check_allowlist, calculate_expiration_date,
@@ -865,7 +974,8 @@ def preview_csv():
         file = request.files['file']
         if file.filename == '':
             return jsonify({'success': False, 'message': 'No file selected'}), 400
-        username = current_user.username.lower()
+        assign_to = (request.form.get('assign_to') or '').strip()
+        username = assign_to.lower() if assign_to else current_user.username.lower()
         ttl = request.form.get('ttl', 'Permanent')
         comment = request.form.get('comment', '').strip()
         ticket_id_fallback = request.form.get('ticket_id', '').strip() or _auto_ticket_id(current_user.id)
@@ -876,11 +986,19 @@ def preview_csv():
             exp_dt = calculate_expiration_date(ttl)
             expiration_display = _format_expiration_display(exp_dt)
 
-        stream = io.StringIO(file.read().decode('utf-8'))
+        stream = io.StringIO(decode_uploaded_text_bytes(file.read()))
         csv_reader = csv.reader(stream)
-        header_row = next(csv_reader, None)
+        all_rows = list(csv_reader)
+        if not all_rows:
+            return jsonify({'success': True, 'items': [], 'count': 0})
+
+        # Do not always treat line 1 as a header: headerless IOC lists would drop the first value.
         ticket_id_column_index = None
-        if header_row:
+        if _csv_first_row_is_data_not_header(all_rows[0]):
+            data_rows = all_rows
+        else:
+            header_row = all_rows[0]
+            data_rows = all_rows[1:]
             ticket_id_keywords = ['reportid', 'ticket_id', 'ref', 'reference']
             for idx, col_name in enumerate(header_row):
                 if col_name.lower().strip() in ticket_id_keywords:
@@ -891,7 +1009,7 @@ def preview_csv():
         ioc_to_ticket = {
             'IP': {}, 'Domain': {}, 'Hash': {}, 'Email': {}, 'URL': {}
         }
-        for row in csv_reader:
+        for row in data_rows:
             ticket_id = None
             if ticket_id_column_index is not None and ticket_id_column_index < len(row):
                 ticket_id = row[ticket_id_column_index].strip() or None
@@ -899,30 +1017,24 @@ def preview_csv():
                 ticket_id = ticket_id_fallback
 
             for cell in row:
+                cell = (cell or '').replace('\ufeff', '').strip()
                 if not cell:
                     continue
-                expanded_cell = prepare_text_for_ioc_extraction(cell)
-                refanged_cell, _ = refanger((expanded_cell or cell).strip())
-                if not refanged_cell:
-                    continue
-                for ioc_type, pattern in AUTO_DETECT_PATTERNS.items():
-                    matches = re.findall(pattern, refanged_cell)
-                    for match in matches:
-                        final_value, final_type = _normalize_txt_ioc(match)
-                        if final_type is None:
-                            final_type = ioc_type
-                            final_value = match
-                        if not validate_ioc(final_value, final_type):
-                            continue
-                        is_crit, _ = check_sanity_critical(final_value, final_type, _data_dir)
-                        if _sanity_should_block_else_warn(is_crit, is_admin, sanity_mode)[0]:
-                            continue
-                        is_blocked, _ = check_allowlist(final_value, final_type)
-                        if is_blocked:
-                            continue
-                        if final_value not in ioc_to_ticket[final_type]:
-                            ioc_to_ticket[final_type][final_value] = ticket_id
-                        break
+                for raw_value, ioc_type in _extract_iocs_from_csv_cell(cell):
+                    final_value, final_type = _normalize_txt_ioc(raw_value)
+                    if final_type is None:
+                        final_type = ioc_type
+                        final_value = raw_value
+                    if not validate_ioc(final_value, final_type):
+                        continue
+                    is_crit, _ = check_sanity_critical(final_value, final_type, _data_dir)
+                    if _sanity_should_block_else_warn(is_crit, is_admin, sanity_mode)[0]:
+                        continue
+                    is_blocked, _ = check_allowlist(final_value, final_type)
+                    if is_blocked:
+                        continue
+                    if final_value not in ioc_to_ticket[final_type]:
+                        ioc_to_ticket[final_type][final_value] = ticket_id
 
         items = []
         for ioc_type, ioc_dict in ioc_to_ticket.items():
@@ -964,6 +1076,7 @@ def preview_txt():
     """
     Parse TXT file with smart metadata logic; fill missing fields from form defaults.
     Returns JSON array of { ioc, type, ticket_id, analyst, date, comment } for staging table.
+    Deduplicates by (ioc_type, value) case-insensitively: first occurrence order, last line wins metadata.
     """
     (
         check_allowlist, calculate_expiration_date,
@@ -980,7 +1093,8 @@ def preview_txt():
         file = request.files['file']
         if file.filename == '':
             return jsonify({'success': False, 'message': 'No file selected'}), 400
-        default_analyst = current_user.username.lower()
+        assign_to = (request.form.get('assign_to') or '').strip()
+        default_analyst = assign_to.lower() if assign_to else current_user.username.lower()
         default_ticket = request.form.get('default_ticket', '').strip() or _auto_ticket_id(current_user.id)
         default_ttl = request.form.get('default_ttl', 'Permanent')
         default_comment = request.form.get('default_comment', '').strip()
@@ -991,9 +1105,11 @@ def preview_txt():
             exp_dt = calculate_expiration_date(default_ttl)
             expiration_display = _format_expiration_display(exp_dt)
 
-        content = file.read().decode('utf-8')
+        content = decode_uploaded_text_bytes(file.read())
         lines = content.split('\n')
-        items = []
+        # Unique (type, value): preserve first-seen order; last line wins for ticket/comment/analyst/date
+        _by_key = {}
+        _key_order = []
 
         for line in lines:
             line = line.strip()
@@ -1058,7 +1174,10 @@ def preview_txt():
                     existing_analyst = (existing_row.analyst or '')
                     existing_comment = (existing_row.comment or '')
 
-                items.append({
+                dk = _preview_staging_dedup_key(ioc_type, ioc_cleaned)
+                if dk not in _by_key:
+                    _key_order.append(dk)
+                _by_key[dk] = {
                     'ioc': ioc_cleaned,
                     'type': ioc_type,
                     'ticket_id': ticket_id or '',
@@ -1069,8 +1188,9 @@ def preview_txt():
                     'existing_permanent': existing_permanent,
                     'existing_analyst': existing_analyst,
                     'existing_comment': existing_comment
-                })
+                }
 
+        items = [_by_key[k] for k in _key_order]
         return jsonify({'success': True, 'items': items, 'count': len(items)})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -1081,8 +1201,9 @@ def preview_txt():
 def preview_paste():
     """
     Extract IOCs from pasted text (IPs, domains, URLs, emails, hashes).
-    JSON body: { text, default_ticket?, default_ttl?, default_comment? }.
+    JSON body: { text, default_ticket?, default_ttl?, default_comment?, assign_to? }.
     Returns same format as preview_txt for staging table.
+    Deduplicates by (ioc_type, value) after normalize/refang (last match wins if types collide).
     """
     (
         check_allowlist, calculate_expiration_date,
@@ -1098,7 +1219,8 @@ def preview_paste():
         text = (data.get('text') or '').strip()
         if not text:
             return jsonify({'success': False, 'message': 'No text provided'}), 400
-        default_analyst = current_user.username.lower()
+        assign_to = (data.get('assign_to') or '').strip()
+        default_analyst = assign_to.lower() if assign_to else current_user.username.lower()
         default_ticket = (data.get('default_ticket') or '').strip() or _auto_ticket_id(current_user.id)
         default_ttl = (data.get('default_ttl') or 'Permanent').strip()
         default_comment = (data.get('default_comment') or '').strip()
@@ -1111,7 +1233,8 @@ def preview_paste():
 
         text_expanded = prepare_text_for_ioc_extraction(text)
         extracted = _extract_iocs_from_text(text_expanded)
-        items = []
+        _by_key = {}
+        _key_order = []
         for raw_value, ioc_type in extracted:
             ioc_cleaned, _ = refanger(raw_value)
             if not ioc_cleaned:
@@ -1143,7 +1266,10 @@ def preview_paste():
                 existing_analyst = (existing_row.analyst or '')
                 existing_comment = (existing_row.comment or '')
 
-            items.append({
+            dk = _preview_staging_dedup_key(ioc_type, ioc_cleaned)
+            if dk not in _by_key:
+                _key_order.append(dk)
+            _by_key[dk] = {
                 'ioc': ioc_cleaned,
                 'type': ioc_type,
                 'ticket_id': default_ticket or '',
@@ -1154,8 +1280,9 @@ def preview_paste():
                 'existing_permanent': existing_permanent,
                 'existing_analyst': existing_analyst,
                 'existing_comment': existing_comment
-            })
+            }
 
+        items = [_by_key[k] for k in _key_order]
         return jsonify({'success': True, 'items': items, 'count': len(items)})
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -1224,13 +1351,7 @@ def preview_single():
         ticket_id = (data.get('ticket_id') or '').strip() or _auto_ticket_id(current_user.id)
         ttl = (data.get('ttl') or 'Permanent').strip()
         comment = sanitize_comment((data.get('comment') or '').strip() or '') or ''
-        tags_raw = data.get('tags')
-        if isinstance(tags_raw, list):
-            tags_list = [str(t).strip() for t in tags_raw if str(t).strip()][:50]
-        elif isinstance(tags_raw, str):
-            tags_list = [t.strip() for t in tags_raw.split(',') if t.strip()][:50]
-        else:
-            tags_list = []
+        tags_list = normalize_tags_from_input(data.get('tags'))
         if ttl == 'Permanent':
             expiration_display = 'Permanent'
         else:
@@ -1298,13 +1419,9 @@ def submit_staging():
         ttl = (data.get('ttl') or 'Permanent').strip()
         campaign_name = (data.get('campaign_name') or '').strip() or None
         submission_source = (data.get('source') or 'single').strip()
-        tags_for_all_raw = data.get('tags') or data.get('tags_for_all')
-        if isinstance(tags_for_all_raw, list):
-            tags_for_all_list = [str(t).strip() for t in tags_for_all_raw if str(t).strip()][:50]
-        elif isinstance(tags_for_all_raw, str):
-            tags_for_all_list = [t.strip() for t in tags_for_all_raw.split(',') if t.strip()][:50]
-        else:
-            tags_for_all_list = []
+        tags_for_all_list = normalize_tags_from_input(
+            data.get('tags') or data.get('tags_for_all')
+        )
         tags_json = json.dumps(tags_for_all_list) if tags_for_all_list else '[]'
         campaign_id = None
         if campaign_name:
@@ -1360,11 +1477,11 @@ def submit_staging():
             # Per-item tags override "tags for all"
             item_tags_raw = raw.get('tags')
             if isinstance(item_tags_raw, list) and item_tags_raw:
-                item_tags_list = [str(t).strip() for t in item_tags_raw if str(t).strip()][:50]
+                item_tags_list = normalize_tags_from_input(item_tags_raw)
             elif isinstance(item_tags_raw, str) and item_tags_raw.strip():
-                item_tags_list = [t.strip() for t in item_tags_raw.split(',') if t.strip()][:50]
+                item_tags_list = normalize_tags_from_input(item_tags_raw)
             else:
-                item_tags_list = tags_for_all_list
+                item_tags_list = list(tags_for_all_list)
             item_tags_json = json.dumps(item_tags_list) if item_tags_list else '[]'
 
             exp_str = (raw.get('expiration') or '').strip()
@@ -1515,8 +1632,9 @@ def upload_txt():
         username = current_user.username.lower()
         ttl = request.form.get('ttl', 'Permanent')
         campaign_name = (request.form.get('campaign_name') or '').strip() or None
-        tags_raw = request.form.get('tags') or request.form.get('tags_for_all') or ''
-        tags_list = [t.strip() for t in tags_raw.split(',') if t.strip()][:50]
+        tags_list = normalize_tags_from_input(
+            request.form.get('tags') or request.form.get('tags_for_all') or ''
+        )
         tags_json = json.dumps(tags_list) if tags_list else '[]'
         campaign_id = None
         if campaign_name:
@@ -1527,12 +1645,11 @@ def upload_txt():
         if file.filename == '':
             return jsonify({'success': False, 'message': 'No file selected'}), 400
         
-        # Stream TXT content line-by-line (avoids loading entire file into memory)
-        stream = io.TextIOWrapper(file.stream, encoding='utf-8', errors='replace')
+        text = decode_uploaded_text_bytes(file.read())
         exp_date = calculate_expiration_date(ttl)
         findings = {'IP': {}, 'Domain': {}, 'Hash': {}, 'Email': {}, 'URL': {}}
 
-        for raw_line in stream:
+        for raw_line in text.splitlines():
             line = raw_line.strip()
             if not line:
                 continue

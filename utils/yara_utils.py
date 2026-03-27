@@ -1,9 +1,12 @@
 """
-YARA file path safety (path traversal prevention).
+YARA file path safety (path traversal prevention) and in-memory syntax validation.
 """
 from __future__ import annotations
 
 import os
+
+# Max size for validate-syntax API (bytes)
+YARA_VALIDATE_MAX_SOURCE_BYTES = 512 * 1024
 
 
 def yara_safe_path(filename: str, yara_dir: str) -> tuple[str | None, str | None]:
@@ -23,3 +26,32 @@ def yara_safe_path(filename: str, yara_dir: str) -> tuple[str | None, str | None
     except (OSError, ValueError):
         return None, None
     return safe, filepath
+
+
+def validate_yara_syntax(source: str | None) -> tuple[bool, str | None]:
+    """
+    Compile YARA source in memory using libyara (yara-python).
+    Returns (True, None) if the rule compiles, else (False, error_message).
+    """
+    if source is None:
+        return False, "empty"
+    s = source.strip()
+    if not s:
+        return False, "empty"
+    if len(source) > YARA_VALIDATE_MAX_SOURCE_BYTES:
+        return False, "too_large"
+    try:
+        import yara  # type: ignore[import-untyped]
+    except ImportError as e:
+        # Include str(e) so API/UI can show e.g. "No module named 'yara'" vs shadowing issues
+        return False, f"library_unavailable:{e!s}"
+    except OSError as e:
+        # Missing .so/.dll or wrong arch — show detail to admins
+        msg = str(e).strip() or type(e).__name__
+        return False, f"library_load_failed:{msg}"
+    try:
+        yara.compile(source=s)
+        return True, None
+    except Exception as e:
+        msg = str(e).strip() or type(e).__name__
+        return False, msg

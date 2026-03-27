@@ -17,10 +17,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
 from extensions import db
 from models import YaraRule, Campaign, User
-from utils.yara_utils import yara_safe_path
+from utils.yara_utils import yara_safe_path, validate_yara_syntax
 from utils.decorators import login_required, admin_required
 from utils.refanger import sanitize_comment
-from utils.validation_messages import MSG_FILENAME_REQUIRED, MSG_INVALID_FILENAME, MSG_FILE_NOT_FOUND
+from utils.validation_messages import (
+    MSG_CONTENT_REQUIRED,
+    MSG_FILENAME_REQUIRED,
+    MSG_YARA_DELETE_REASON_REQUIRED,
+    MSG_YARA_EDIT_REASON_REQUIRED,
+    MSG_FILE_NOT_FOUND,
+    MSG_INVALID_FILENAME,
+    MSG_INVALID_TYPE,
+    MSG_JSON_BODY_REQUIRED,
+    MSG_YARA_COMPILER_UNAVAILABLE,
+    MSG_YARA_SOURCE_EMPTY,
+    MSG_YARA_SOURCE_TOO_LARGE,
+)
 from utils.champs import compute_yara_quality_points
 
 
@@ -46,6 +58,33 @@ def _yara_safe_path(filename):
 
 def _yara_safe_path_pending(filename):
     return yara_safe_path(filename, _data_yara_pending())
+
+
+def _reject_invalid_yara_syntax(content: str):
+    """
+    Same rules as POST /api/yara/validate-syntax: libyara compile must succeed.
+    Returns Flask (response, status) tuple if invalid, or None if OK.
+    """
+    ok, err = validate_yara_syntax(content)
+    if ok:
+        return None
+    if err == 'empty':
+        return jsonify({'success': False, 'message': MSG_YARA_SOURCE_EMPTY}), 400
+    if err == 'too_large':
+        return jsonify({'success': False, 'message': MSG_YARA_SOURCE_TOO_LARGE}), 400
+    if isinstance(err, str) and err.startswith('library_unavailable'):
+        detail = err[len('library_unavailable'):].lstrip(':').strip()
+        msg = MSG_YARA_COMPILER_UNAVAILABLE
+        if detail:
+            msg = f'{msg} ({detail})'
+        return jsonify({'success': False, 'message': msg, 'code': 'no_compiler'}), 400
+    if isinstance(err, str) and err.startswith('library_load_failed:'):
+        detail = err.split(':', 1)[1].strip()
+        msg = MSG_YARA_COMPILER_UNAVAILABLE
+        if detail:
+            msg = f'{msg} ({detail})'
+        return jsonify({'success': False, 'message': msg, 'code': 'no_compiler'}), 400
+    return jsonify({'success': False, 'message': err or 'Invalid YARA syntax'}), 400
 
 
 @bp.route('/upload-yara', methods=['POST'])
@@ -82,10 +121,9 @@ def upload_yara():
         if YaraRule.query.filter_by(filename=safe_filename).first():
             return jsonify({'success': False, 'message': 'Rule name already exists'}), 409
         file_content = file.read().decode('utf-8', errors='replace')
-        if not re.search(r'\brule\s+\w+', file_content):
-            return jsonify({'success': False, 'message': 'Invalid YARA file: missing "rule <name>" declaration'}), 400
-        if '{' not in file_content or '}' not in file_content:
-            return jsonify({'success': False, 'message': 'Invalid YARA file: missing rule body braces'}), 400
+        syntax_reject = _reject_invalid_yara_syntax(file_content)
+        if syntax_reject is not None:
+            return syntax_reject
         with open(filepath_pending, 'w', encoding='utf-8') as f:
             f.write(file_content)
         username = current_user.username.lower()
@@ -137,6 +175,49 @@ def upload_yara():
         return _api_error('An unexpected error occurred', 500)
 
 
+@bp.route('/yara/validate-syntax', methods=['POST'])
+@login_required
+def yara_validate_syntax():
+    """Compile YARA source in memory (libyara); returns whether syntax is valid and compiler message if not."""
+    if not request.is_json:
+        return jsonify({'success': False, 'message': MSG_JSON_BODY_REQUIRED}), 400
+    data = request.get_json(silent=True) or {}
+    source = data.get('source')
+    if source is not None and not isinstance(source, str):
+        return jsonify({'success': False, 'message': MSG_INVALID_TYPE}), 400
+    ok, err = validate_yara_syntax(source)
+    if ok:
+        return jsonify({'success': True, 'valid': True})
+    if err == 'empty':
+        return jsonify({'success': False, 'message': MSG_YARA_SOURCE_EMPTY}), 400
+    if err == 'too_large':
+        return jsonify({'success': False, 'message': MSG_YARA_SOURCE_TOO_LARGE}), 400
+    if isinstance(err, str) and err.startswith('library_unavailable'):
+        detail = err[len('library_unavailable'):].lstrip(':').strip()
+        msg = MSG_YARA_COMPILER_UNAVAILABLE
+        if detail:
+            msg = f'{msg} ({detail})'
+        return jsonify({
+            'success': True,
+            'valid': False,
+            'message': msg,
+            'code': 'no_compiler',
+            'detail': detail or None,
+        })
+    if isinstance(err, str) and err.startswith('library_load_failed:'):
+        detail = err.split(':', 1)[1].strip()
+        msg = MSG_YARA_COMPILER_UNAVAILABLE
+        if detail:
+            msg = f'{msg} ({detail})'
+        return jsonify({
+            'success': True,
+            'valid': False,
+            'message': msg,
+            'code': 'no_compiler',
+        })
+    return jsonify({'success': True, 'valid': False, 'message': err})
+
+
 @bp.route('/list-yara', methods=['GET'])
 def list_yara():
     try:
@@ -174,12 +255,13 @@ def list_yara():
 @bp.route('/delete-yara', methods=['DELETE'])
 @login_required
 def delete_yara():
-    _commit_with_retry, audit_log, refresh_champ_score_for_user = _from_app(
-        '_commit_with_retry', 'audit_log', 'refresh_champ_score_for_user'
+    _commit_with_retry, audit_log, refresh_champ_score_for_user, _log_ioc_history = _from_app(
+        '_commit_with_retry', 'audit_log', 'refresh_champ_score_for_user', '_log_ioc_history'
     )
     try:
         data = request.get_json() or {}
         filename = (data.get('filename') or '').strip()
+        reason = (data.get('reason') or '').strip()
         if not filename:
             return jsonify({'success': False, 'message': MSG_FILENAME_REQUIRED}), 400
         safe, filepath = _yara_safe_path(filename)
@@ -189,12 +271,13 @@ def delete_yara():
             return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
         rule = YaraRule.query.filter_by(filename=safe).first()
         is_admin = getattr(current_user, 'is_admin', False)
+        if is_admin and not reason:
+            return jsonify({'success': False, 'message': MSG_YARA_DELETE_REASON_REQUIRED}), 400
         owner_id = None
         if rule:
             analyst_lower = (rule.analyst or '').strip().lower()
             if not is_admin and analyst_lower != current_user.username.lower():
                 return jsonify({'success': False, 'message': 'Only the rule owner or an admin can delete this rule'}), 403
-            owner_id = None
             if analyst_lower:
                 owner = User.query.filter(func.lower(User.username) == analyst_lower).first()
                 if owner:
@@ -202,15 +285,48 @@ def delete_yara():
         else:
             if not is_admin:
                 return jsonify({'success': False, 'message': 'Only an admin can delete this rule'}), 403
+        hist_payload = {
+            'reason': reason if is_admin else (reason or ''),
+            'original_analyst': (rule.analyst or '') if rule else '',
+            'original_comment': (rule.comment or '') if rule else '',
+            'ticket_id': (rule.ticket_id or '') if rule else '',
+            'original_uploaded_at': rule.uploaded_at.isoformat() if rule and rule.uploaded_at else None,
+            'deleted_by_admin': is_admin,
+        }
+        _log_ioc_history('YARA', safe, 'deleted', current_user.username, hist_payload)
         os.remove(filepath)
         YaraRule.query.filter_by(filename=safe).delete()
         _commit_with_retry()
-        audit_log('YARA_DELETE', f'file={safe} analyst={current_user.username}')
+        _audit_del = f'file={safe} analyst={current_user.username}'
+        if reason:
+            _audit_del += f' reason={reason[:120]!r}'
+        audit_log('YARA_DELETE', _audit_del)
         if owner_id is not None:
             try:
                 refresh_champ_score_for_user(owner_id)
             except Exception as e:
                 logging.warning('YARA delete: refresh_champ_score for owner failed: %s', e)
+        _get_setting = _from_app('_get_setting')[0]
+        if _get_setting('automation_fireeye_enabled', 'false').lower() == 'true':
+            try:
+                raw = _get_setting('automation_fireeye_appliances', '[]') or '[]'
+                appliances = json.loads(raw) if isinstance(raw, str) else raw
+                if isinstance(appliances, list) and appliances:
+                    from utils.fireeye_push import delete_yara_from_appliances
+                    app_obj = current_app._get_current_object()
+                    verify_ssl = _get_setting('automation_fireeye_ignore_ssl', 'false').lower() != 'true'
+
+                    def _auto_delete():
+                        with app_obj.app_context():
+                            try:
+                                delete_yara_from_appliances(safe, appliances, audit_log, verify_ssl=verify_ssl)
+                            except Exception as e:
+                                logging.exception('Automation YARA delete failed for %s', safe)
+                                audit_log('yara_automation_delete_fail', f'file={safe} error={e}')
+
+                    threading.Thread(target=_auto_delete, daemon=True).start()
+            except Exception as e:
+                logging.warning('YARA delete: automation setup failed: %s', e)
         return jsonify({'success': True, 'message': f'Deleted {safe}'})
     except OSError as e:
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -241,13 +357,14 @@ def view_yara(filename):
 @bp.route('/update-yara', methods=['POST'])
 @login_required
 def update_yara():
-    _commit_with_retry, audit_log = _from_app('_commit_with_retry', 'audit_log')
+    _commit_with_retry, audit_log, _log_ioc_history = _from_app('_commit_with_retry', 'audit_log', '_log_ioc_history')
     try:
         data = request.get_json()
         if not data:
             return jsonify({'success': False, 'message': 'JSON body required'}), 400
         filename = (data.get('filename') or '').strip()
         content = data.get('content')
+        reason = (data.get('reason') or '').strip()
         if not filename:
             return jsonify({'success': False, 'message': MSG_FILENAME_REQUIRED}), 400
         if content is None:
@@ -257,6 +374,19 @@ def update_yara():
             return jsonify({'success': False, 'message': MSG_INVALID_FILENAME}), 400
         _, filepath_pending = _yara_safe_path_pending(filename)
         content_str = content if isinstance(content, str) else ''
+        syntax_reject = _reject_invalid_yara_syntax(content_str)
+        if syntax_reject is not None:
+            return syntax_reject
+        old_content = ''
+        if os.path.isfile(filepath_approved):
+            with open(filepath_approved, 'r', encoding='utf-8', errors='replace') as f:
+                old_content = f.read()
+        elif os.path.isfile(filepath_pending):
+            with open(filepath_pending, 'r', encoding='utf-8', errors='replace') as f:
+                old_content = f.read()
+        content_changed = old_content != content_str
+        if content_changed and not reason:
+            return jsonify({'success': False, 'message': MSG_YARA_EDIT_REASON_REQUIRED}), 400
         row = YaraRule.query.filter_by(filename=safe).first()
         is_admin = getattr(current_user, 'is_admin', False)
         if not is_admin:
@@ -276,7 +406,9 @@ def update_yara():
                 if row:
                     row.quality_points = compute_yara_quality_points(content_str)
                     row.status = 'pending'
-                    _commit_with_retry()
+                if content_changed:
+                    _log_ioc_history('YARA', safe, 'edited', current_user.username, {'reason': reason[:4000]})
+                _commit_with_retry()
                 audit_log('YARA_UPDATE', f'file={safe} analyst={current_user.username} status=pending (re-approval required)')
                 return jsonify({'success': True, 'message': f'Updated {safe}. Rule moved to pending for admin approval.', 'moved_to_pending': True})
             with open(filepath_approved, 'w', encoding='utf-8') as f:
@@ -289,7 +421,9 @@ def update_yara():
         quality_pts = compute_yara_quality_points(content_str)
         if row:
             row.quality_points = quality_pts
-            _commit_with_retry()
+        if content_changed:
+            _log_ioc_history('YARA', safe, 'edited', current_user.username, {'reason': reason[:4000]})
+        _commit_with_retry()
         audit_log('YARA_UPDATE', f'file={safe} analyst={current_user.username}')
         return jsonify({'success': True, 'message': f'Updated {safe}'})
     except Exception as e:
@@ -492,12 +626,15 @@ def approve_yara():
                 if isinstance(appliances, list) and appliances:
                     from utils.fireeye_push import push_yara_to_appliances, set_fireeye_status
                     app_obj = current_app._get_current_object()
+                    verify_ssl = _get_setting('automation_fireeye_ignore_ssl', 'false').lower() != 'true'
                     set_fireeye_status(rule.filename, 'pending', '')
 
                     def _fireeye_upload():
                         with app_obj.app_context():
                             try:
-                                result = push_yara_to_appliances(content, rule.filename, appliances, audit_log)
+                                result = push_yara_to_appliances(
+                                    content, rule.filename, appliances, audit_log, verify_ssl=verify_ssl
+                                )
                                 if result['overall_success']:
                                     set_fireeye_status(rule.filename, 'success', 'All appliances updated.')
                                 else:

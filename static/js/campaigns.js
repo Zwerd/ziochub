@@ -8,6 +8,33 @@
 
     let campaignNetwork = null;
     let currentCampaignId = null;
+    /** Timer for applying dir to vis-network tooltip after it mounts */
+    let campaignGraphTooltipDirTimer = null;
+
+    /**
+     * RTL if Hebrew letters are strictly more than Latin letters; ties use first-strong (detectTextDir).
+     */
+    function tooltipDirFromMajorityHebrew(text) {
+        if (!text || typeof text !== 'string') return 'ltr';
+        let he = 0;
+        let lat = 0;
+        for (let i = 0; i < text.length; i++) {
+            const cp = text.codePointAt(i);
+            if (cp >= 0x0590 && cp <= 0x05FF) he++;
+            else if ((cp >= 0x41 && cp <= 0x5A) || (cp >= 0x61 && cp <= 0x7A)) lat++;
+            if (cp > 0xFFFF) i++;
+        }
+        if (he > lat) return 'rtl';
+        if (lat > he) return 'ltr';
+        return typeof detectTextDir === 'function' ? detectTextDir(text) : 'ltr';
+    }
+
+    /** vis-network renders tooltips in a floating div; remove so it does not cover the image modal */
+    function hideCampaignGraphTooltip() {
+        document.querySelectorAll('div.vis-tooltip, div.vis-network-tooltip').forEach(function(el) {
+            el.remove();
+        });
+    }
 
     async function populateCampaignDropdowns() {
         try {
@@ -17,7 +44,7 @@
             const noneOption = '<option value="">- None -</option>';
             const noneUnassignedOption = '<option value="">None / Unassigned</option>';
             const selectOption = '<option value="">-- Select campaign --</option>';
-            const formSelectIds = ['iocCampaignSelect', 'csvCampaignSelect', 'txtCampaignSelect', 'pasteCampaignSelect', 'yaraCampaignSelect', 'editCampaignSelect'];
+            const formSelectIds = ['iocCampaignSelect', 'csvCampaignSelect', 'txtCampaignSelect', 'pasteCampaignSelect', 'yaraCampaignSelect', 'yaraWriteCampaignSelect', 'editCampaignSelect'];
             formSelectIds.forEach(id => {
                 const sel = document.getElementById(id);
                 if (!sel) return;
@@ -52,7 +79,7 @@
             const data = await res.json().catch(() => ({}));
             const users = (data.success && data.users) ? data.users : [];
             const meOption = '<option value="">' + (typeof t === 'function' && t('submit.me') ? t('submit.me') : '- Me -') + '</option>';
-            ['iocAssignTo', 'editAssignTo'].forEach(id => {
+            ['iocAssignTo', 'editAssignTo', 'txtAssignTo', 'csvAssignTo', 'pasteAssignTo'].forEach(id => {
                 const sel = document.getElementById(id);
                 if (!sel) return;
                 sel.innerHTML = meOption;
@@ -63,6 +90,7 @@
                     sel.appendChild(opt);
                 });
             });
+            if (typeof window.invalidateStagingAnalystCache === 'function') window.invalidateStagingAnalystCache();
         } catch (err) {
             console.warn('loadUsersForAssignDropdown:', err);
         }
@@ -85,16 +113,19 @@
                 const attrDesc = (c.description || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r?\n/g, ' ');
                 const attrDir = (c.dir || 'ltr').replace(/"/g, '&quot;');
                 const titleAttr = c.description ? ` title="${attrDesc}"` : '';
+                const hasRef = !!c.has_reference_image;
                 return `
                 <li class="py-2 px-2 rounded campaign-list-item border border-transparent transition"
                     data-campaign-id="${c.id}">
                     <div class="flex items-start justify-between gap-2">
-                        <div class="flex-1 min-w-0 cursor-pointer campaign-select-area" data-cid="${c.id}">
-                            <span class="font-medium block truncate" dir="${attrDir}"${titleAttr}>${safeName}</span>
+                        <div class="flex items-start gap-1 flex-1 min-w-0">
+                            <div class="flex-1 min-w-0 cursor-pointer campaign-select-area" data-cid="${c.id}">
+                                <span class="font-medium block truncate" dir="${attrDir}"${titleAttr}>${safeName}</span>
+                            </div>
                         </div>
                         <div class="flex items-center gap-1.5 flex-shrink-0">
                             <button type="button" class="btn-cmd-primary btn-cmd-sm campaign-edit-btn"
-                                data-cid="${c.id}" data-cname="${attrName}" data-cdesc="${attrDesc}" data-cdir="${attrDir}">${t('actions.edit')}</button>
+                                data-cid="${c.id}" data-cname="${attrName}" data-cdesc="${attrDesc}" data-cdir="${attrDir}" data-has-ref="${hasRef ? '1' : ''}">${t('actions.edit')}</button>
                             <button type="button" class="btn-cmd-danger btn-cmd-sm campaign-delete-btn"
                                 data-cid="${c.id}" data-cname="${attrName}">${t('actions.delete')}</button>
                         </div>
@@ -111,7 +142,8 @@
                         btn.getAttribute('data-cid'),
                         btn.getAttribute('data-cname'),
                         btn.getAttribute('data-cdesc'),
-                        btn.getAttribute('data-cdir')
+                        btn.getAttribute('data-cdir'),
+                        btn.getAttribute('data-has-ref') === '1'
                     );
                 });
             });
@@ -127,7 +159,7 @@
         }
     }
 
-    function openCampaignEditModal(id, name, desc, dir) {
+    function openCampaignEditModal(id, name, desc, dir, hasReferenceImage) {
         document.getElementById('campaignEditId').value = id;
         const nameInp = document.getElementById('campaignEditName');
         const descInp = document.getElementById('campaignEditDesc');
@@ -137,11 +169,47 @@
             nameInp.dir = detectTextDir(name || '');
             descInp.dir = detectTextDir(desc || '');
         }
+        const refFile = document.getElementById('campaignEditRefFile');
+        const removeCb = document.getElementById('campaignEditRemoveRef');
+        const removeWrap = document.getElementById('campaignEditRemoveRefWrap');
+        if (refFile) refFile.value = '';
+        if (removeCb) removeCb.checked = false;
+        if (removeWrap) removeWrap.classList.toggle('hidden', !hasReferenceImage);
         document.getElementById('campaignEditModal').classList.remove('hidden');
     }
 
     function closeCampaignEditModal() {
         document.getElementById('campaignEditModal').classList.add('hidden');
+        const refFile = document.getElementById('campaignEditRefFile');
+        const removeCb = document.getElementById('campaignEditRemoveRef');
+        if (refFile) refFile.value = '';
+        if (removeCb) removeCb.checked = false;
+    }
+
+    function openCampaignReferenceModal(campaignId) {
+        hideCampaignGraphTooltip();
+        const modal = document.getElementById('campaignReferenceImageModal');
+        const img = document.getElementById('campaignReferenceImageModalImg');
+        if (!modal || !img) return;
+        img.removeAttribute('src');
+        img.alt = t('campaign.ref_image_modal_title') || 'Reference image';
+        img.onerror = function() {
+            showToast(t('toast.error_generic') || 'Error', 'error');
+            closeCampaignReferenceModal();
+        };
+        img.src = `/api/campaigns/${campaignId}/reference-image?t=${Date.now()}`;
+        modal.classList.remove('hidden');
+    }
+
+    function closeCampaignReferenceModal() {
+        const modal = document.getElementById('campaignReferenceImageModal');
+        const img = document.getElementById('campaignReferenceImageModalImg');
+        if (modal) modal.classList.add('hidden');
+        if (img) {
+            img.removeAttribute('src');
+            img.onerror = null;
+            img.onload = null;
+        }
     }
 
     function openCampaignDeleteModal(cid, cname) {
@@ -196,6 +264,14 @@
     document.getElementById('campaignEditModal')?.addEventListener('click', (e) => {
         if (e.target === e.currentTarget) closeCampaignEditModal();
     });
+    document.getElementById('campaignReferenceImageModalClose')?.addEventListener('click', closeCampaignReferenceModal);
+    document.getElementById('campaignReferenceImageModal')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeCampaignReferenceModal();
+    });
+    document.getElementById('campaignEditRefFile')?.addEventListener('change', function() {
+        const removeCb = document.getElementById('campaignEditRemoveRef');
+        if (removeCb && this.files && this.files[0]) removeCb.checked = false;
+    });
     document.getElementById('campaignEditForm')?.addEventListener('submit', async (e) => {
         e.preventDefault();
         const id = document.getElementById('campaignEditId').value;
@@ -203,6 +279,8 @@
         const description = document.getElementById('campaignEditDesc').value.trim();
         const dir = (typeof detectTextDir === 'function') ? detectTextDir(description || name) : 'ltr';
         if (!name) { showToast(t('toast.campaign_name_required'), 'error'); return; }
+        const refFile = document.getElementById('campaignEditRefFile');
+        const removeCb = document.getElementById('campaignEditRemoveRef');
         try {
             const r = await fetch(`/api/campaigns/${id}`, {
                 method: 'PUT',
@@ -210,18 +288,43 @@
                 body: JSON.stringify({ name, description, dir })
             });
             const d = await r.json().catch(() => ({}));
-            showToast(d.message || (d.success ? 'Updated' : 'Failed'), d.success ? 'success' : 'error');
-            if (d.success) {
-                closeCampaignEditModal();
-                loadCampaigns();
-                renderGraph(parseInt(id, 10));
+            if (!d.success) {
+                showToast(d.message || 'Failed', 'error');
+                return;
             }
+            const newFile = refFile && refFile.files && refFile.files[0];
+            if (newFile) {
+                const fd = new FormData();
+                fd.append('file', newFile);
+                const ur = await fetch(`/api/campaigns/${id}/reference-image`, { method: 'POST', body: fd });
+                const ud = await ur.json().catch(() => ({}));
+                if (!ud.success) {
+                    showToast(ud.message || t('toast.error_generic'), 'error');
+                    return;
+                }
+            } else if (removeCb && removeCb.checked) {
+                const dr = await fetch(`/api/campaigns/${id}/reference-image`, { method: 'DELETE' });
+                const dd = await dr.json().catch(() => ({}));
+                if (!dd.success) {
+                    showToast(dd.message || t('toast.error_generic'), 'error');
+                    return;
+                }
+            }
+            showToast(d.message || 'Updated', 'success');
+            closeCampaignEditModal();
+            loadCampaigns();
+            renderGraph(parseInt(id, 10));
         } catch (err) { showToast(t('toast.error_generic') + ': ' + err.message, 'error'); }
     });
 
     function renderGraph(campaignId) {
         const container = document.getElementById('campaign-network');
         if (!container || typeof vis === 'undefined') return;
+        if (campaignGraphTooltipDirTimer) {
+            clearTimeout(campaignGraphTooltipDirTimer);
+            campaignGraphTooltipDirTimer = null;
+        }
+        hideCampaignGraphTooltip();
         if (campaignNetwork) { campaignNetwork.destroy(); campaignNetwork = null; }
         container.innerHTML = '';
         currentCampaignId = campaignId;
@@ -271,6 +374,34 @@
                 const edges = new vis.DataSet(data.edges || []);
                 const netData = { nodes, edges };
                 campaignNetwork = new vis.Network(container, netData, options);
+                campaignNetwork.on('hoverNode', function(params) {
+                    const node = nodes.get(params.node);
+                    if (!node || node.title == null || node.title === '') return;
+                    const dir = tooltipDirFromMajorityHebrew(String(node.title));
+                    if (campaignGraphTooltipDirTimer) clearTimeout(campaignGraphTooltipDirTimer);
+                    campaignGraphTooltipDirTimer = setTimeout(function() {
+                        campaignGraphTooltipDirTimer = null;
+                        document.querySelectorAll('div.vis-tooltip, div.vis-network-tooltip').forEach(function(tip) {
+                            tip.setAttribute('dir', dir);
+                        });
+                    }, 130);
+                });
+                campaignNetwork.on('blurNode', function() {
+                    if (campaignGraphTooltipDirTimer) {
+                        clearTimeout(campaignGraphTooltipDirTimer);
+                        campaignGraphTooltipDirTimer = null;
+                    }
+                });
+                campaignNetwork.on('click', function(params) {
+                    if (!params.nodes || params.nodes.length === 0) return;
+                    const nid = params.nodes[0];
+                    if (String(nid).indexOf('camp_') !== 0) return;
+                    const node = nodes.get(nid);
+                    if (!node || !node.has_reference_image) return;
+                    hideCampaignGraphTooltip();
+                    const graphCid = parseInt(String(nid).replace(/^camp_/, ''), 10);
+                    if (!isNaN(graphCid)) openCampaignReferenceModal(graphCid);
+                });
                 if (exportBtn) exportBtn.classList.remove('hidden');
                 if (exportJsonBtn) exportJsonBtn.classList.remove('hidden');
                 setTimeout(() => campaignNetwork.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } }), 150);
@@ -312,8 +443,24 @@
                 if (typeof showAchievementModal === 'function' && (data.new_badges || data.level_up || data.rank_up || data.points_earned !== undefined || data.level_info || data.new_nickname)) {
                     showAchievementModal(data);
                 }
+                const createRef = document.getElementById('campaignCreateRefFile');
+                const newId = data.campaign && data.campaign.id;
+                if (newId && createRef && createRef.files && createRef.files[0]) {
+                    try {
+                        const fd = new FormData();
+                        fd.append('file', createRef.files[0]);
+                        const ur = await fetch(`/api/campaigns/${newId}/reference-image`, { method: 'POST', body: fd });
+                        const ud = await ur.json().catch(() => ({}));
+                        if (!ud.success) {
+                            showToast(ud.message || 'Campaign saved; reference image upload failed', 'error');
+                        }
+                    } catch (uploadErr) {
+                        showToast((t('toast.error_generic') || 'Error') + ': ' + uploadErr.message, 'error');
+                    }
+                }
                 document.getElementById('campaignName').value = '';
                 document.getElementById('campaignDesc').value = '';
+                if (createRef) createRef.value = '';
                 loadCampaigns();
             } else {
                 showToast(data.message || 'Failed', 'error');

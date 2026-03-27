@@ -216,6 +216,10 @@
                 const r = await fetch('/api/champs/ticker-messages');
                 const j = await r.json();
                 const messages = (j.messages || []).slice(0, ROWS);
+                const bd = (j.banner_direction || 'rtl') === 'ltr' ? 'ltr' : 'rtl';
+                modal.querySelectorAll('input[name="champsTickerBannerDir"]').forEach((rad) => {
+                    rad.checked = rad.value === bd;
+                });
                 rowsContainer.querySelectorAll('.champs-ticker-msg-text').forEach((inp, i) => {
                     inp.value = (messages[i] && messages[i].text) || '';
                     if (typeof detectTextDir === 'function') inp.dir = detectTextDir(inp.value);
@@ -239,11 +243,13 @@
                 const dir = (typeof detectTextDir === 'function') ? detectTextDir(text) : 'ltr';
                 messages.push({ text: text, color: color, dir: dir });
             });
+            const bannerDirEl = modal.querySelector('input[name="champsTickerBannerDir"]:checked');
+            const banner_direction = (bannerDirEl && bannerDirEl.value === 'ltr') ? 'ltr' : 'rtl';
             try {
                 const r = await fetch('/api/champs/ticker-messages', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages: messages })
+                    body: JSON.stringify({ messages: messages, banner_direction: banner_direction })
                 });
                 const j = await r.json();
                 const t = global.t || (k => k);
@@ -304,6 +310,12 @@
             .replace(/\b(overtook|rose|reached|added|uploaded|removed|goal|Team goal|new IOC|YARA rule)\b/gi, '<span class="champs-ticker-kw">$&</span>');
     }
 
+    function applyChampsTickerBannerDirection(scrollEl, bannerDirection) {
+        if (!scrollEl) return;
+        const ltr = (bannerDirection || 'rtl') === 'ltr';
+        scrollEl.classList.toggle('champs-ticker-marquee-reversed', ltr);
+    }
+
     async function loadChampsTicker() {
         const t = global.t || (k => k);
         const stripEl = document.getElementById('champsTickerStrip');
@@ -313,6 +325,7 @@
         try {
             const r = await fetch('/api/champs/ticker?limit=10');
             const j = await r.json();
+            applyChampsTickerBannerDirection(scrollEl, j.banner_direction);
             if (j.source === 'custom' && j.messages && j.messages.length > 0) {
                 champsTickerMessages = j.messages.map(m => ({
                     text: m.text || '',
@@ -336,6 +349,7 @@
                 stripEl.innerHTML = '<span class="champs-ticker-msg">' + escapeHtml(placeholder) + '</span>';
                 stripEl.classList.add('champs-ticker-placeholder');
                 scrollEl.classList.remove('champs-ticker-marquee');
+                scrollEl.classList.remove('champs-ticker-marquee-reversed');
                 return;
             }
             stripEl.classList.remove('champs-ticker-placeholder');
@@ -352,6 +366,7 @@
         } catch (e) {
             stripEl.innerHTML = '<span class="champs-ticker-msg">' + escapeHtml((typeof t === 'function' && t('champs.ticker_error')) ? t('champs.ticker_error') : 'Could not load activity.') + '</span>';
             scrollEl.classList.remove('champs-ticker-marquee');
+            scrollEl.classList.remove('champs-ticker-marquee-reversed');
         }
     }
 
@@ -517,10 +532,32 @@
                         { label: analystLabel, data, borderColor: '#00d4ff', backgroundColor: 'rgba(0,212,255,0.2)', fill: true, tension: 0.3 },
                         { label: 'Team avg', data: teamAvg.length ? teamAvg : labels.map(() => 0), borderColor: 'rgba(128,128,128,0.8)', backgroundColor: 'rgba(128,128,128,0.1)', fill: true, tension: 0.3, borderDash: [4, 2] }
                     ];
+                    const chartFont = '"Segoe UI", Arial, Helvetica, system-ui, sans-serif';
                     champsSpotlightChart = new Chart(ctx.getContext('2d'), {
                         type: 'line',
                         data: { labels, datasets },
-                        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: true, labels: { color: textColor } } }, scales: { x: { ticks: { maxRotation: 45, color: textColor }, grid: { color: gridColor } }, y: { beginAtZero: true, ticks: { color: textColor }, grid: { color: gridColor } } } }
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            font: { family: chartFont },
+                            plugins: {
+                                legend: {
+                                    display: true,
+                                    labels: { color: textColor, font: { family: chartFont } }
+                                }
+                            },
+                            scales: {
+                                x: {
+                                    ticks: { maxRotation: 45, color: textColor, font: { family: chartFont } },
+                                    grid: { color: gridColor }
+                                },
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: { color: textColor, font: { family: chartFont } },
+                                    grid: { color: gridColor }
+                                }
+                            }
+                        }
                     });
                     global.champsSpotlightChart = champsSpotlightChart;
 

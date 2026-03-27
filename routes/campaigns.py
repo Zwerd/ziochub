@@ -11,7 +11,8 @@ import io
 import csv
 from datetime import datetime
 
-from flask import Blueprint, request, jsonify, Response, current_app
+from flask import Blueprint, request, jsonify, Response, current_app, send_file
+from werkzeug.utils import secure_filename
 from flask_login import current_user
 from sqlalchemy.exc import IntegrityError
 
@@ -22,10 +23,53 @@ from utils.decorators import login_required
 
 bp = Blueprint('campaigns_api', __name__, url_prefix='/api')
 
+ALLOWED_CAMPAIGN_IMAGE_EXT = frozenset({'jpg', 'jpeg', 'png', 'gif', 'webp'})
+_MAX_CAMPAIGN_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB
+
 
 def _from_app(*names):
     import app as _app
     return tuple(getattr(_app, n) for n in names)
+
+
+def _campaign_images_dir():
+    d, = _from_app('DATA_CAMPAIGN_IMAGES')
+    return d
+
+
+def _campaign_image_path(campaign_id: int, ext: str) -> str:
+    safe = (ext or '').lower().lstrip('.')
+    if safe == 'jpeg':
+        safe = 'jpg'
+    return os.path.join(_campaign_images_dir(), f'{int(campaign_id)}.{safe}')
+
+
+def _delete_campaign_image_file(campaign):
+    """Remove on-disk reference image if campaign has reference_image_ext."""
+    if not campaign:
+        return
+    ext = getattr(campaign, 'reference_image_ext', None)
+    if not ext:
+        return
+    p = _campaign_image_path(campaign.id, ext)
+    if os.path.isfile(p):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+def _mime_for_campaign_ext(ext: str) -> str:
+    e = (ext or '').lower()
+    if e in ('jpg', 'jpeg'):
+        return 'image/jpeg'
+    if e == 'png':
+        return 'image/png'
+    if e == 'gif':
+        return 'image/gif'
+    if e == 'webp':
+        return 'image/webp'
+    return 'application/octet-stream'
 
 
 def _playbook_file():
@@ -72,7 +116,14 @@ def list_campaigns():
         return jsonify({
             'success': True,
             'campaigns': [
-                {'id': c.id, 'name': c.name, 'description': c.description, 'dir': getattr(c, 'dir', None) or 'ltr', 'created_at': c.created_at.isoformat() if c.created_at else None}
+                {
+                    'id': c.id,
+                    'name': c.name,
+                    'description': c.description,
+                    'dir': getattr(c, 'dir', None) or 'ltr',
+                    'created_at': c.created_at.isoformat() if c.created_at else None,
+                    'has_reference_image': bool(getattr(c, 'reference_image_ext', None)),
+                }
                 for c in campaigns
             ],
             'count': len(campaigns)
@@ -122,7 +173,14 @@ def create_campaign():
         response = {
             'success': True,
             'message': 'Campaign created',
-            'campaign': {'id': c.id, 'name': c.name, 'description': c.description, 'dir': c.dir or 'ltr', 'created_at': c.created_at.isoformat() if c.created_at else None}
+            'campaign': {
+                'id': c.id,
+                'name': c.name,
+                'description': c.description,
+                'dir': c.dir or 'ltr',
+                'created_at': c.created_at.isoformat() if c.created_at else None,
+                'has_reference_image': bool(getattr(c, 'reference_image_ext', None)),
+            }
         }
         if champs_before and current_user and current_user.is_authenticated:
             try:
@@ -244,7 +302,13 @@ def update_campaign(campaign_id):
         return jsonify({
             'success': True,
             'message': f'Campaign "{campaign.name}" updated',
-            'campaign': {'id': campaign.id, 'name': campaign.name, 'description': campaign.description, 'dir': campaign.dir or 'ltr'}
+            'campaign': {
+                'id': campaign.id,
+                'name': campaign.name,
+                'description': campaign.description,
+                'dir': campaign.dir or 'ltr',
+                'has_reference_image': bool(getattr(campaign, 'reference_image_ext', None)),
+            }
         })
     except IntegrityError:
         db.session.rollback()
@@ -263,6 +327,7 @@ def delete_campaign(campaign_id):
         campaign = db.session.get(Campaign, campaign_id)
         if not campaign:
             return jsonify({'success': False, 'message': 'Campaign not found'}), 404
+        _delete_campaign_image_file(campaign)
         IOC.query.filter(IOC.campaign_id == campaign_id).update({'campaign_id': None})
         YaraRule.query.filter(YaraRule.campaign_id == campaign_id).update({'campaign_id': None})
         campaign_name = campaign.name
@@ -270,6 +335,78 @@ def delete_campaign(campaign_id):
         _commit_with_retry()
         audit_log('CAMPAIGN_DELETE', f'id={campaign_id} name={campaign_name}')
         return jsonify({'success': True, 'message': f'Campaign "{campaign_name}" deleted'})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/campaigns/<int:campaign_id>/reference-image', methods=['GET'])
+@login_required
+def get_campaign_reference_image(campaign_id):
+    """Serve campaign reference image (view-only in UI)."""
+    campaign = db.session.get(Campaign, campaign_id)
+    if not campaign or not getattr(campaign, 'reference_image_ext', None):
+        return Response('Not found', status=404, mimetype='text/plain')
+    ext = (campaign.reference_image_ext or '').lower()
+    path = _campaign_image_path(campaign_id, ext)
+    if not os.path.isfile(path):
+        return Response('Not found', status=404, mimetype='text/plain')
+    return send_file(path, mimetype=_mime_for_campaign_ext(ext), max_age=300, conditional=True)
+
+
+@bp.route('/campaigns/<int:campaign_id>/reference-image', methods=['POST'])
+@login_required
+def upload_campaign_reference_image(campaign_id):
+    """Upload or replace reference image (jpg/png/gif/webp, max 8 MB)."""
+    _commit_with_retry, audit_log = _from_app('_commit_with_retry', 'audit_log')
+    try:
+        campaign = db.session.get(Campaign, campaign_id)
+        if not campaign:
+            return jsonify({'success': False, 'message': 'Campaign not found'}), 404
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'message': 'No file provided'}), 400
+        file = request.files['file']
+        if not file or not (getattr(file, 'filename', None) or '').strip():
+            return jsonify({'success': False, 'message': 'No file selected'}), 400
+        raw_name = secure_filename(file.filename)
+        ext = (raw_name.rsplit('.', 1)[-1] if '.' in raw_name else '').lower()
+        if ext == 'jpeg':
+            ext = 'jpg'
+        if ext not in ALLOWED_CAMPAIGN_IMAGE_EXT:
+            return jsonify({'success': False, 'message': 'Allowed: jpg, png, gif, webp'}), 400
+        file.seek(0, os.SEEK_END)
+        size = file.tell()
+        file.seek(0)
+        if size > _MAX_CAMPAIGN_IMAGE_BYTES:
+            return jsonify({'success': False, 'message': 'Image too large (max 8 MB)'}), 400
+        _delete_campaign_image_file(campaign)
+        dest = _campaign_image_path(campaign_id, ext)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        file.save(dest)
+        campaign.reference_image_ext = ext
+        _commit_with_retry()
+        audit_log('CAMPAIGN_REF_IMAGE', f'campaign_id={campaign_id}')
+        return jsonify({'success': True, 'message': 'Reference image saved', 'has_reference_image': True})
+    except Exception as e:
+        db.session.rollback()
+        logging.exception('upload_campaign_reference_image')
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/campaigns/<int:campaign_id>/reference-image', methods=['DELETE'])
+@login_required
+def delete_campaign_reference_image(campaign_id):
+    """Remove reference image from campaign."""
+    _commit_with_retry, audit_log = _from_app('_commit_with_retry', 'audit_log')
+    try:
+        campaign = db.session.get(Campaign, campaign_id)
+        if not campaign:
+            return jsonify({'success': False, 'message': 'Campaign not found'}), 404
+        _delete_campaign_image_file(campaign)
+        campaign.reference_image_ext = None
+        _commit_with_retry()
+        audit_log('CAMPAIGN_REF_IMAGE_DELETE', f'campaign_id={campaign_id}')
+        return jsonify({'success': True, 'message': 'Reference image removed', 'has_reference_image': False})
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -501,7 +638,6 @@ def _emoji_svg_data_uri(emoji, bg_color='#3b82f6'):
 
 
 _EMOJI_SVGS = {
-    'campaign': _emoji_svg_data_uri('🎯', '#ef4444'),
     'IP':       _emoji_svg_data_uri('🛡️', '#0891b2'),
     'Domain':   _emoji_svg_data_uri('🌐', '#7c3aed'),
     'URL':      _emoji_svg_data_uri('🔗', '#d97706'),
@@ -539,12 +675,18 @@ def campaign_graph(campaign_id):
 
         camp_node_id = f'camp_{campaign.id}'
         camp_label = campaign.name[:30] + ('…' if len(campaign.name) > 30 else '')
+        has_ref = bool(getattr(campaign, 'reference_image_ext', None))
+        # 🎯 on the red node only when a reference image exists; otherwise a neutral campaign glyph.
+        camp_circle_image = (
+            _emoji_svg_data_uri('🎯', '#ef4444') if has_ref else _emoji_svg_data_uri('📋', '#ef4444')
+        )
         nodes = [{
             'id': camp_node_id,
             'label': f'<b>{camp_label}</b>',
             'title': (campaign.name + ('\n' + (campaign.description or ''))) if campaign.description else campaign.name,
             'shape': 'circularImage',
-            'image': _EMOJI_SVGS['campaign'],
+            'image': camp_circle_image,
+            'has_reference_image': has_ref,
             'size': 40,
             'x': 0, 'y': 0,
             'fixed': {'x': True, 'y': True},

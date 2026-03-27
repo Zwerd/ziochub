@@ -25,6 +25,8 @@ class Campaign(db.Model):
     dir = db.Column(db.String(8), nullable=True, default='ltr')  # ltr | rtl
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)  # user who created
     created_at = db.Column(db.DateTime, default=_utcnow)
+    # Optional screenshot (e.g. suspicious email); file at data/campaign_images/{id}.{ext}
+    reference_image_ext = db.Column(db.String(8), nullable=True)
     iocs = db.relationship('IOC', backref='campaign', lazy=True, foreign_keys='IOC.campaign_id')
 
 

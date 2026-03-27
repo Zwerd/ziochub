@@ -130,6 +130,27 @@ def _feed_resolve_ioc_type(ioc_type_raw):
     return mapping.get(key, (key if key in IOC_FILES else None, None))
 
 
+def _feed_cp_resolve_ioc_type(ioc_type_raw):
+    """Checkpoint CSV: IP, Domain, URL, Hash (all algorithms), or Hash filtered by type.
+
+    - /feed/cp/hash — all supported hashes (MD5, SHA-1, SHA-256, SHA-512).
+    - /feed/cp/md5, /sha1, /sha256, /sha2 — only that algorithm (sha2 = SHA-256).
+    Email is not supported here (use /feed/esa/email or /feed/email).
+    """
+    key = (ioc_type_raw or '').strip().lower()
+    mapping = {
+        'ip': ('IP', None), 'ipaddress': ('IP', None), 'ip_address': ('IP', None),
+        'domain': ('Domain', None),
+        'url': ('URL', None),
+        'hash': ('Hash', None),
+        'md5': ('Hash', 32),
+        'sha1': ('Hash', 40),
+        'sha256': ('Hash', 64),
+        'sha2': ('Hash', 64),
+    }
+    return mapping.get(key, (None, None))
+
+
 def _stix_escape_pattern_value(value):
     """Escape single quotes for STIX pattern value (use \\' inside quoted value)."""
     if value is None:
@@ -453,8 +474,8 @@ def feed_pa(ioc_type):
 
 @bp.route('/cp/<ioc_type>', methods=['GET'])
 def feed_cp(ioc_type):
-    """Checkpoint feed (CSV): /feed/cp/ip, /feed/cp/domain, etc."""
-    mapped_type, hash_length = _feed_resolve_ioc_type(ioc_type)
+    """Checkpoint feed (CSV): /cp/ip, /domain, /url, /hash (all hashes), /md5, /sha1, /sha256 or /sha2 (per-type)."""
+    mapped_type, hash_length = _feed_cp_resolve_ioc_type(ioc_type)
     if mapped_type is None or mapped_type not in IOC_FILES or mapped_type == 'YARA':
         return Response(MSG_INVALID_IOC_TYPE, mimetype='text/plain', status=404)
     formatter = lambda rows: format_checkpoint_feed(rows, mapped_type)

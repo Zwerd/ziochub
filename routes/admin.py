@@ -160,6 +160,7 @@ _SETTINGS_DEFAULTS = {
     'dxl_config_path': '',
     'automation_fireeye_enabled': 'false',
     'automation_fireeye_appliances': '[]',
+    'automation_fireeye_ignore_ssl': 'false',
     'sanity_check_mode': 'block_non_admin',
     'search_comment_rtl_by_script': 'true',  # In search results: if comment has more Hebrew/Arabic than other text, show RTL
 }
@@ -230,7 +231,7 @@ def save_settings():
         syslog_keys = ('syslog_udp_enabled', 'syslog_udp_host', 'syslog_udp_port')
         ldap_keys = ('auth_mode', 'ldap_enabled', 'ldap_url', 'ldap_base_dn', 'ldap_bind_dn', 'ldap_bind_password', 'ldap_servers', 'ldap_user_filter')
         dxl_keys = ('dxl_enabled', 'dxl_config_path')
-        automation_keys = ('automation_fireeye_enabled', 'automation_fireeye_appliances')
+        automation_keys = ('automation_fireeye_enabled', 'automation_fireeye_appliances', 'automation_fireeye_ignore_ssl')
         sanity_keys = ('sanity_check_mode',)
         feed_keys = ('feeds_public_enabled',)
         search_keys = ('search_comment_rtl_by_script',)
@@ -275,6 +276,47 @@ def save_settings():
         return _api_ok(message='Settings saved')
     except Exception as e:
         logging.exception('api_admin_save_settings failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/automation-test', methods=['POST'])
+@admin_required
+def automation_test():
+    """POST minimal YARA to configured targets — verifies same path as approval-time push (Admin → Automation)."""
+    audit_log, _api_error = _from_app('audit_log', '_api_error')
+    try:
+        data = request.get_json() or {}
+        appliances = data.get('appliances')
+        if appliances is None:
+            return jsonify({'success': False, 'message': 'Missing appliances array.'}), 400
+        if not isinstance(appliances, list):
+            return jsonify({'success': False, 'message': 'appliances must be a list.'}), 400
+        if len(appliances) == 0:
+            return jsonify({
+                'success': True,
+                'overall_success': False,
+                'results': [],
+                'message': 'Add at least one target (name, base URL, path) before testing.',
+            })
+        from utils.fireeye_push import test_yara_push_connections
+        ignore_ssl = data.get('ignore_ssl')
+        if ignore_ssl is None:
+            _get_setting, = _from_app('_get_setting')
+            verify_ssl = _get_setting('automation_fireeye_ignore_ssl', 'false').lower() != 'true'
+        else:
+            verify_ssl = not (str(ignore_ssl).lower() in ('true', '1', 'yes'))
+        result = test_yara_push_connections(appliances, verify_ssl=verify_ssl)
+        audit_log(
+            'admin_automation_test',
+            f'by={current_user.username} targets={len(appliances)} overall={result.get("overall_success")}',
+        )
+        return jsonify({
+            'success': True,
+            'overall_success': result.get('overall_success'),
+            'results': result.get('results', []),
+        })
+    except Exception as e:
+        logging.exception('api_admin_automation_test failed')
         return _api_error(str(e), 500)
 
 
@@ -882,6 +924,7 @@ def admin_settings():
             'dxl_config_path': _get_setting('dxl_config_path', ''),
             'automation_fireeye_enabled': _get_setting('automation_fireeye_enabled', 'false'),
             'automation_fireeye_appliances': _get_setting('automation_fireeye_appliances', '[]'),
+            'automation_fireeye_ignore_ssl': _get_setting('automation_fireeye_ignore_ssl', 'false'),
             'search_comment_rtl_by_script': _get_setting('search_comment_rtl_by_script', 'true'),
         }
         return render_template('admin/settings.html', settings=settings)

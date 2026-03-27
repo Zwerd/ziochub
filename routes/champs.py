@@ -45,6 +45,7 @@ CHAMPS_SCORING = {
 }
 
 TICKER_MESSAGES_KEY = 'champs_ticker_messages'
+TICKER_BANNER_DIRECTION_KEY = 'champs_ticker_banner_direction'
 TICKER_MESSAGES_MAX = 5
 
 
@@ -61,6 +62,12 @@ def _get_setting(key, default=''):
 def _set_setting(key, value):
     s, = _from_app('_set_setting')
     s(key, value)
+
+
+def _ticker_banner_direction() -> str:
+    """Marquee scroll: 'rtl' = default motion (same as before); 'ltr' = reversed (CSS animation-direction: reverse)."""
+    v = (_get_setting(TICKER_BANNER_DIRECTION_KEY, 'rtl') or 'rtl').strip().lower()
+    return 'ltr' if v == 'ltr' else 'rtl'
 
 
 def _log_champs_event(event_type, user_id=None, payload=None):
@@ -425,7 +432,12 @@ def get_champs_ticker():
     if isinstance(custom, list):
         messages = [m for m in custom[:TICKER_MESSAGES_MAX] if isinstance(m, dict) and (m.get('text') or '').strip()]
         if messages:
-            return jsonify({'success': True, 'source': 'custom', 'messages': messages})
+            return jsonify({
+                'success': True,
+                'source': 'custom',
+                'messages': messages,
+                'banner_direction': _ticker_banner_direction(),
+            })
 
     limit = min(10, max(6, int(request.args.get('limit', 10))))
     rows = ActivityEvent.query.order_by(ActivityEvent.created_at.desc()).limit(limit).all()
@@ -478,7 +490,12 @@ def get_champs_ticker():
                 else:
                     pct = p.get('percent', 0)
                 messages.append({'text': f"Team goal \"{title}\" at {pct}%", 'ts': ts, 'category': 'team'})
-    return jsonify({'success': True, 'source': 'activity', 'messages': messages[:limit]})
+    return jsonify({
+        'success': True,
+        'source': 'activity',
+        'messages': messages[:limit],
+        'banner_direction': _ticker_banner_direction(),
+    })
 
 
 @bp.route('/champs/ticker-messages', methods=['GET'])
@@ -492,7 +509,11 @@ def get_champs_ticker_messages():
     if not isinstance(messages, list):
         messages = []
     messages = messages[:TICKER_MESSAGES_MAX]
-    return jsonify({'success': True, 'messages': messages})
+    return jsonify({
+        'success': True,
+        'messages': messages,
+        'banner_direction': _ticker_banner_direction(),
+    })
 
 
 @bp.route('/champs/ticker-messages', methods=['POST'])
@@ -518,7 +539,16 @@ def set_champs_ticker_messages():
                 dir_val = 'ltr'
             out.append({'text': text, 'color': color, 'dir': dir_val})
         _set_setting(TICKER_MESSAGES_KEY, json.dumps(out))
-        return jsonify({'success': True, 'messages': out})
+        banner_direction = (data.get('banner_direction') or '').strip().lower()
+        if banner_direction not in ('ltr', 'rtl'):
+            banner_direction = _ticker_banner_direction()
+        else:
+            _set_setting(TICKER_BANNER_DIRECTION_KEY, banner_direction)
+        return jsonify({
+            'success': True,
+            'messages': out,
+            'banner_direction': banner_direction,
+        })
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 

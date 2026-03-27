@@ -206,8 +206,9 @@
         const isDeleted = result.status === 'Deleted';
         const actionsCell = isYara
             ? `<td class="border border-white/10 px-3 py-2">
-                <div class="flex items-center gap-1.5">
+                <div class="flex items-center gap-1.5 flex-wrap">
                     <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="edit-yara-meta" title="${t('actions.edit_metadata')}">${t('actions.edit')}</button>
+                    <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="history" title="${typeof t === 'function' && t('actions.history') ? t('actions.history') : 'History'}">${typeof t === 'function' && t('actions.history') ? t('actions.history') : 'History'}</button>
                     <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="view-yara" title="${t('actions.go_to_yara')}">${t('actions.view')}</button>
                 </div>
                </td>`
@@ -479,7 +480,11 @@
 
             const ticketId = document.getElementById('editTicketId').value.trim();
             const editTagsEl = document.getElementById('editTags');
-            const tagsStr = editTagsEl ? editTagsEl.value.trim() : '';
+            const tagsStr = editTagsEl
+                ? (typeof normalizeTagsInputValue === 'function'
+                    ? normalizeTagsInputValue(editTagsEl.value)
+                    : editTagsEl.value.trim())
+                : '';
             const editAssignTo = document.getElementById('editAssignTo');
             const assignToVal = editAssignTo && editAssignTo.value ? editAssignTo.value.trim() : '';
             const payload = {
@@ -611,12 +616,47 @@
                 if (ev.event_type === 'created' && ev.payload && ev.payload.expiration_date) {
                     extra = ' <span class="text-secondary">(expires: ' + escapeHtml(String(ev.payload.expiration_date).slice(0, 10)) + ')</span>';
                 }
+                if (ev.event_type === 'created' && iocType === 'YARA' && ev.payload) {
+                    const p = ev.payload;
+                    const ticketL = (typeof t === 'function' && t('history.field_ticket_id')) ? t('history.field_ticket_id') : 'Ticket ID';
+                    const campL = (typeof t === 'function' && t('history.field_campaign')) ? t('history.field_campaign') : 'Campaign';
+                    const descL = (typeof t === 'function' && t('history.field_comment')) ? t('history.field_comment') : 'Description';
+                    const statusL = (typeof t === 'function' && t('history.yara_status')) ? t('history.yara_status') : 'Rule status';
+                    const metaBits = [];
+                    if (p.ticket_id) metaBits.push('<span class="text-secondary">' + escapeHtml(ticketL) + ':</span> ' + escapeHtml(String(p.ticket_id)));
+                    if (p.campaign) metaBits.push('<span class="text-secondary">' + escapeHtml(campL) + ':</span> ' + escapeHtml(String(p.campaign)));
+                    if (p.rule_status) metaBits.push('<span class="text-secondary">' + escapeHtml(statusL) + ':</span> ' + escapeHtml(String(p.rule_status)));
+                    if (p.comment) {
+                        const cdir = (typeof detectTextDir === 'function') ? detectTextDir(String(p.comment)) : 'auto';
+                        metaBits.push('<span class="text-secondary">' + escapeHtml(descL) + ':</span> <span dir="' + cdir + '">' + escapeHtml(String(p.comment)) + '</span>');
+                    }
+                    if (metaBits.length) {
+                        extra += ' <div class="mt-2 space-y-1 text-sm text-cyan-100/85">' + metaBits.join('<br>') + '</div>';
+                    }
+                }
                 if (ev.event_type === 'deleted' && ev.payload && ev.payload.reason) {
                     const reasonLabel = (typeof t === 'function' && t('history.deleted_reason')) ? t('history.deleted_reason') : 'Reason';
                     extra += ' <div class="mt-2 text-amber-200/90"><span class="font-semibold">' + escapeHtml(reasonLabel) + ':</span> ' + escapeHtml(ev.payload.reason) + '</div>';
                 }
+                if (ev.event_type === 'deleted' && iocType === 'YARA' && ev.payload) {
+                    const p = ev.payload;
+                    const oup = (typeof t === 'function' && t('history.yara_original_uploader')) ? t('history.yara_original_uploader') : 'Original uploader';
+                    const dl = (typeof t === 'function' && t('history.field_comment')) ? t('history.field_comment') : 'Description';
+                    if (p.original_analyst) {
+                        extra += '<div class="mt-1 text-sm text-cyan-200/75"><span class="font-semibold">' + escapeHtml(oup) + ':</span> ' + escapeHtml(String(p.original_analyst)) + '</div>';
+                    }
+                    if (p.original_comment) {
+                        const cdir = (typeof detectTextDir === 'function') ? detectTextDir(String(p.original_comment)) : 'auto';
+                        extra += '<div class="mt-1 text-sm text-cyan-100/80"><span class="text-secondary">' + escapeHtml(dl) + ':</span> <span dir="' + cdir + '">' + escapeHtml(String(p.original_comment)) + '</span></div>';
+                    }
+                }
                 if ((ev.event_type === 'excluded' || ev.event_type === 'unexcluded') && ev.payload && ev.payload.anomaly_type) {
                     extra += ' <span class="text-secondary">(anomaly: ' + escapeHtml(ev.payload.anomaly_type) + ')</span>';
+                }
+                if (ev.event_type === 'edited' && ev.payload && ev.payload.reason && (!ev.payload.changes || !ev.payload.changes.length)) {
+                    const rl = (typeof t === 'function' && t('history.yara_edit_reason')) ? t('history.yara_edit_reason') : 'Change reason';
+                    const dirReason = (typeof detectTextDir === 'function') ? detectTextDir(String(ev.payload.reason)) : 'auto';
+                    extra += ' <div class="mt-2 text-cyan-100/90"><span class="font-semibold">' + escapeHtml(rl) + ':</span> <span class="whitespace-pre-wrap" dir="' + dirReason + '">' + escapeHtml(String(ev.payload.reason)) + '</span></div>';
                 }
                 if (ev.event_type === 'edited' && ev.payload && ev.payload.changes && ev.payload.changes.length) {
                     const fieldLabels = { comment: (typeof t === 'function' && t('history.field_comment')) ? t('history.field_comment') : 'Comment', expiration: (typeof t === 'function' && t('history.field_expiration')) ? t('history.field_expiration') : 'Expiration', ticket_id: (typeof t === 'function' && t('history.field_ticket_id')) ? t('history.field_ticket_id') : 'Ticket ID', campaign: (typeof t === 'function' && t('history.field_campaign')) ? t('history.field_campaign') : 'Campaign', tags: (typeof t === 'function' && t('history.field_tags')) ? t('history.field_tags') : 'Tags', analyst: (typeof t === 'function' && t('history.field_analyst')) ? t('history.field_analyst') : 'Assigned to' };

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from flask import Blueprint, request, jsonify, Response
 from flask_login import current_user
-from sqlalchemy import func, cast, String
+from sqlalchemy import func, cast, String, text
 from sqlalchemy.orm import joinedload
 
 from extensions import db
@@ -24,6 +24,7 @@ from utils.validation_messages import (
     MSG_IOC_NOT_FOUND,
 )
 from constants import IOC_FILES, DEFAULT_PAGE_SIZE, DEFAULT_IOC_LIMIT
+from utils.tags import normalize_tags_from_input
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,55 @@ bp = Blueprint('search_bp', __name__)
 def _from_app(*names):
     import app as _app
     return tuple(getattr(_app, n) for n in names)
+
+
+def _distinct_ioc_tags_from_db():
+    """Return sorted list of distinct tag strings (lowercase) from iocs.tags JSON."""
+    tags_set = set()
+    try:
+        rows = db.session.execute(
+            text(
+                """
+                SELECT DISTINCT LOWER(TRIM(CAST(j.value AS TEXT))) AS tag
+                FROM iocs AS i
+                JOIN json_each(i.tags) AS j
+                WHERE i.tags IS NOT NULL
+                  AND TRIM(COALESCE(i.tags, '')) NOT IN ('', '[]')
+                  AND LOWER(TRIM(CAST(j.value AS TEXT))) != ''
+                """
+            )
+        ).fetchall()
+        for (t,) in rows:
+            if t:
+                tags_set.add(t)
+    except Exception:
+        logger.debug('tags json_each failed, scanning iocs.tags rows', exc_info=True)
+        for row in IOC.query.with_entities(IOC.tags).filter(IOC.tags.isnot(None)):
+            raw = row[0]
+            if not raw or raw == '[]':
+                continue
+            try:
+                arr = json.loads(raw) if isinstance(raw, str) else raw
+                if not isinstance(arr, list):
+                    continue
+                for x in arr:
+                    s = str(x).strip().lower()
+                    if s:
+                        tags_set.add(s)
+            except (TypeError, ValueError):
+                continue
+    return sorted(tags_set)
+
+
+@bp.route('/api/tags', methods=['GET'])
+@login_required
+def api_tags_suggestions():
+    """Distinct IOC tags for label-style autocomplete. Optional query: ?q=prefix (lowercase)."""
+    q = (request.args.get('q') or '').strip().lower()
+    tags = _distinct_ioc_tags_from_db()
+    if q:
+        tags = [t for t in tags if t.startswith(q)]
+    return jsonify({'success': True, 'tags': tags[:500]})
 
 
 # ---------------------------------------------------------------------------
@@ -72,20 +122,62 @@ def get_ioc_history():
         })
     has_created = any(e.get('event_type') == 'created' for e in events)
     if not has_created:
-        ioc_row = IOC.query.filter(
-            IOC.type == ioc_type,
-            func.lower(IOC.value) == value_lower,
-        ).first()
-        if ioc_row:
-            payload_hist = {}
-            if ioc_row.expiration_date:
-                payload_hist['expiration_date'] = ioc_row.expiration_date.isoformat()
-            events.append({
-                'event_type': 'created',
-                'username': (ioc_row.analyst or '') or '',
-                'at': ioc_row.created_at.isoformat() if ioc_row.created_at else None,
-                'payload': payload_hist,
-            })
+        if ioc_type == 'YARA':
+            yara_created = False
+            for r in rows:
+                if r.event_type != 'deleted' or not r.payload:
+                    continue
+                try:
+                    pl = json.loads(r.payload) if isinstance(r.payload, str) else {}
+                except (TypeError, ValueError):
+                    pl = {}
+                if pl.get('original_uploaded_at'):
+                    events.append({
+                        'event_type': 'created',
+                        'username': pl.get('original_analyst') or '',
+                        'at': pl.get('original_uploaded_at'),
+                        'payload': {
+                            'comment': pl.get('original_comment') or '',
+                            'ticket_id': pl.get('ticket_id') or '',
+                        },
+                    })
+                    yara_created = True
+                    break
+            if not yara_created:
+                yr = YaraRule.query.filter(func.lower(YaraRule.filename) == value_lower).first()
+                if yr:
+                    cname = ''
+                    if yr.campaign_id:
+                        camp = db.session.get(Campaign, yr.campaign_id)
+                        if camp:
+                            cname = camp.name or ''
+                    st = (getattr(yr, 'status', None) or '') or ''
+                    events.append({
+                        'event_type': 'created',
+                        'username': yr.analyst or '',
+                        'at': yr.uploaded_at.isoformat() if yr.uploaded_at else None,
+                        'payload': {
+                            'comment': yr.comment or '',
+                            'ticket_id': yr.ticket_id or '',
+                            'campaign': cname,
+                            'rule_status': st,
+                        },
+                    })
+        else:
+            ioc_row = IOC.query.filter(
+                IOC.type == ioc_type,
+                func.lower(IOC.value) == value_lower,
+            ).first()
+            if ioc_row:
+                payload_hist = {}
+                if ioc_row.expiration_date:
+                    payload_hist['expiration_date'] = ioc_row.expiration_date.isoformat()
+                events.append({
+                    'event_type': 'created',
+                    'username': (ioc_row.analyst or '') or '',
+                    'at': ioc_row.created_at.isoformat() if ioc_row.created_at else None,
+                    'payload': payload_hist,
+                })
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     for ev in list(events):
         if ev.get('event_type') == 'created' and ev.get('payload') and ev['payload'].get('expiration_date'):
@@ -391,16 +483,15 @@ def search_ioc():
             'campaign_name': campaign_name,
         })
     current_keys = {(r.get('file_type'), (r.get('ioc') or r.get('value') or '').lower()) for r in results}
-    deleted_type_filter = IocHistory.ioc_type != 'YARA'
+    dq = IocHistory.query.filter(IocHistory.event_type == 'deleted')
     if filter_type == 'file_type':
         if query_lower.upper() in ('IP', 'DOMAIN', 'URL', 'HASH', 'EMAIL'):
-            deleted_type_filter = db.and_(deleted_type_filter, IocHistory.ioc_type == query_lower.upper())
+            dq = dq.filter(IocHistory.ioc_type == query_lower.upper())
+        elif query_lower == 'yara':
+            dq = dq.filter(IocHistory.ioc_type == 'YARA')
         else:
-            deleted_type_filter = db.and_(deleted_type_filter, func.lower(IocHistory.ioc_type).contains(query_lower))
-    deleted_rows = IocHistory.query.filter(
-        IocHistory.event_type == 'deleted',
-        deleted_type_filter
-    ).order_by(IocHistory.at.desc()).all()
+            dq = dq.filter(func.lower(IocHistory.ioc_type).contains(query_lower))
+    deleted_rows = dq.order_by(IocHistory.at.desc()).all()
     for h in deleted_rows:
         key = (h.ioc_type, (h.ioc_value or '').lower())
         if key in current_keys:
@@ -570,14 +661,24 @@ def revoke_ioc():
         analyst_name = (row.analyst or current_user.username if current_user.is_authenticated else None) or ''
         delete_payload = {'was_expired': was_expired, 'reason': reason}
         _log_ioc_history(ioc_type, value, 'deleted', current_user.username if current_user.is_authenticated else analyst_name, delete_payload)
+        # Self-delete: same user submitted (user_id) and/or gets Champs credit (analyst) — no +1 deletion bonus
+        deleter_un = (current_user.username or '').strip().lower()
+        ioc_analyst_un = (row.analyst or '').strip().lower()
+        skip_deletion_bonus = (
+            (row.user_id is not None and row.user_id == current_user.id)
+            or (bool(ioc_analyst_un) and ioc_analyst_un == deleter_un)
+        )
         db.session.delete(row)
         _commit_with_retry()
         # Attribute deletion to the user who performed it (for Champs "Deletions" count)
-        _log_champs_event('ioc_deletion', user_id=current_user.id, payload={
+        champs_payload = {
             'was_expired': was_expired,
             'value': value[:100],
             'type': ioc_type,
-        })
+        }
+        if skip_deletion_bonus:
+            champs_payload['skip_deletion_bonus'] = True
+        _log_champs_event('ioc_deletion', user_id=current_user.id, payload=champs_payload)
         audit_log('IOC_DELETE', f'type={ioc_type} value={value[:80]} reason={reason[:100]}')
         refresh_champ_score_for_user(current_user.id)
         response = {'success': True, 'message': f'{ioc_type} IOC revoked successfully'}
@@ -664,13 +765,7 @@ def edit_ioc():
             else:
                 return jsonify({'success': False, 'message': f'Campaign "{campaign_name}" not found'}), 400
         if 'tags' in data:
-            tags_raw = data.get('tags')
-            if isinstance(tags_raw, list):
-                tags_list = [str(t).strip() for t in tags_raw if str(t).strip()][:50]
-            elif isinstance(tags_raw, str):
-                tags_list = [t.strip() for t in tags_raw.split(',') if t.strip()][:50]
-            else:
-                tags_list = []
+            tags_list = normalize_tags_from_input(data.get('tags'))
             row.tags = json.dumps(tags_list) if tags_list else '[]'
         else:
             tags_list = old_tags_list

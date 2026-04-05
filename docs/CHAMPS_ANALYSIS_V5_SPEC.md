@@ -114,7 +114,7 @@
 
 **לופ:** כל ההודעות ברצף אחד עם מפרידים; תוכן משוכפל לגלילה רציפה (מרקי). טעינה מחדש כל 60 שניות.
 
-כשאין אירועים: placeholder "No recent activity — new submissions, rank changes and goal updates will appear here."
+כשאין אירועים: placeholder "No recent activity-new submissions, rank changes and goal updates will appear here."
 
 **טכני:** טבלת `activity_events`; `GET /api/champs/ticker?limit=20`. כל הודעה עם `category`: `analyst_success` | `important` | `team`. אבני דרך יעד: 25, 50, 75, 80, 100 (נרשמים פעם ביום לכל milestone).
 

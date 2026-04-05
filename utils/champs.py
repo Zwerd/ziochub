@@ -1349,13 +1349,15 @@ def compute_team_goal_current(db, goal, IOC, YaraRule, ActivityEvent):
     Compute current_value for a TeamGoal based on goal_type and period.
     goal_type: ioc_add | yara_add | deletion
     period: weekly | monthly
-    Uses rolling window: last 7 days for weekly, last 30 for monthly.
+    Weekly: rolling last 7 days (only if this helper is used for weekly; API weekly goals use calendar weeks).
+    Monthly: from the 1st of the current calendar month through today (not a rolling 30-day window).
     """
     today = date.today()
     if goal.period == 'weekly':
         start = today - timedelta(days=7)
     else:
-        start = today - timedelta(days=30)
+        # Calendar month so the meter resets on the 1st (matches "monthly goal" expectations).
+        start = today.replace(day=1)
 
     goal_type = getattr(goal, 'goal_type', 'ioc_add') or 'ioc_add'
     if goal_type == 'ioc_add':

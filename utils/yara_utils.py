@@ -46,7 +46,7 @@ def validate_yara_syntax(source: str | None) -> tuple[bool, str | None]:
         # Include str(e) so API/UI can show e.g. "No module named 'yara'" vs shadowing issues
         return False, f"library_unavailable:{e!s}"
     except OSError as e:
-        # Missing .so/.dll or wrong arch — show detail to admins
+        # Missing .so/.dll or wrong arch-show detail to admins
         msg = str(e).strip() or type(e).__name__
         return False, f"library_load_failed:{msg}"
     try:

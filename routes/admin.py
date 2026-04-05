@@ -166,7 +166,124 @@ _SETTINGS_DEFAULTS = {
     'feeds_public_enabled': 'true',
     'feed_cache_enabled': 'true',
     'feed_cache_ttl_seconds': '300',
+    'ioc_push_enabled': 'false',
+    'ioc_push_ignore_ssl': 'false',
+    'ioc_push_targets': '[]',
+    # Cisco ESA-dictionary sync (API shape fixed in code; admin only sets URL, credentials, mappings)
+    'esa_enabled': 'false',
+    'esa_base_url': '',
+    'esa_username': '',
+    'esa_passphrase': '',
+    'esa_verify_ssl': 'true',
+    'esa_skip_misp_sync': 'true',
+    'esa_cleanup_on_expire': 'true',
+    'esa_mappings': '[]',
+    'esa_deployment_mode': 'standalone',
+    'esa_group_name': '',
+    'esa_host_name': '',
 }
+
+
+def _normalize_ioc_push_targets_for_save(val) -> str:
+    """Validate Admin JSON for IOC push targets; return serialized JSON string."""
+    import json
+    from utils.ioc_push import MAX_BODY_TEMPLATE_CHARS
+
+    if val is None:
+        return '[]'
+    if isinstance(val, str):
+        try:
+            val = json.loads(val.strip() or '[]')
+        except (TypeError, ValueError) as e:
+            raise ValueError(f'ioc_push_targets: invalid JSON ({e})') from e
+    if not isinstance(val, list):
+        raise ValueError('ioc_push_targets must be a JSON array')
+    allowed_auth = frozenset(('none', 'basic', 'api_key'))
+    out = []
+    for item in val:
+        if not isinstance(item, dict):
+            continue
+        tmpl = item.get('body_template')
+        tmpl = tmpl if isinstance(tmpl, str) else ''
+        if len(tmpl) > MAX_BODY_TEMPLATE_CHARS:
+            raise ValueError(f"Target '{item.get('name', '')}': body_template too long")
+        auth_type = str(item.get('auth_type') or 'none').strip().lower()
+        if auth_type not in allowed_auth:
+            auth_type = 'none'
+        en = item.get('enabled', True)
+        if isinstance(en, str):
+            enabled = en.strip().lower() in ('true', '1', 'yes')
+        else:
+            enabled = bool(en)
+        vs = item.get('verify_ssl')
+        verify_ssl_json = None
+        if vs is not None:
+            if isinstance(vs, str):
+                verify_ssl_json = vs.strip().lower() in ('true', '1', 'yes')
+            else:
+                verify_ssl_json = bool(vs)
+        out.append({
+            'name': str(item.get('name') or '').strip(),
+            'enabled': enabled,
+            'url': str(item.get('url') or '').strip(),
+            'method': 'POST',
+            'auth_type': auth_type,
+            'username': str(item.get('username') or '').strip(),
+            'password': str(item.get('password') or '').strip(),
+            'api_key': str(item.get('api_key') or '').strip(),
+            'api_key_header': str(item.get('api_key_header') or 'X-API-Key').strip() or 'X-API-Key',
+            'body_template': tmpl,
+            'content_type': str(item.get('content_type') or 'application/json').strip() or 'application/json',
+            'verify_ssl': verify_ssl_json,
+        })
+    return json.dumps(out, ensure_ascii=False)
+
+
+def _normalize_esa_mappings(val) -> str:
+    """Validate esa_mappings: JSON array of {dictionary_name, ioc_type} with ioc_type in Email|Domain|IP|URL."""
+    import json
+    from utils.esa_dictionary import ESA_IOC_TYPES, canonical_esa_ioc_type
+
+    allowed = frozenset(ESA_IOC_TYPES)
+    if val is None:
+        return '[]'
+    if isinstance(val, str):
+        try:
+            val = json.loads(val.strip() or '[]')
+        except (TypeError, ValueError) as e:
+            raise ValueError(f'esa_mappings: invalid JSON ({e})') from e
+    if not isinstance(val, list):
+        raise ValueError('esa_mappings must be a JSON array')
+    out: list[dict] = []
+    for item in val:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get('dictionary_name') or item.get('name') or '').strip()
+        ct = canonical_esa_ioc_type(item.get('ioc_type'))
+        if not name or not ct or ct not in allowed:
+            continue
+        out.append({'dictionary_name': name, 'ioc_type': ct})
+    return json.dumps(out, ensure_ascii=False)
+
+
+def _esa_mapping_rows_for_ui(raw_mappings: str) -> list[dict]:
+    """One UI row per mapping; empty starter row if none."""
+    from utils.esa_dictionary import parse_mappings
+
+    rows = parse_mappings(raw_mappings or '[]')
+    ui = [{'dictionary_name': r['dictionary_name'], 'ioc_type': r['ioc_type']} for r in rows]
+    if not ui:
+        ui = [{'dictionary_name': '', 'ioc_type': 'Email'}]
+    return ui
+
+
+def _validate_esa_deployment_settings(_get_setting) -> None:
+    """Require group_name / host_name when mode needs them (Cisco API Guide)."""
+    mode = (_get_setting('esa_deployment_mode', 'standalone') or 'standalone').strip().lower()
+    if mode == 'group' and not (_get_setting('esa_group_name', '') or '').strip():
+        raise ValueError('ESA: Group mode requires a group name (see Cisco API cluster levels).')
+    if mode == 'machine' and not (_get_setting('esa_host_name', '') or '').strip():
+        raise ValueError('ESA: Machine mode requires a host name.')
 
 
 @bp.route('/settings', methods=['GET'])
@@ -238,8 +355,14 @@ def save_settings():
         sanity_keys = ('sanity_check_mode',)
         feed_keys = ('feeds_public_enabled', 'feed_cache_enabled', 'feed_cache_ttl_seconds')
         search_keys = ('search_comment_rtl_by_script',)
+        ioc_push_keys = ('ioc_push_enabled', 'ioc_push_ignore_ssl', 'ioc_push_targets')
+        esa_keys = (
+            'esa_enabled', 'esa_base_url', 'esa_username', 'esa_passphrase', 'esa_verify_ssl',
+            'esa_skip_misp_sync', 'esa_cleanup_on_expire', 'esa_mappings',
+            'esa_deployment_mode', 'esa_group_name', 'esa_host_name',
+        )
         sections = []
-        for key in ldap_keys + misp_keys + syslog_keys + dxl_keys + automation_keys + sanity_keys + feed_keys + search_keys:
+        for key in ldap_keys + misp_keys + syslog_keys + dxl_keys + automation_keys + sanity_keys + feed_keys + search_keys + ioc_push_keys + esa_keys:
             if key in data:
                 val = data[key]
                 if key == 'automation_fireeye_appliances':
@@ -259,6 +382,23 @@ def save_settings():
                     _set_setting(key, str(n))
                 elif key == 'feed_cache_enabled':
                     _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
+                elif key == 'ioc_push_targets':
+                    _set_setting(key, _normalize_ioc_push_targets_for_save(val))
+                elif key == 'esa_mappings':
+                    _set_setting(key, _normalize_esa_mappings(val))
+                elif key == 'esa_deployment_mode':
+                    from utils.esa_dictionary import ESA_DEPLOYMENT_MODES
+                    m = str(val).strip().lower()
+                    if m not in ESA_DEPLOYMENT_MODES:
+                        m = 'standalone'
+                    _set_setting(key, m)
+                elif key in ('esa_group_name', 'esa_host_name'):
+                    _set_setting(key, str(val).strip())
+                elif key in esa_keys:
+                    if key in ('esa_verify_ssl', 'esa_skip_misp_sync', 'esa_cleanup_on_expire'):
+                        _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
+                    else:
+                        _set_setting(key, str(val).strip())
                 else:
                     _set_setting(key, str(val).strip())
                 if key in ldap_keys and 'LDAP' not in sections:
@@ -269,14 +409,20 @@ def save_settings():
                     sections.append('Syslog')
                 elif key in dxl_keys and 'DXL' not in sections:
                     sections.append('DXL')
-                elif key in automation_keys and 'Automation' not in sections:
-                    sections.append('Automation')
+                elif key in automation_keys and 'YARA push' not in sections:
+                    sections.append('YARA push')
                 elif key in sanity_keys and 'Sanity' not in sections:
                     sections.append('Sanity')
                 elif key in feed_keys and 'Feeds' not in sections:
                     sections.append('Feeds')
                 elif key in search_keys and 'Search' not in sections:
                     sections.append('Search')
+                elif key in ioc_push_keys and 'IOC push' not in sections:
+                    sections.append('IOC push')
+                elif key in esa_keys and 'ESA' not in sections:
+                    sections.append('ESA')
+        if any(k in data for k in esa_keys):
+            _validate_esa_deployment_settings(_get_setting)
         if any(k in data for k in ('feeds_public_enabled', 'feed_cache_enabled', 'feed_cache_ttl_seconds')):
             try:
                 from utils.feed_cache import clear_all_feed_cache
@@ -302,7 +448,7 @@ def save_settings():
 @bp.route('/automation-test', methods=['POST'])
 @admin_required
 def automation_test():
-    """POST minimal YARA to configured targets — verifies same path as approval-time push (Admin → Automation)."""
+    """POST minimal YARA to configured targets-verifies same path as approval-time push (Admin → YARA push)."""
     audit_log, _api_error = _from_app('audit_log', '_api_error')
     try:
         data = request.get_json() or {}
@@ -337,6 +483,62 @@ def automation_test():
         })
     except Exception as e:
         logging.exception('api_admin_automation_test failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/ioc-push-test', methods=['POST'])
+@admin_required
+def ioc_push_test():
+    """POST sample IOC JSON to targets from request body (same rendering as live IOC push)."""
+    audit_log, _api_error = _from_app('audit_log', '_api_error')
+    try:
+        data = request.get_json() or {}
+        targets = data.get('targets')
+        if targets is None:
+            return jsonify({'success': False, 'message': 'Missing targets array.'}), 400
+        if not isinstance(targets, list):
+            return jsonify({'success': False, 'message': 'targets must be a list.'}), 400
+        if len(targets) == 0:
+            return jsonify({
+                'success': True,
+                'overall_success': False,
+                'results': [],
+                'message': 'Add at least one target with URL and body template before testing.',
+            })
+        ignore_ssl = data.get('ignore_ssl')
+        if ignore_ssl is None:
+            _get_setting, = _from_app('_get_setting')
+            verify_ssl = _get_setting('ioc_push_ignore_ssl', 'false').lower() != 'true'
+        else:
+            verify_ssl = not (str(ignore_ssl).lower() in ('true', '1', 'yes'))
+        from utils.ioc_push import test_ioc_push_targets
+        result = test_ioc_push_targets(targets, verify_ssl_override=verify_ssl)
+        audit_log(
+            'admin_ioc_push_test',
+            f'by={current_user.username} targets={len(targets)} overall={result.get("overall_success")}',
+        )
+        return jsonify({
+            'success': True,
+            'overall_success': result.get('overall_success'),
+            'results': result.get('results', []),
+        })
+    except Exception as e:
+        logging.exception('api_admin_ioc_push_test failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/esa/test', methods=['POST'])
+@admin_required
+def esa_test():
+    """Verify ESA login (Base64 credentials) and GET config/dictionaries with jwttoken header."""
+    audit_log, _api_error = _from_app('audit_log', '_api_error')
+    try:
+        from utils.esa_dictionary import esa_test_connection, esa_settings_dict
+        result = esa_test_connection(esa_settings_dict())
+        audit_log('admin_esa_test', f'by={current_user.username} ok={result.get("success")}')
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        logging.exception('api_admin_esa_test failed')
         return _api_error(str(e), 500)
 
 
@@ -914,50 +1116,81 @@ def _get_ldap_servers_for_form(get_setting_fn):
     return []
 
 
+def _build_admin_settings_form_context():
+    """Shared dict for admin Settings and Integrations pages (forms read system_settings)."""
+    _get_setting, = _from_app('_get_setting')
+    try:
+        from misp_settings import get_settings_for_form
+        misp_settings_dict = get_settings_for_form(_get_setting)
+    except ImportError:
+        misp_settings_dict = _misp_settings_fallback(_get_setting)
+    ldap_servers = _get_ldap_servers_for_form(_get_setting)
+    try:
+        from utils.feed_cache import FEED_CACHE_TTL_DEFAULT, normalize_feed_cache_ttl_seconds
+        _ttl_raw = int(_get_setting('feed_cache_ttl_seconds', '300') or '300')
+    except ValueError:
+        _ttl_raw = FEED_CACHE_TTL_DEFAULT
+    _feed_ttl = str(normalize_feed_cache_ttl_seconds(_ttl_raw))
+    return {
+        'auth_mode': _get_setting('auth_mode', 'local_only'),
+        'feeds_public_enabled': _get_setting('feeds_public_enabled', 'true'),
+        'feed_cache_enabled': _get_setting('feed_cache_enabled', 'true'),
+        'feed_cache_ttl_seconds': _feed_ttl,
+        'ldap_enabled': _get_setting('ldap_enabled', 'false'),
+        'ldap_url': _get_setting('ldap_url', ''),
+        'ldap_base_dn': _get_setting('ldap_base_dn', ''),
+        'ldap_bind_dn': _get_setting('ldap_bind_dn', ''),
+        'ldap_bind_password': _get_setting('ldap_bind_password', ''),
+        'ldap_servers': ldap_servers,
+        'ldap_user_filter': _get_setting('ldap_user_filter', '(sAMAccountName=%(user)s)'),
+        **misp_settings_dict,
+        'syslog_udp_enabled': _get_setting('syslog_udp_enabled', 'false'),
+        'syslog_udp_host': _get_setting('syslog_udp_host', ''),
+        'syslog_udp_port': _get_setting('syslog_udp_port', '514'),
+        'dxl_enabled': _get_setting('dxl_enabled', 'false'),
+        'dxl_config_path': _get_setting('dxl_config_path', ''),
+        'automation_fireeye_enabled': _get_setting('automation_fireeye_enabled', 'false'),
+        'automation_fireeye_appliances': _get_setting('automation_fireeye_appliances', '[]'),
+        'automation_fireeye_ignore_ssl': _get_setting('automation_fireeye_ignore_ssl', 'false'),
+        'ioc_push_enabled': _get_setting('ioc_push_enabled', 'false'),
+        'ioc_push_ignore_ssl': _get_setting('ioc_push_ignore_ssl', 'false'),
+        'ioc_push_targets': _get_setting('ioc_push_targets', '[]'),
+        'search_comment_rtl_by_script': _get_setting('search_comment_rtl_by_script', 'true'),
+        'esa_enabled': _get_setting('esa_enabled', 'false'),
+        'esa_base_url': _get_setting('esa_base_url', ''),
+        'esa_username': _get_setting('esa_username', ''),
+        'esa_passphrase': _get_setting('esa_passphrase', ''),
+        'esa_verify_ssl': _get_setting('esa_verify_ssl', 'true'),
+        'esa_skip_misp_sync': _get_setting('esa_skip_misp_sync', 'true'),
+        'esa_cleanup_on_expire': _get_setting('esa_cleanup_on_expire', 'true'),
+        'esa_mappings': _get_setting('esa_mappings', '[]'),
+        'esa_mapping_rows': _esa_mapping_rows_for_ui(_get_setting('esa_mappings', '[]')),
+        'esa_deployment_mode': _get_setting('esa_deployment_mode', 'standalone'),
+        'esa_group_name': _get_setting('esa_group_name', ''),
+        'esa_host_name': _get_setting('esa_host_name', ''),
+    }
+
+
 @pages_bp.route('/settings')
 @admin_required_page
 def admin_settings():
-    """Admin settings page - configurable system settings (auth, LDAP, MISP)."""
+    """Admin settings: feeds, TAXII, cache, and search display options."""
     try:
-        _get_setting, = _from_app('_get_setting')
-        try:
-            from misp_settings import get_settings_for_form
-            misp_settings_dict = get_settings_for_form(_get_setting)
-        except ImportError:
-            misp_settings_dict = _misp_settings_fallback(_get_setting)
-        ldap_servers = _get_ldap_servers_for_form(_get_setting)
-        try:
-            from utils.feed_cache import FEED_CACHE_TTL_DEFAULT, normalize_feed_cache_ttl_seconds
-            _ttl_raw = int(_get_setting('feed_cache_ttl_seconds', '300') or '300')
-        except ValueError:
-            _ttl_raw = FEED_CACHE_TTL_DEFAULT
-        _feed_ttl = str(normalize_feed_cache_ttl_seconds(_ttl_raw))
-        settings = {
-            'auth_mode': _get_setting('auth_mode', 'local_only'),
-            'feeds_public_enabled': _get_setting('feeds_public_enabled', 'true'),
-            'feed_cache_enabled': _get_setting('feed_cache_enabled', 'true'),
-            'feed_cache_ttl_seconds': _feed_ttl,
-            'ldap_enabled': _get_setting('ldap_enabled', 'false'),
-            'ldap_url': _get_setting('ldap_url', ''),
-            'ldap_base_dn': _get_setting('ldap_base_dn', ''),
-            'ldap_bind_dn': _get_setting('ldap_bind_dn', ''),
-            'ldap_bind_password': _get_setting('ldap_bind_password', ''),
-            'ldap_servers': ldap_servers,
-            'ldap_user_filter': _get_setting('ldap_user_filter', '(sAMAccountName=%(user)s)'),
-            **misp_settings_dict,
-            'syslog_udp_enabled': _get_setting('syslog_udp_enabled', 'false'),
-            'syslog_udp_host': _get_setting('syslog_udp_host', ''),
-            'syslog_udp_port': _get_setting('syslog_udp_port', '514'),
-            'dxl_enabled': _get_setting('dxl_enabled', 'false'),
-            'dxl_config_path': _get_setting('dxl_config_path', ''),
-            'automation_fireeye_enabled': _get_setting('automation_fireeye_enabled', 'false'),
-            'automation_fireeye_appliances': _get_setting('automation_fireeye_appliances', '[]'),
-            'automation_fireeye_ignore_ssl': _get_setting('automation_fireeye_ignore_ssl', 'false'),
-            'search_comment_rtl_by_script': _get_setting('search_comment_rtl_by_script', 'true'),
-        }
-        return render_template('admin/settings.html', settings=settings)
+        return render_template('admin/settings.html', settings=_build_admin_settings_form_context())
     except Exception:
         logging.exception('admin_settings page failed')
+        from flask import abort
+        abort(500)
+
+
+@pages_bp.route('/integrations')
+@admin_required_page
+def admin_integrations():
+    """Admin integrations: LDAP, MISP, Syslog, DXL, YARA push, IOC push."""
+    try:
+        return render_template('admin/integrations.html', settings=_build_admin_settings_form_context())
+    except Exception:
+        logging.exception('admin_integrations page failed')
         from flask import abort
         abort(500)
 

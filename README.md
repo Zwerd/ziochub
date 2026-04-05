@@ -2,6 +2,14 @@
 
 ZIoCHub is a **modern IOC & YARA Management Platform** built for SOC operations. Analysts submit indicators, ZIoCHub stores them in a SQLite database, and security devices ingest **plain-text feeds** for enforcement. Designed for **air-gapped / offline** environments.
 
+### Recent highlights
+
+- **YARA Manager** is organized like **Submit IOCs**: **Upload · Write · Status** with an info card per mode. **Write** supports typing or pasting a rule, a **live Prism syntax preview** (same C-like highlighting as **View**), and **Check syntax** - server-side compilation via **[yara-python](https://github.com/VirusTotal/yara-python)** (official [YARA](https://github.com/VirusTotal/yara) / libyara engine). Install `yara-python` in the **same Python environment** as the app (`pip install -r requirements.txt`). For **offline** deployments, include a matching **wheel** in `packages/` or install system `libyara` dev packages when building from source; see **`OFFLINE.md`**.
+- **Cisco Secure Email Gateway (ESA)**: optional **content dictionary** sync from **Admin > Integrations > Cisco ESA** - push IOC values after login (`jwttoken`), batched **POST** add and **DELETE** remove per dictionary (Cisco AsyncOS API v2.0 shapes). Mappings are simple rows: **dictionary name** + one of **Email / Domain / IP / URL**. Supports **standalone / cluster / group / machine** query modes per the Secure Email API Guide. **cleaner.py** can remove words from ESA before deleting expired IOCs (toggle in UI).
+- **Submit IOCs**: bulk preview/staging improvements (e.g. TXT/paste deduplication, CSV parsing and URL/domain extraction).
+- **Champs Analysis**: **monthly team goals** count activity from the **1st of the current calendar month** through today (not a rolling 30-day window), so the HUD meter resets on the 1st. Team-goal API cache keys are scoped by calendar week/month to avoid stale bars after a period change. Ticker banner scroll direction (**RTL / LTR**) is configurable from admin **Ticker Message Settings**.
+- **Offline installer**: ships built-in default avatars only under `static/avatars/default/` (lab-specific images under `static/avatars/` are not bundled).
+
 ### Open Source Projects Used
 
 ZIoCHub is built on the following open source projects:
@@ -18,15 +26,18 @@ ZIoCHub is built on the following open source projects:
 | 8 | [ldap3](https://github.com/cannatag/ldap3) | LDAP/AD authentication (optional) |
 | 9 | [PyMISP](https://github.com/MISP/PyMISP) | MISP API integration (optional) |
 | 10 | [dxlclient](https://github.com/opendxl/opendxl-client-python) / [dxltieclient](https://github.com/opendxl/opendxl-tie-client-python) | McAfee DXL/TIE – ePO hash reputation (optional) |
-| 11 | [Tailwind CSS](https://tailwindcss.com/) | UI styling (build step) |
-| 12 | [Chart.js](https://www.chartjs.org/) | Charts and dashboards |
-| 13 | [vis-network](https://visjs.org/) (vis.js) | Campaign & IOC graph visualization |
-| 14 | [marked](https://github.com/markedjs/marked) | Markdown parsing (Reports, Playbook) |
-| 15 | [turndown](https://github.com/domchristie/turndown) | HTML-to-Markdown conversion |
-| 16 | [jsPDF](https://github.com/parallax/jsPDF) | PDF export (Reports) |
-| 17 | [html2canvas](https://html2canvas.hertzen.com/) | Screenshot for PDF export |
-| 18 | [Prism](https://prismjs.com/) | YARA syntax highlighting |
-| 19 | [Flag Icons](https://github.com/lipis/flag-icons) | Country flags in UI |
+| 11 | [yara-python](https://github.com/VirusTotal/yara-python) | Python bindings for [YARA](https://github.com/VirusTotal/yara); server-side rule compile / **Check syntax** in YARA Manager → Write (requires libyara at install time; see `requirements.txt`, `OFFLINE.md`) |
+| 12 | [Tailwind CSS](https://tailwindcss.com/) | UI styling (build step; local `tailwind-built.css` / `tailwind.min.js`) |
+| 13 | [Chart.js](https://www.chartjs.org/) | Charts and dashboards |
+| 14 | [vis-network](https://visjs.org/) (vis.js) | Campaign & IOC graph visualization |
+| 15 | [marked](https://github.com/markedjs/marked) | Markdown parsing (Reports, Playbook) |
+| 16 | [turndown](https://github.com/domchristie/turndown) | HTML-to-Markdown conversion |
+| 17 | [jsPDF](https://github.com/parallax/jsPDF) | PDF export (Reports) |
+| 18 | [html2canvas](https://html2canvas.hertzen.com/) | Screenshot for PDF export |
+| 19 | [Prism](https://prismjs.com/) | Syntax highlighting (YARA as C-like in View modal and Write preview) |
+| 20 | [Flag Icons](https://github.com/lipis/flag-icons) | Country flags in UI |
+
+**Development-only** (see `requirements-dev.txt`, not required at runtime): [pytest](https://pytest.org/), [pytest-cov](https://github.com/pytest-dev/pytest-cov), [Ruff](https://github.com/astral-sh/ruff), [Black](https://github.com/psf/black).
 
 ---
 
@@ -34,10 +45,11 @@ ZIoCHub is built on the following open source projects:
 
 - **Authentication & User Management**: Local accounts, optional LDAP/AD integration, admin roles, profile (display name, avatar), change password, optional "must change password" on first login
 - **MISP Integration**: Automatic IOC pull from a local MISP instance with configurable intervals
-- **Champs Analysis**: Analyst leaderboard, multiple scoring methods (Weighted, Flat, By Type, Campaign Focus, Time Decay, Quality, Goal-Based, Smart/Effort), streak bonuses, team goals, rank tracking, activity spotlight, news ticker
+- **Cisco ESA dictionary sync** (optional): After analyst submit/revoke (and on expiry via cleaner), sync IOC values to AsyncOS **content dictionaries** over HTTPS; configured under **Admin > Integrations**
+- **Champs Analysis**: Analyst leaderboard, multiple scoring methods (Weighted, Flat, By Type, Campaign Focus, Time Decay, Quality, Goal-Based, Smart/Effort), streak bonuses, **team goals** (weekly uses ISO weeks; monthly uses **calendar month**), rank tracking, activity spotlight, news ticker (banner direction RTL/LTR configurable in admin)
 - **Feed Pulse**: Real-time incoming/outgoing IOC monitoring with anomaly detection and analyst exclusions
 - **Campaign Management**: Visual graph (vis.js) of campaigns and associated IOCs
-- **YARA Rule Management**: Upload, approval workflow, quality scoring (10-50 pts), campaign linking
+- **YARA Rule Management**: **Upload · Write · Status** modes (aligned with Submit IOCs UX); **Write** with live Prism preview and server-side **Check syntax** (yara-python); upload, approval workflow, quality scoring (10-50 pts), campaign linking
 - **Intelligence Reports**: Period-based reports (day/week/month) with KPIs, type distribution, feed health, analyst activity, export to PDF
 - **Multi-vendor Feeds**: Standard, Palo Alto (EDL), Checkpoint (CSV) feed formats
 - **TAXII 2.1 / STIX 2.1**: TAXII 2.1 server for STIX 2.1 threat intelligence; active IOCs exposed as a TAXII collection for clients (e.g. Cisco IronPort ESA)
@@ -55,6 +67,7 @@ ZIoCHub is built on the following open source projects:
 
 ## Table of Contents
 
+- [Recent highlights](#recent-highlights)
 - [Open Source Projects Used](#open-source-projects-used)
 - [Installation](#installation)
 - [Ports & Network](#ports--network)
@@ -63,6 +76,7 @@ ZIoCHub is built on the following open source projects:
 - [Feed Endpoints](#feed-endpoints)
 - [API Endpoints](#api-endpoints)
 - [MISP Integration](#misp-integration)
+- [Cisco ESA dictionary sync](#cisco-esa-dictionary-sync)
 - [Data Model](#data-model)
 - [Configuration](#configuration)
 - [Maintenance](#maintenance)
@@ -114,10 +128,12 @@ sudo ./setup.sh --upgrade --offline
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt   # includes yara-python for YARA "Check syntax"
 python app.py
 # Open http://127.0.0.1:5000
 ```
+
+If **Check syntax** fails with a compiler / `No module named 'yara'` message, ensure `yara-python` is installed in **this** venv (same interpreter as `python app.py`). On Linux, if only a source tarball is available, you may need `libyara-dev` (or equivalent) to build. See **`OFFLINE.md`** for air-gapped wheel placement.
 
 Default credentials: `admin` / `admin`
 
@@ -171,7 +187,7 @@ Single and bulk submission: auto-type detection, input cleaning (refanger), TTL,
 Real-time feed health monitoring: incoming IOCs, outgoing (expired), deleted, sanity anomalies with exclude/un-exclude.
 
 ### YARA Manager
-Upload, preview, edit, approve/reject YARA rules. Quality scoring, campaign linking, syntax highlighting.
+**Upload** (file drop), **Write** (rule in browser with Prism live preview and **Check syntax** via yara-python), **Status** (pending + active repository). Preview/edit modals with Prism highlighting; approve/reject; quality scoring; campaign linking.
 
 ### Champs Analysis
 Analyst leaderboard with weighted scoring, streak bonuses, rank trends, team goals, activity spotlight, news ticker.
@@ -190,7 +206,7 @@ User profile (display name, avatar, role description, email) and change-password
 
 ### Admin Panel
 - **Users**: Create, edit, deactivate users; avatar management; system users marked separately
-- **Settings**: Auth mode (local/LDAP), LDAP config, MISP integration, CEF/Syslog UDP (optional)
+- **Settings** / **Integrations**: Auth mode (local/LDAP), LDAP, MISP, Syslog/CEF, DXL, outbound pushes, **Cisco ESA**, feeds-related options (see **Settings** page for feed/TAXII/cache)
 - **Allowlist**: Edit raw allowlist file (known-good / critical assets)
 - **Certificate**: SSL/TLS certificate upload for HTTPS
 - **Scoring**: Champs scoring method (Weighted, Flat, By Type, Campaign Focus, Time Decay, Quality, Goal-Based, Smart)
@@ -224,7 +240,9 @@ User profile (display name, avatar, role description, email) and change-password
 
 | Endpoint | Format |
 |----------|--------|
-| `/feed/cp/ip`, `/domain`, `/url`, `/hash`, `/md5`, `/sha1`, `/sha256` | CSV with observe numbers |
+| `/feed/cp/ip`, `/feed/cp/domain`, `/feed/cp/url` | CSV with observe numbers |
+| `/feed/cp/hash` | All hashes (MD5, SHA-1, SHA-256, SHA-512) |
+| `/feed/cp/md5`, `/feed/cp/sha1`, `/feed/cp/sha256` | Hash only for that algorithm; `/feed/cp/sha2` is an alias for SHA-256 (same as `/sha256`) |
 
 ### YARA Feeds
 
@@ -300,6 +318,36 @@ The `misp_sync` user is created as `source='system'` and cannot log in.
 
 ---
 
+## Cisco ESA dictionary sync
+
+Optional integration to push **Email, Domain, IP, and URL** IOC values into **Cisco Secure Email Gateway (AsyncOS)** content dictionaries using the REST API (v2.0 style, as in the Cisco Secure Email API Guide).
+
+### Configuration (**Admin > Integrations > Cisco ESA**)
+
+| Area | Description |
+|------|-------------|
+| Enable | Turn sync on/off |
+| API base URL | No trailing slash; must include the API root (e.g. `https://esa.example.com:6080/esa/api/v2.0`) |
+| Username / passphrase | Plain credentials; the app Base64-encodes them for `POST .../login` and uses the returned JWT as the **`jwttoken`** header on later calls |
+| Verify TLS | Disable only if you use a private CA and accept the risk |
+| **API deployment level** | **Standalone** (`device_type=esa` only), **Cluster** (`mode=cluster`), **Group** (`mode=group` + **Group name**), or **Machine** (`mode=machine` + **Host name**). Must match your deployment. |
+| Dictionary mappings | One or more rows: **exact dictionary name** on the appliance + **one** IOC type (Email, Domain, IP, URL) |
+| Skip MISP sync user | Recommended: do not push IOCs whose analyst is the MISP sync user |
+| Remove on expire | If enabled, **`cleaner.py`** calls ESA **DELETE** before removing expired rows locally (same DB as the app) |
+
+**Test connection** calls login and `GET .../config/dictionaries` with the same query string as dictionary operations.
+
+### Behaviour (implemented in code)
+
+- **Add**: `POST .../config/dictionaries/<name>/words?...` with body `{"data":{"words":[["term1"],["term2"],...]}}` (Cisco **add** shape).
+- **Remove**: `DELETE` to the same path with body `{"data":{"words":["term1","term2",...]}}` (Cisco **delete** shape: flat string list).
+- **Batching**: Multiple IOCs in one bulk operation are grouped **per dictionary**; one login per push, then one POST (or DELETE) per dictionary with all relevant terms.
+- **Triggers**: Successful IOC create (including bulk/staging paths), manual **revoke** in Search, and **expired IOC cleanup** when the setting is on.
+
+Settings are stored in `system_settings` (`esa_*` keys). There is no per-admin JSON templating; paths and bodies follow the documented API.
+
+---
+
 ## Data Model
 
 SQLite database: `data/ziochub.db`
@@ -315,7 +363,7 @@ SQLite database: `data/ziochub.db`
 | `campaigns` | Campaign metadata (name, description, dir ltr/rtl) |
 | `yara_rules` | YARA rule metadata, quality_points, status (pending/approved/rejected) |
 | `sanity_exclusions` | Analyst-excluded Feed Pulse anomalies (value, ioc_type, anomaly_type) |
-| `system_settings` | Key-value store (auth, LDAP, MISP, Champs, syslog UDP) |
+| `system_settings` | Key-value store (auth, LDAP, MISP, **Cisco ESA** `esa_*`, Champs, syslog UDP, IOC push, etc.) |
 | `activity_events` | Champs activity log (ioc_submit, yara_upload, rank_change, goal_progress, deletion) |
 | `team_goals` | Champs team goals (target, current, period, goal_type) |
 | `champ_rank_snapshots` | Daily rank snapshots for trend tracking |
@@ -330,8 +378,8 @@ SQLite database: `data/ziochub.db`
 |----------|---------|-------------|
 | `FLASK_PORT` | `5000` | Dev server port |
 | `FLASK_DEBUG` | `false` | Debug mode |
-| `FLASK_ENV` | — | Set to `production` in production; used with DEV_MODE for startup security warning |
-| `ZIOCHUB_ENV` | — | Alternative to FLASK_ENV; set to `production` in production |
+| `FLASK_ENV` | (empty) | Set to `production` in production; used with DEV_MODE for startup security warning |
+| `ZIOCHUB_ENV` | (empty) | Alternative to FLASK_ENV; set to `production` in production |
 | `DEV_MODE` | `0` | Do not enable in production (dev auto-login, LDAP mock). App logs warning when on, and error when on with production env |
 | `SECRET_KEY` | random | Flask secret key (set in production) |
 | `ZIOCHUB_DATA_DIR` | `<app>/data` | Data directory override |
@@ -347,8 +395,9 @@ SQLite database: `data/ziochub.db`
 - **Auth Mode**: `local_only`, `ldap_only`, `ldap_with_local_fallback`
 - **LDAP**: URL, Base DN, Bind DN, User Filter
 - **MISP**: URL, API key, filters, sync interval, TTL, Champs exclusion
-- **Syslog / CEF**: Optional UDP syslog (host, port) for CEF audit events
-- **Champs**: Scoring method (Admin > Scoring), ticker messages, team goals
+- **Integrations** (`/admin/integrations`): LDAP, MISP, Syslog, DXL, YARA push, IOC push, **Cisco ESA** dictionary sync
+- **Syslog / CEF**: Optional UDP syslog (host, port) for CEF audit events (also reachable from Integrations in some installs)
+- **Champs**: Scoring method (Admin > Scoring), ticker messages, team goals (set from Champs Analysis UI; **monthly** progress is **calendar month**)
 
 ---
 
@@ -369,7 +418,7 @@ sudo -u ziochub /opt/ziochub/backup_ziochub.sh
 
 ### Expired IOC Cleanup
 
-Automated via `ziochub-cleaner.timer`. Removes expired IOCs and logs each deletion to `ioc_history` with `event_type='expired'`.
+Automated via `ziochub-cleaner.timer`. Removes expired IOCs and logs each deletion to `ioc_history` with `event_type='expired'`. If **Cisco ESA** “remove on expire” is enabled, the cleaner removes matching dictionary words on the appliance **before** deleting rows (uses the same SQLite `system_settings` as the app).
 
 ### Data Reset
 
@@ -476,14 +525,14 @@ constants.py        Application constants (VERSION, IOC_FILES, limits)
 config.py           Configuration (optional)
 
 routes/
-  admin.py          Admin API (users, settings, certificate, MISP, allowlist)
+  admin.py          Admin API (users, settings, certificate, MISP, ESA test, allowlist)
   auth.py           Login, logout, profile, change password, LDAP health
-  champs.py         Champs leaderboard, team goals, ticker
+  champs.py         Champs leaderboard, team goals (calendar month when monthly), ticker
   campaigns.py      Campaign CRUD and graph API
   feeds.py          Feed generation (standard, PA, CP, YARA; STIX helpers)
-  ioc.py            IOC submit (single/bulk) API
+  ioc.py            IOC submit (single/bulk) API; schedules optional ESA dictionary add (background)
   reports.py        Intelligence reports (period-based stats, PDF export)
-  search.py         Search, edit, delete, history API
+  search.py         Search, edit, delete, history API; schedules optional ESA remove on revoke
   stats.py          Live stats counts, geo/TLD/email intelligence
   taxii_server.py   TAXII 2.1 server (STIX 2.1 indicators collection)
   yara.py           YARA rule management API
@@ -493,7 +542,7 @@ utils/
   refanger.py         Input cleaning (defang reversal)
   allowlist.py        Allowlist loading and checking
   feed_helpers.py     Feed formatting helpers
-  yara_utils.py       YARA file path utilities
+  yara_utils.py       YARA file path safety, in-memory syntax validation (yara-python)
   validation_warnings.py   IOC submission warnings
   validation_messages.py   Error message constants
   sanity_checks.py    Feed Pulse anomaly detection
@@ -503,7 +552,9 @@ utils/
   champs.py           Analyst scoring, ranking, badges, XP
   misp_sync.py        MISP fetch, validate, import, lock
   ioc_decode.py       Text extraction for bulk IOC parsing
+  esa_dictionary.py   Cisco ESA AsyncOS dictionary sync (login, batched add/remove)
   cef_logger.py       CEF audit logging (local file + optional UDP syslog)
+  cache.py            In-memory TTL cache (`get_cached` / `set_cached` / `delete_cached` / `delete_cached_prefix`)
   mentorship.py       SOC Mentorship Insights Engine (behavioral analysis, 45 rules)
 ```
 
@@ -527,7 +578,7 @@ Single-Page Application in `templates/index.html` with lazy-loaded JS modules:
 | `static/js/reports.js` | Intelligence reports (period picker, charts, PDF export) |
 | `static/js/profile.js` | User profile and avatar |
 
-Vendor libraries (all local, no CDN): Tailwind, Chart.js, vis.js, marked, turndown, Prism, html2canvas, jsPDF.
+Vendor libraries (all local, no CDN): Tailwind, Chart.js, vis.js, marked, turndown, Prism, html2canvas, jsPDF. Python runtime also uses **yara-python** (see [Open Source Projects Used](#open-source-projects-used)).
 
 ### Templates
 
@@ -541,7 +592,8 @@ templates/
   admin/
     base.html         Admin layout
     users.html        User management
-    settings.html     System settings (Auth, LDAP, MISP, Syslog)
+    settings.html     System settings (feeds, cache, search options, etc.)
+    integrations.html LDAP, MISP, Syslog, DXL, pushes, **Cisco ESA**
     allowlist.html    Allowlist editor
     certificate.html SSL/TLS certificate
     scoring.html      Champs scoring method
@@ -620,22 +672,22 @@ journalctl -u ziochub --since today --no-pager
 
 The UI shows **"Network error"** when the request to upload an avatar fails (e.g. server error, timeout, or no response). Check the **server** side:
 
-1. **Logs** — See [Where to find logs](#where-to-find-logs) above. After a failed upload, run:
+1. **Logs**: See [Where to find logs](#where-to-find-logs) above. After a failed upload, run:
    ```bash
    journalctl -u ziochub -n 50 --no-pager
    ```
    Look for `api_profile_avatar_upload failed` or `api_admin_user_avatar_upload failed` and the Python traceback below.
 
-2. **Permissions** — The app (user `ziochub`) must be able to write to `static/avatars/`:
+2. **Permissions**: The app (user `ziochub`) must be able to write to `static/avatars/`:
    ```bash
    ls -la /opt/ziochub/static/avatars
    sudo chown -R ziochub:ziochub /opt/ziochub/static/avatars
    sudo chmod 755 /opt/ziochub/static/avatars
    ```
 
-3. **File size** — Max upload is 16 MB by default (`MAX_CONTENT_LENGTH`). Very large images may be rejected with 413.
+3. **File size**: Max upload is 16 MB by default (`MAX_CONTENT_LENGTH`). Very large images may be rejected with 413.
 
-4. **Lab users’ avatars** — If you used `create_lab_users.py`, avatars are copied from `users/` only when image files exist there (e.g. `users/alice.jpg`). To add/update avatars after creation, either run the script again with images in `users/`, or use the UI (Profile or Admin > Users) to upload; if the UI shows "Network error", use the logs and permissions steps above.
+4. **Lab users’ avatars**: If you used `create_lab_users.py`, avatars are copied from `users/` only when image files exist there (e.g. `users/alice.jpg`). To add/update avatars after creation, either run the script again with images in `users/`, or use the UI (Profile or Admin > Users) to upload; if the UI shows "Network error", use the logs and permissions steps above.
 
 ### Service won't start
 
@@ -691,4 +743,4 @@ sudo ./setup.sh --offline      # Fresh install
 
 **ZIoCHub v2.0 Beta - IOC & YARA Mgmt**  
 Single source of version: `constants.py` → `VERSION` (used in UI and docs).  
-Last updated: **March 2026**
+Last updated: **April 2026**

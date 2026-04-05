@@ -798,7 +798,7 @@ def revoke_ioc():
         analyst_name = (row.analyst or current_user.username if current_user.is_authenticated else None) or ''
         delete_payload = {'was_expired': was_expired, 'reason': reason}
         _log_ioc_history(ioc_type, value, 'deleted', current_user.username if current_user.is_authenticated else analyst_name, delete_payload)
-        # Self-delete: same user submitted (user_id) and/or gets Champs credit (analyst) — no +1 deletion bonus
+        # Self-delete: same user submitted (user_id) and/or gets Champs credit (analyst)-no +1 deletion bonus
         deleter_un = (current_user.username or '').strip().lower()
         ioc_analyst_un = (row.analyst or '').strip().lower()
         skip_deletion_bonus = (
@@ -817,6 +817,12 @@ def revoke_ioc():
             champs_payload['skip_deletion_bonus'] = True
         _log_champs_event('ioc_deletion', user_id=current_user.id, payload=champs_payload)
         audit_log('IOC_DELETE', f'type={ioc_type} value={value[:80]} reason={reason[:100]}')
+        try:
+            from flask import current_app
+            from utils.esa_dictionary import schedule_esa_remove_after_revoke
+            schedule_esa_remove_after_revoke(current_app._get_current_object(), ioc_type, value)
+        except Exception as esa_err:
+            logger.warning('ESA dictionary schedule after revoke failed: %s', esa_err)
         refresh_champ_score_for_user(current_user.id)
         response = {'success': True, 'message': f'{ioc_type} IOC revoked successfully'}
         try:

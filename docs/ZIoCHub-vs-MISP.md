@@ -94,7 +94,7 @@ This document summarizes the key differences between **ZIoCHub** and **MISP** (M
 
 ### 4.2 Analyst Engagement and Visibility
 
-- **Champs**: leaderboard, multiple scoring methods, streaks, team goals, badges — encourages participation and makes contribution visible.
+- **Champs**: leaderboard, multiple scoring methods, streaks, team goals, badges-encourages participation and makes contribution visible.
 - **Analyst Spotlight** in reports and in-app: who is active, top contributors, trends.
 - **MISP Sync user** can be excluded from Champs and spotlight so automated import doesn’t distort rankings.
 

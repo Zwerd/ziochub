@@ -1,4 +1,4 @@
-# Authentication — Offline & Air-Gapped Deployment
+# Authentication-Offline & Air-Gapped Deployment
 
 This document describes how to run ZIoCHub **fully offline** with no AD, no LDAP, and no network access.
 

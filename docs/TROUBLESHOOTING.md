@@ -1,4 +1,4 @@
-# ZIoCHub — Troubleshooting
+# ZIoCHub-Troubleshooting
 
 This guide covers common issues in **offline and online** deployments. All solutions use only local resources (no network required for core fixes).
 
@@ -12,10 +12,10 @@ This guide covers common issues in **offline and online** deployments. All solut
 
 **What to do:**
 
-1. **Single instance** — Ensure only one ZIoCHub app process is running (e.g. one `ziochub.service`). Multiple processes (e.g. dev + production) pointing at the same `ziochub.db` will lock each other.
-2. **Stale locks** — If the app crashed, SQLite usually releases the lock when the process exits. Restart the service:  
+1. **Single instance**-Ensure only one ZIoCHub app process is running (e.g. one `ziochub.service`). Multiple processes (e.g. dev + production) pointing at the same `ziochub.db` will lock each other.
+2. **Stale locks**-If the app crashed, SQLite usually releases the lock when the process exits. Restart the service:  
    `sudo systemctl restart ziochub`
-3. **Retries** — The application retries commit on "database is locked" (a few attempts with short backoff). If errors persist, reduce concurrent feed polling or stagger heavy write operations.
+3. **Retries**-The application retries commit on "database is locked" (a few attempts with short backoff). If errors persist, reduce concurrent feed polling or stagger heavy write operations.
 
 ---
 
@@ -123,7 +123,7 @@ This guide covers common issues in **offline and online** deployments. All solut
    ```
    and ensure that path exists and is writable by `ziochub`.
 
-5. **Logs** — See [Where to find logs](#where-to-find-logs) below.
+5. **Logs**-See [Where to find logs](#where-to-find-logs) below.
 
 ---
 
@@ -161,15 +161,15 @@ The message means the browser’s request to the server failed (no response, 4xx
    ```
    Reproduce the upload, then look for `api_profile_avatar_upload failed` or `api_admin_user_avatar_upload failed` and the Python traceback.
 
-2. **Permissions** — The process runs as user `ziochub` and must write to `static/avatars/`:
+2. **Permissions**-The process runs as user `ziochub` and must write to `static/avatars/`:
    ```bash
    sudo chown -R ziochub:ziochub /opt/ziochub/static/avatars
    sudo chmod 755 /opt/ziochub/static/avatars
    ```
 
-3. **File size** — Default max upload is 16 MB (`MAX_CONTENT_LENGTH`). Very large images can return 413.
+3. **File size**-Default max upload is 16 MB (`MAX_CONTENT_LENGTH`). Very large images can return 413.
 
-4. **Lab users** — Avatars from `create_lab_users.py` are copied only if image files exist in `users/` (e.g. `users/alice.jpg`). To add avatars later, either put images in `users/` and re-run the script, or use the UI; if the UI shows "Network error", use the logs and permissions above.
+4. **Lab users**-Avatars from `create_lab_users.py` are copied only if image files exist in `users/` (e.g. `users/alice.jpg`). To add avatars later, either put images in `users/` and re-run the script, or use the UI; if the UI shows "Network error", use the logs and permissions above.
 
 ---
 

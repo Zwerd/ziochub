@@ -1165,7 +1165,7 @@ button:focus-visible {
 [data-theme="light"] #tab-feed-pulse .text-blue-400 { color: #2563eb !important; }
 [data-theme="light"] #tab-feed-pulse .text-slate-300 { color: #475569 !important; }
 
-/* --- Live Stats: light theme (same look as Feed Pulse — use global glass card style) --- */
+/* --- Live Stats: light theme (same look as Feed Pulse-use global glass card style) --- */
 [data-theme="light"] #tab-live-stats .stats-sticky-header {
     border-bottom: 1px solid rgba(0, 0, 0, 0.1);
 }
@@ -1245,7 +1245,7 @@ button:focus-visible {
     100% { left: 180%; }
 }
 
-/* ========== Champs Analysis Tab — Operational Hall of Fame (motivating, competitive) ========== */
+/* ========== Champs Analysis Tab-Operational Hall of Fame (motivating, competitive) ========== */
 .champs-tab {
     --champs-cyan: #00d4ff;
     --champs-green: #00ff41;
@@ -1270,7 +1270,7 @@ button:focus-visible {
     letter-spacing: 0.02em;
 }
 
-/* Team HUD — mission progress (premium) */
+/* Team HUD-mission progress (premium) */
 .champs-hud-card {
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
@@ -1287,7 +1287,7 @@ button:focus-visible {
     text-shadow: 0 0 10px rgba(0, 255, 65, 0.4);
 }
 
-/* Ladder — leaderboard */
+/* Ladder-leaderboard */
 .champs-ladder {
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
 }
@@ -1306,7 +1306,7 @@ button:focus-visible {
     border-color: rgba(0, 212, 255, 0.35);
     box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.2);
 }
-/* Top 3 — podium feel */
+/* Top 3-podium feel */
 .champs-ladder-row.champs-rank-1 {
     background: linear-gradient(135deg, rgba(251, 191, 36, 0.12) 0%, rgba(251, 191, 36, 0.04) 100%);
     border-color: rgba(251, 191, 36, 0.25);
@@ -1335,7 +1335,7 @@ button:focus-visible {
     box-shadow: 0 0 10px rgba(217, 119, 6, 0.15);
 }
 
-/* Top 3: medal — smooth breathing: 1s up to max, 1s down to min (2s cycle) */
+/* Top 3: medal-smooth breathing: 1s up to max, 1s down to min (2s cycle) */
 .champs-medal-circle {
     animation: champs-medal-pulse 4s ease-in-out infinite;
 }
@@ -1413,7 +1413,7 @@ button:focus-visible {
     justify-content: center;
 }
 
-/* Ladder: score & rank numbers — larger, eye-catching; top 3 medal colors */
+/* Ladder: score & rank numbers-larger, eye-catching; top 3 medal colors */
 .champs-rank-num {
     font-size: 1.125rem;
     color: var(--text-secondary);
@@ -1453,7 +1453,7 @@ button:focus-visible {
     color: #d97706;
     text-shadow: 0 0 10px rgba(217, 119, 6, 0.45);
 }
-/* Trend: [N+ ] ▲ / [N-  ] ▼ — cyber bracket + arrows, glowing */
+/* Trend: [N+ ] ▲ / [N-  ] ▼-cyber bracket + arrows, glowing */
 .champs-trend-bracket {
     letter-spacing: 0.05em;
     opacity: 0.95;
@@ -1473,7 +1473,7 @@ button:focus-visible {
     filter: drop-shadow(0 0 6px rgba(248, 113, 113, 0.5));
 }
 
-/* Spotlight — analyst card (trophy feel) */
+/* Spotlight-analyst card (trophy feel) */
 .champs-spotlight-wrap {
     background: var(--glass-bg);
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -1525,7 +1525,7 @@ button:focus-visible {
     box-shadow: 0 0 8px rgba(0, 212, 255, 0.4);
 }
 
-/* Badges — achievement pills */
+/* Badges-achievement pills */
 .champs-badge {
     background: rgba(255, 255, 255, 0.1);
     border: 1px solid rgba(255, 255, 255, 0.1);
@@ -1572,7 +1572,7 @@ button:focus-visible {
 .champs-badge-consistent { background: rgba(74, 222, 128, 0.2); border-color: rgba(74, 222, 128, 0.35); color: #86efac; }
 .champs-badge-ever { background: rgba(34, 211, 238, 0.25); border-color: rgba(34, 211, 238, 0.5); color: #67e8f9; }
 
-/* Trophy Cabinet — right sidebar, large badges with circle + label */
+/* Trophy Cabinet-right sidebar, large badges with circle + label */
 .champs-trophy-cabinet {
     display: flex;
     flex-direction: column;
@@ -1662,7 +1662,7 @@ button:focus-visible {
     line-height: 1.2;
 }
 
-/* Ticker — BBC-style breaking news: fills panel, bold, green separators, scrolling marquee loop */
+/* Ticker-BBC-style breaking news: fills panel, bold, green separators, scrolling marquee loop */
 .champs-ticker {
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
     min-height: 3.5rem;
@@ -1766,7 +1766,7 @@ button:focus-visible {
     100% { transform: translateX(-50%); }
 }
 
-/* Champs — Light mode (softer glows, same structure) */
+/* Champs-Light mode (softer glows, same structure) */
 [data-theme="light"] .champs-title {
     text-shadow: 0 0 12px rgba(0, 102, 204, 0.25);
 }
@@ -1975,7 +1975,7 @@ button:focus-visible {
     .champs-stat-card:hover { transform: none; }
 }
 
-/* ========== Hunter's Playbook (OSINT & Threat Intel Sites — Tabs Layout) ========== */
+/* ========== Hunter's Playbook (OSINT & Threat Intel Sites-Tabs Layout) ========== */
 .playbook-index,
 .playbook-reading-pane {
     background: var(--glass-bg);

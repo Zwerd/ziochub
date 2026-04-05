@@ -54,7 +54,7 @@ Phase 0 (Foundation) → Phase 1 (Scoring) → Phase 2 (Ladder) → Phase 3 (Spo
 
 | # | משימה | פרטים |
 |---|-------|--------|
-| 2.1 | Endpoint `GET /api/champs/leaderboard` | רשימת אנליסטים: rank, username, display_name, score, avatar_path, trend (▲+2 / ▼-1 / —), medal |
+| 2.1 | Endpoint `GET /api/champs/leaderboard` | רשימת אנליסטים: rank, username, display_name, score, avatar_path, trend (▲+2 / ▼-1 / -), medal |
 | 2.2 | חישוב trend | השוואת rank היום ל-rank אתמול (מ-`champ_rank_snapshots` או חישוב on-the-fly) |
 | 2.3 | Layout חדש ל-tab Champs | סרגל שמאל ~25% - רשימת אנליסטים עם avatar, שם, מדליה, trend |
 | 2.4 | CSS: עיצוב הלידרבורד | Avatars בעיגול, הדגשת top 3, אנימציית hover |

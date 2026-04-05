@@ -1,4 +1,4 @@
-# DXL / TIE Integration — ZIoCHub
+# DXL / TIE Integration-ZIoCHub
 
 מסמך זה מתאר את מה שצריך לעשות כדי להכניס תמיכת DXL (OpenDXL) במערכת ZIoCHub, כולל מנגנון וידוא שהאינטגרציה עובדת תקין.
 
@@ -42,7 +42,7 @@
 
 אם בחרתם `/opt/ziochub/certs/dxl/` - ב־ZIoCHub תזינו **Path to dxlclient.config** = `/opt/ziochub/certs/dxl/dxlclient.config`. יש להקפיד שהמשתמש שמריץ את ZIoCHub (למשל `www-data` או `ziochub`) יוכל לקרוא את כל הקבצים בתיקייה.
 
-### 2.2 התקנת חבילות Python — עם אינטרנט
+### 2.2 התקנת חבילות Python-עם אינטרנט
 
 על השרת הלינוקס (בסביבה שבה רץ ZIoCHub, למשל venv):
 
@@ -56,7 +56,7 @@ pip install dxlclient dxltieclient
 
 גרסאות מינימליות מומלצות: `dxlclient>=5.0.0`, `dxltieclient>=0.3.0` (כמו ב־requirements.txt של ZIoCHub).
 
-### 2.3 התקנת חבילות Python — מצב OFFLINE (ללא אינטרנט)
+### 2.3 התקנת חבילות Python-מצב OFFLINE (ללא אינטרנט)
 
 1. **במכונה עם אינטרנט** (Windows או לינוקס אחר):
    - צור סביבה עם אותו גרסת Python כמו על השרת (למשל 3.10).
@@ -90,7 +90,7 @@ pip install dxlclient dxltieclient
 
 ---
 
-## 3. רשימת משימות — מה לעשות במערכת ZIoCHub
+## 3. רשימת משימות-מה לעשות במערכת ZIoCHub
 
 ### 3.1 הגדרות (SystemSetting + Admin UI)
 
@@ -105,7 +105,7 @@ pip install dxlclient dxltieclient
 - **אפשרות א' (מומלצת):** שדה יחיד `dxl_config_path` - נתיב מלא לקובץ `dxlclient.config` (כפי שנוצר ב־provisioning). Test Connection ו־runtime טוענים את הקובץ.  
 - **אפשרות ב':** שדות נפרדים: `dxl_broker_list` (למשל `host1:8883,host2:8883`), `dxl_broker_certs_path`, `dxl_client_cert_path`, `dxl_client_key_path` (ואולי `dxl_client_key_password`). אז ב־runtime בונים אובייקט config מתוך השדות במקום מקובץ.
 
-### 3.2 Test Connection — מנגנון וידוא
+### 3.2 Test Connection-מנגנון וידוא
 
 | משימה | תיאור |
 |-------|--------|
@@ -132,7 +132,7 @@ pip install dxlclient dxltieclient
 
 ---
 
-## 4. מנגנון וידוא — סיכום
+## 4. מנגנון וידוא-סיכום
 
 - **הגדרה נכונה:** Admin מגדיר DXL (path או שדות) ושומר.
 - **Test Connection:** לפני שמפעילים "Enabled", לוחצים Test Connection ורואים שלבים: טעינת config → חיבור ל־broker → (אופציונלי) שליחת reputation בדיקה ל־TIE → הצלחה/כישלון. רק אם הטסט עובר - להשאיר DXL enabled.
@@ -140,7 +140,7 @@ pip install dxlclient dxltieclient
 
 ---
 
-## 5. הערות באנגלית — What ZIoCHub Needs for Successful Broker Connection and TIE Updates
+## 5. הערות באנגלית-What ZIoCHub Needs for Successful Broker Connection and TIE Updates
 
 The following is from **ZIoCHub’s point of view only**: what the application must have and do so that it can connect to the DXL broker and update TIE correctly. It does not cover ePO/server-side provisioning or certificate issuance.
 

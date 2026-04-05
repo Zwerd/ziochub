@@ -1809,7 +1809,7 @@ button:focus-visible {
     font-family: var(--champs-ui-font) !important;
 }
 
-/* Form controls inherit Inter from global body,button rule — force Champs UI font inside tab */
+/* Form controls inherit Inter from global body,button rule-force Champs UI font inside tab */
 #tab-champs.champs-tab button:not(.font-mono),
 #tab-champs.champs-tab input,
 #tab-champs.champs-tab select,

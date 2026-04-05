@@ -12,7 +12,7 @@ from models import FeedCacheEntry, _utcnow
 
 logger = logging.getLogger(__name__)
 
-# Seconds: 1m, 5m, 10m, 15m, 30m, 1h, 12h — must match Admin UI presets
+# Seconds: 1m, 5m, 10m, 15m, 30m, 1h, 12h-must match Admin UI presets
 FEED_CACHE_TTL_PRESETS = (60, 300, 600, 900, 1800, 3600, 43200)
 # Default when unset, invalid, or not in presets (save path)
 FEED_CACHE_TTL_DEFAULT = 300

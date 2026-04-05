@@ -36,6 +36,14 @@ class TTLCache:
             self._store.pop(key, None)
             self._expiry.pop(key, None)
 
+    def delete_prefix(self, prefix: str):
+        """Remove all keys that start with prefix (e.g. invalidate champs_team_goal:*)."""
+        with self._lock:
+            for k in list(self._store.keys()):
+                if k.startswith(prefix):
+                    self._store.pop(k, None)
+                    self._expiry.pop(k, None)
+
 
 # Singleton used by routes
 _cache = TTLCache(default_ttl_seconds=120)
@@ -51,3 +59,7 @@ def set_cached(key, value, ttl_seconds=120):
 
 def delete_cached(key):
     _cache.delete(key)
+
+
+def delete_cached_prefix(prefix: str):
+    _cache.delete_prefix(prefix)

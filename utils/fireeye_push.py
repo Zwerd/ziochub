@@ -72,7 +72,7 @@ def push_yara_to_appliances(
 
     if not verify_ssl:
         logging.warning(
-            'YARA automation push: TLS certificate verification is disabled (self-signed / ignore-cert mode)'
+            'YARA push: TLS certificate verification is disabled (self-signed / ignore-cert mode)'
         )
 
     ctx = _ssl_context(verify_ssl)
@@ -196,7 +196,7 @@ def delete_yara_from_appliances(
     return {'overall_success': overall, 'results': results}
 
 
-# Minimal valid YARA rule for Admin → Settings → Automation "Test connection" (same POST as real approval).
+# Minimal valid YARA rule for Admin → Settings → YARA push "Test connection" (same POST as real approval).
 # condition: false ensures it never matches if the endpoint stores the rule.
 _TEST_YARA_RULE = """rule ziochub_connection_test {
     meta:
@@ -209,7 +209,7 @@ _TEST_YARA_RULE = """rule ziochub_connection_test {
 
 def test_yara_push_connections(appliances: list, *, verify_ssl: bool = True) -> dict:
     """
-    POST each target with a minimal valid YARA body — same transport as push_yara_to_appliances.
+    POST each target with a minimal valid YARA body-same transport as push_yara_to_appliances.
     Does not write settings. Use from Admin UI to verify connectivity before relying on approval push.
     """
     if not appliances:

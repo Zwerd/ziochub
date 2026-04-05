@@ -44,6 +44,23 @@ def clean_expired_iocs(db_path):
         if not expired_rows:
             return 0
 
+        # Cisco ESA: remove dictionary words before IOC rows are deleted (uses system_settings from DB).
+        try:
+            esa_rows = conn.execute(
+                "SELECT key, value FROM system_settings WHERE key LIKE 'esa_%'"
+            ).fetchall()
+            from utils.esa_dictionary import esa_settings_from_sqlite_rows, process_expired_ioc_rows_for_esa
+
+            esa_cfg = esa_settings_from_sqlite_rows([(r[0], r[1]) for r in esa_rows])
+            pairs = [(row["type"], row["value"]) for row in expired_rows]
+            process_expired_ioc_rows_for_esa(
+                pairs,
+                esa_cfg,
+                log_fn=lambda m: print(f"[cleaner] {m}"),
+            )
+        except Exception as e:
+            print(f"[cleaner] ESA cleanup skipped or failed: {e}")
+
         for row in expired_rows:
             payload = json.dumps({'source': 'cleaner', 'reason': 'ttl_expired'})
             conn.execute(

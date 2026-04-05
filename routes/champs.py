@@ -27,7 +27,7 @@ from utils.champs import (
     _week_start,
 )
 from utils.decorators import login_required, admin_required
-from utils.cache import get_cached, set_cached, delete_cached
+from utils.cache import get_cached, set_cached, delete_cached, delete_cached_prefix
 
 
 bp = Blueprint('champs_api', __name__, url_prefix='/api')
@@ -91,6 +91,17 @@ def _avatar_url_for_user(profile, user_id):
         return url_for('static', filename=profile.avatar_path)
     idx = ((user_id or 0) % 20) + 1
     return url_for('static', filename=f'avatars/default/avatar_{idx:02d}.svg')
+
+
+def _team_goal_cache_key(goal):
+    """Cache key scoped by goal id and calendar week/month so monthly meters reset without stale TTL."""
+    if not goal:
+        return 'champs_team_goal:none'
+    today = date.today()
+    if (goal.period or 'weekly') == 'weekly':
+        ws = _week_start(today)
+        return f'champs_team_goal:{goal.id}:w:{ws.isoformat()}'
+    return f'champs_team_goal:{goal.id}:m:{today.year:04d}{today.month:02d}'
 
 
 def _goal_milestone_already_logged(goal_id, milestone):
@@ -329,12 +340,12 @@ def get_champs_leaderboard():
 
 @bp.route('/champs/team-goal', methods=['GET'])
 def get_champs_team_goal():
-    """Return active team goal. Weekly goals: target = previous week's count (100%), current = this week so far."""
-    cache_key = 'champs_team_goal'
+    """Return active team goal. Weekly: target = previous week's count, current = this ISO week. Monthly: target fixed, current = since 1st of month."""
+    goal = TeamGoal.query.filter_by(is_active=True).order_by(TeamGoal.updated_at.desc()).first()
+    cache_key = _team_goal_cache_key(goal)
     cached = get_cached(cache_key)
     if cached is not None:
         return jsonify(cached)
-    goal = TeamGoal.query.filter_by(is_active=True).order_by(TeamGoal.updated_at.desc()).first()
     if not goal:
         out = {'success': True, 'goal': None}
         set_cached(cache_key, out, ttl_seconds=CHAMPS_CACHE_TTL)
@@ -412,6 +423,7 @@ def set_champs_team_goal():
         db.session.add(goal)
         _commit_with_retry()
         delete_cached('champs_team_goal')
+        delete_cached_prefix('champs_team_goal:')
         _log_champs_event('goal_created', user_id=current_user.id, payload={'goal_id': goal.id, 'title': title})
         return jsonify({'success': True, 'message': 'Team goal set', 'goal_id': goal.id})
     except (ValueError, TypeError) as e:

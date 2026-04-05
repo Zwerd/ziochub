@@ -1,4 +1,4 @@
-# CSS Design Audit Report — ZIoCHub IOC & YARA Mgmt
+# CSS Design Audit Report-ZIoCHub IOC & YARA Mgmt
 
 **Document version:** 1.0  
 **Scope:** `static/css/style.css` (~1,946 lines)  
@@ -6,7 +6,7 @@
 
 ---
 
-# Part 1 — Findings and Gaps
+# Part 1-Findings and Gaps
 
 ## 1.1 File structure and scale
 
@@ -51,8 +51,8 @@ The same “remove all borders” idea is expressed in multiple ways:
 
 ### 1.2.4 Glass card / theme block repeated for light and dark
 
-- Lines 179-188: `[data-theme="light"] .card, .bg-tertiary, .bg-secondary` — re-sets `background`, `border`, `box-shadow`, `backdrop-filter` that already use variables in the base rule (lines 180-188).
-- Lines 201-209: `[data-theme="dark"]` — same variables again.
+- Lines 179-188: `[data-theme="light"] .card, .bg-tertiary, .bg-secondary`-re-sets `background`, `border`, `box-shadow`, `backdrop-filter` that already use variables in the base rule (lines 180-188).
+- Lines 201-209: `[data-theme="dark"]`-same variables again.
 - Base rule (180-188) already uses `var(--glass-bg)`, `var(--glass-border)`, `var(--card-shadow)`; theme variables change with `[data-theme]`, so the theme blocks mostly repeat the same properties. Only light adds `backdrop-filter: blur(8px)`; dark could rely on variables alone.
 
 **Impact:** Redundant declarations; theme could be driven more by variables and fewer repeated blocks.
@@ -65,17 +65,17 @@ The same “remove all borders” idea is expressed in multiple ways:
 
 - **Lines 248-254:** `[data-theme="light"] input, select, textarea` (background, border, color).
 - **Lines 257-263:** `[data-theme="dark"] input, select, textarea` (same properties).
-- **Lines 268-281:** `select option` — light and dark again with hardcoded colors.
-- **Lines 284-293:** `option:checked` — light and dark again.
-- **Lines 296-318:** `input:focus`, `select:focus`, `textarea:focus` — light and dark with similar structure (border, box-shadow, background).
+- **Lines 268-281:** `select option`-light and dark again with hardcoded colors.
+- **Lines 284-293:** `option:checked`-light and dark again.
+- **Lines 296-318:** `input:focus`, `select:focus`, `textarea:focus`-light and dark with similar structure (border, box-shadow, background).
 
 **Gap:** No shared variables for “input background”, “input border”, “focus ring”; each theme block repeats structure. Could be one set of variables (e.g. `--input-bg`, `--input-border`, `--focus-ring`) and a single focus block using them.
 
 ### 1.3.2 Buttons
 
 - **Lines 716-724:** `.btn-cmd-primary` and hover, then `[data-theme="dark"]` again (same gradient, add box-shadow).
-- **Lines 862-870:** `.btn-cmd-danger` — same pattern.
-- **Lines 884-891:** `.btn-cmd-neutral` — light overrides border/color/hover; dark uses defaults.
+- **Lines 862-870:** `.btn-cmd-danger`-same pattern.
+- **Lines 884-891:** `.btn-cmd-neutral`-light overrides border/color/hover; dark uses defaults.
 
 **Gap:** Dark mode mostly repeats base styles and adds glow; could be expressed with variables (e.g. `--btn-glow`) and one rule set.
 
@@ -84,7 +84,7 @@ The same “remove all borders” idea is expressed in multiple ways:
 - **Lines 656-661:** Default scrollbar thumb (light gray).
 - **Lines 674-679:** `[data-theme="dark"]` thumb and hover.
 - **Lines 682-687:** `[data-theme="light"]` thumb and hover.
-- **Lines 690-699:** Firefox `scrollbar-color` — default, then dark, then light.
+- **Lines 690-699:** Firefox `scrollbar-color`-default, then dark, then light.
 
 **Gap:** Six small blocks; could be two (thumb, thumb-hover) using variables like `--scrollbar-thumb` and `--scrollbar-thumb-hover` set per theme.
 
@@ -105,19 +105,19 @@ Where both touch the same element (e.g. `.champs-hero`, `.champs-title`, `.champ
 
 ### 1.4.1 Reused color/opacity values
 
-- **`rgba(0, 0, 0, 0.1)`** — used 30+ times (borders, grid, focus, scrollbar, Live Stats, Champs).
-- **`rgba(0, 0, 0, 0.08)`** — borders in Live Stats and Champs light.
-- **`rgba(0, 0, 0, 0.03)`** — backgrounds (table hover light, Champs stat-card and activity-block light).
-- **`rgba(0, 0, 0, 0.04)`** — Champs ladder header light.
-- **`#475569`** — Feed Pulse and Champs light (slate text); could be `var(--text-secondary)` or a semantic variable.
-- **`#64748b`** — same family as `--text-secondary` in light; already in `:root`, but some rules use the hex.
-- **`#e2e8f0`** — country bar and Champs HUD track light; could be `--chart-track-bg` or similar.
+- **`rgba(0, 0, 0, 0.1)`**-used 30+ times (borders, grid, focus, scrollbar, Live Stats, Champs).
+- **`rgba(0, 0, 0, 0.08)`**-borders in Live Stats and Champs light.
+- **`rgba(0, 0, 0, 0.03)`**-backgrounds (table hover light, Champs stat-card and activity-block light).
+- **`rgba(0, 0, 0, 0.04)`**-Champs ladder header light.
+- **`#475569`**-Feed Pulse and Champs light (slate text); could be `var(--text-secondary)` or a semantic variable.
+- **`#64748b`**-same family as `--text-secondary` in light; already in `:root`, but some rules use the hex.
+- **`#e2e8f0`**-country bar and Champs HUD track light; could be `--chart-track-bg` or similar.
 
 **Impact:** Changing “light gray border” or “light fill” requires many find/replace operations; variables would centralize design tokens.
 
 ### 1.4.2 Repeated shadow patterns
 
-- **`0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)`** — already in `--card-shadow` for light, but some blocks set `box-shadow` to similar values instead of `var(--card-shadow)`.
+- **`0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)`**-already in `--card-shadow` for light, but some blocks set `box-shadow` to similar values instead of `var(--card-shadow)`.
 - Champs cards use multiple custom shadows (e.g. `0 4px 24px rgba(0, 0, 0, 0.2)`); no variable, so consistency is manual.
 
 ---
@@ -126,19 +126,19 @@ Where both touch the same element (e.g. `.champs-hero`, `.champs-title`, `.champ
 
 ### 1.5.1 Tab and navbar
 
-- **`div.bg-secondary.flex.items-center.backdrop-blur-sm`** (line 544) — depends on exact Tailwind class list; if class order or name changes, the rule silently stops applying.
-- **`div[class*="border"]:has(.tab-button)`** (line 624) — any element with “border” in the class and a tab-button gets borders forced off; broad and brittle.
-- **`div.flex:has(.tab-button):not(.navbar-left):not(.navbar-tabs)`** (716) — long and layout-coupled.
+- **`div.bg-secondary.flex.items-center.backdrop-blur-sm`** (line 544)-depends on exact Tailwind class list; if class order or name changes, the rule silently stops applying.
+- **`div[class*="border"]:has(.tab-button)`** (line 624)-any element with “border” in the class and a tab-button gets borders forced off; broad and brittle.
+- **`div.flex:has(.tab-button):not(.navbar-left):not(.navbar-tabs)`** (716)-long and layout-coupled.
 
 **Impact:** Refactoring HTML or utility classes can break styling without clear ownership in CSS.
 
 ### 1.5.2 Live Stats
 
-- **`#tab-live-stats .grid[class*="lg:grid-cols-5"] > div`** (1174) — relies on Tailwind’s `lg:grid-cols-5` string; fragile if grid class is renamed or structure changes.
+- **`#tab-live-stats .grid[class*="lg:grid-cols-5"] > div`** (1174)-relies on Tailwind’s `lg:grid-cols-5` string; fragile if grid class is renamed or structure changes.
 
 ### 1.5.3 Champs
 
-- **`#champsTrophyCabinet`** (1822) — ID used for styling; same component could use a class (e.g. `.champs-trophy-cabinet`) for consistency with other Champs classes.
+- **`#champsTrophyCabinet`** (1822)-ID used for styling; same component could use a class (e.g. `.champs-trophy-cabinet`) for consistency with other Champs classes.
 
 ---
 
@@ -146,18 +146,18 @@ Where both touch the same element (e.g. `.champs-hero`, `.champs-title`, `.champ
 
 ### 1.6.1 Classes not found in the main template
 
-- **`.brand-title`** — styled (line 426) but not found in `index.html`; only `.brand-name` and `h1` are used. Possible leftover or used in another template.
-- **`.tab-nav`** — explicitly listed in “no borders” (598); not used in the main tab markup (tabs live in `nav.navbar-tabs`).
-- **`.tab-container`** — same “no borders” block; no matching element in the reviewed structure.
-- **`nav[role="tablist"]`** — in the same block; role may not be set on the nav.
-- **`.form-group`, `.form-input`, `.form-select`, `.form-textarea`** (921-923) — all borders removed; these class names are not present in the main `index.html` form markup (which uses Tailwind and ad-hoc classes). May target other pages or legacy markup.
+- **`.brand-title`**-styled (line 426) but not found in `index.html`; only `.brand-name` and `h1` are used. Possible leftover or used in another template.
+- **`.tab-nav`**-explicitly listed in “no borders” (598); not used in the main tab markup (tabs live in `nav.navbar-tabs`).
+- **`.tab-container`**-same “no borders” block; no matching element in the reviewed structure.
+- **`nav[role="tablist"]`**-in the same block; role may not be set on the nav.
+- **`.form-group`, `.form-input`, `.form-select`, `.form-textarea`** (921-923)-all borders removed; these class names are not present in the main `index.html` form markup (which uses Tailwind and ad-hoc classes). May target other pages or legacy markup.
 
 **Impact:** Dead or orphaned rules add noise and file size; worth confirming in all templates or removing.
 
 ### 1.6.2 Skeleton and sidebar
 
-- **`.skeleton`, `.skeleton-line`, `.skeleton-circle`, `.skeleton-card`** — loading placeholders; usage should be verified (e.g. search for “skeleton” in HTML/JS).
-- **`.sidebar-glass`** — theme overrides exist (909-918); need to confirm a sidebar actually uses this class.
+- **`.skeleton`, `.skeleton-line`, `.skeleton-circle`, `.skeleton-card`**-loading placeholders; usage should be verified (e.g. search for “skeleton” in HTML/JS).
+- **`.sidebar-glass`**-theme overrides exist (909-918); need to confirm a sidebar actually uses this class.
 
 ---
 
@@ -170,7 +170,7 @@ Where both touch the same element (e.g. `.champs-hero`, `.champs-title`, `.champ
 
 ### 1.7.2 Focus ring color
 
-- **Lines 298-301:** Default focus uses `rgba(0, 255, 65, 0.2)` (green) — dark-style.
+- **Lines 298-301:** Default focus uses `rgba(0, 255, 65, 0.2)` (green)-dark-style.
 - **Lines 303-309:** Light focus uses `rgba(0, 168, 50, 0.2)`.
 - **Lines 311-317:** Dark focus again uses `rgba(0, 255, 65, 0.2)`.
 
@@ -178,7 +178,7 @@ Default (no `[data-theme]`) is effectively dark; if the app always sets a theme 
 
 ### 1.7.3 select option
 
-- **Lines 284-287:** `select:focus option:checked, select option:checked` — green background in default/dark.
+- **Lines 284-287:** `select:focus option:checked, select option:checked`-green background in default/dark.
 - **Lines 289-293:** Light overrides to blue. The unchecked options are theme-specific (273-281); checked state is separate and could be aligned with a variable (e.g. `--select-selected-bg`).
 
 ---
@@ -199,7 +199,7 @@ Default (no `[data-theme]`) is effectively dark; if the app always sets a theme 
 
 ---
 
-# Part 2 — Recommendations
+# Part 2-Recommendations
 
 ## 2.1 Consolidate duplicate rules (no visual change)
 

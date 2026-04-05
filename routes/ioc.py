@@ -36,6 +36,48 @@ def _from_app(*names):
     return tuple(getattr(_app, n) for n in names)
 
 
+def _schedule_ioc_push_from_submission(**kwargs):
+    """Fire-and-forget IOC push to configured HTTP targets (background thread)."""
+    try:
+        from flask import current_app
+        from utils.ioc_push import schedule_ioc_push_after_create, ioc_context_from_submission
+        ctx = ioc_context_from_submission(**kwargs)
+        schedule_ioc_push_after_create(current_app._get_current_object(), ctx)
+    except Exception as e:
+        logging.warning('IOC push schedule failed: %s', e)
+
+
+def _schedule_ioc_push_batch(contexts):
+    if not contexts:
+        return
+    try:
+        from flask import current_app
+        from utils.ioc_push import schedule_ioc_push_batch as _batch
+        _batch(current_app._get_current_object(), contexts)
+    except Exception as e:
+        logging.warning('IOC push batch schedule failed: %s', e)
+
+
+def _schedule_esa_from_submission(**kwargs):
+    try:
+        from flask import current_app
+        from utils.esa_dictionary import schedule_esa_dictionary_after_submission
+        schedule_esa_dictionary_after_submission(current_app._get_current_object(), **kwargs)
+    except Exception as e:
+        logging.warning('ESA dictionary schedule failed: %s', e)
+
+
+def _schedule_esa_batch(contexts):
+    if not contexts:
+        return
+    try:
+        from flask import current_app
+        from utils.esa_dictionary import schedule_esa_dictionary_batch
+        schedule_esa_dictionary_batch(current_app._get_current_object(), contexts)
+    except Exception as e:
+        logging.warning('ESA dictionary batch schedule failed: %s', e)
+
+
 def _sanity_should_block_else_warn(is_blocked: bool, is_admin: bool, mode: str) -> tuple[bool, bool]:
     """
     Given critical sanity result and settings, return (should_block, should_warn).
@@ -270,7 +312,7 @@ def _cell_looks_like_ioc_value(cell: str) -> bool:
         return True
     if '//' in s and not s.lower().startswith(('ioc', 'url', 'ref')):
         return True
-    # domain.tld/path — common in IOC lists without scheme
+    # domain.tld/path-common in IOC lists without scheme
     if re.search(
         r'(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}/[^\s]+',
         s,
@@ -624,6 +666,36 @@ def submit_ioc():
                         logging.warning('MISP push after submit_ioc failed: %s', msg)
         except Exception as misp_err:
             logging.warning('MISP push after submit_ioc failed: %s', misp_err)
+        try:
+            _schedule_ioc_push_from_submission(
+                ioc_type=ioc_type,
+                value=value,
+                analyst=username,
+                ticket_id=ticket_id,
+                comment=sanitize_comment(comment) if comment else None,
+                expiration_date=exp_date,
+                campaign_id=campaign_id,
+                tags_json=tags_json,
+                submission_method='single',
+                user_id=user_id,
+            )
+        except Exception as push_err:
+            logging.warning('IOC push after submit_ioc failed: %s', push_err)
+        try:
+            _schedule_esa_from_submission(
+                ioc_type=ioc_type,
+                value=value,
+                analyst=username,
+                ticket_id=ticket_id,
+                comment=sanitize_comment(comment) if comment else None,
+                expiration_date=exp_date,
+                campaign_id=campaign_id,
+                tags_json=tags_json,
+                submission_method='single',
+                user_id=user_id,
+            )
+        except Exception as esa_err:
+            logging.warning('ESA dictionary after submit_ioc failed: %s', esa_err)
         refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
         refresh_champ_score_for_user(user_id)
         response = {'success': True, 'message': f'{ioc_type} IOC submitted successfully'}
@@ -737,6 +809,36 @@ def ingest_ioc():
                 record_api_ioc_ingest()
             except Exception:
                 pass
+            try:
+                _schedule_ioc_push_from_submission(
+                    ioc_type=ioc_type,
+                    value=value,
+                    analyst=username,
+                    ticket_id=ticket_id,
+                    comment=comment if comment else None,
+                    expiration_date=exp_dt,
+                    campaign_id=None,
+                    tags_json='[]',
+                    submission_method='import',
+                    user_id=user_id_ingest,
+                )
+            except Exception as push_err:
+                logging.warning('IOC push after ingest_ioc failed: %s', push_err)
+            try:
+                _schedule_esa_from_submission(
+                    ioc_type=ioc_type,
+                    value=value,
+                    analyst=username,
+                    ticket_id=ticket_id,
+                    comment=comment if comment else None,
+                    expiration_date=exp_dt,
+                    campaign_id=None,
+                    tags_json='[]',
+                    submission_method='import',
+                    user_id=user_id_ingest,
+                )
+            except Exception as esa_err:
+                logging.warning('ESA dictionary after ingest_ioc failed: %s', esa_err)
             if user_id_ingest:
                 refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
                 refresh_champ_score_for_user(user_id_ingest)
@@ -868,9 +970,11 @@ def bulk_csv():
 
         comment = sanitize_comment(global_comment)
         csv_fallback_ticket = _auto_ticket_id(current_user.id)
+        from utils.ioc_push import ioc_context_from_submission
         summary = {}
         total_updated = 0
         total_new = 0
+        new_iocs_for_push = []
         for ioc_type, ioc_dict in findings.items():
             updated_count = 0
             new_count = 0
@@ -904,6 +1008,18 @@ def bulk_csv():
                         payload_hist['expiration_date'] = exp_date.isoformat()
                     _log_ioc_history(ioc_type, value, 'created', username, payload_hist)
                     new_count += 1
+                    new_iocs_for_push.append(ioc_context_from_submission(
+                        ioc_type=ioc_type,
+                        value=value,
+                        analyst=username,
+                        ticket_id=ticket_id_val,
+                        comment=comment,
+                        expiration_date=exp_date,
+                        campaign_id=campaign_id,
+                        tags_json=tags_json,
+                        submission_method='csv',
+                        user_id=current_user.id if current_user.is_authenticated else None,
+                    ))
             summary[ioc_type] = {'updated': updated_count, 'new': new_count}
             total_updated += updated_count
             total_new += new_count
@@ -926,6 +1042,15 @@ def bulk_csv():
                         push_hash_to_tie(config_path, hash_value, audit_log_fn)
         except Exception as dxl_err:
             logging.warning('DXL push after bulk_csv failed: %s', dxl_err)
+
+        try:
+            _schedule_ioc_push_batch(new_iocs_for_push)
+        except Exception as ioc_push_err:
+            logging.warning('IOC push after bulk_csv failed: %s', ioc_push_err)
+        try:
+            _schedule_esa_batch(new_iocs_for_push)
+        except Exception as esa_err:
+            logging.warning('ESA dictionary after bulk_csv failed: %s', esa_err)
 
         # Build summary message
         summary_parts = []
@@ -1441,11 +1566,13 @@ def submit_staging():
             champs_before = {'scoring_method': '1', 'badges': set(), 'level': 0, 'rank': 0, 'score': 0}
         fallback_ticket = _auto_ticket_id(current_user.id)
         misp_sync_user = (_get_setting('misp_sync_user', 'misp_sync') or 'misp_sync').strip().lower()
+        from utils.ioc_push import ioc_context_from_submission
         summary = {}
         total_updated = 0
         total_new = 0
         new_hashes_for_dxl = []
         new_iocs_for_misp = []
+        new_iocs_for_push = []
         for raw in items:
             ioc_value = (raw.get('ioc') or '').strip()
             ioc_type = (raw.get('type') or '').strip()
@@ -1536,6 +1663,19 @@ def submit_staging():
                 # Only push to MISP if analyst is not the MISP sync user (avoid loop: MISP → sync → push back)
                 if analyst.lower() != misp_sync_user:
                     new_iocs_for_misp.append((ioc_type, ioc_value, comment or ''))
+                    new_iocs_for_push.append(ioc_context_from_submission(
+                        ioc_type=ioc_type,
+                        value=ioc_value,
+                        analyst=analyst,
+                        ticket_id=ticket_id,
+                        comment=comment,
+                        expiration_date=exp_date,
+                        campaign_id=campaign_id,
+                        tags_json=item_tags_json,
+                        submission_method=submission_source,
+                        user_id=user_id,
+                        created_at=created_at,
+                    ))
                 summary[ioc_type] = summary.get(ioc_type, {'updated': 0, 'new': 0})
                 summary[ioc_type]['new'] += 1
 
@@ -1569,6 +1709,15 @@ def submit_staging():
                             event_id = int(msg.split()[-1]) if msg.split()[-1].isdigit() else event_id
         except Exception as misp_err:
             logging.warning('MISP push after submit_staging failed: %s', misp_err)
+
+        try:
+            _schedule_ioc_push_batch(new_iocs_for_push)
+        except Exception as ioc_push_err:
+            logging.warning('IOC push after submit_staging failed: %s', ioc_push_err)
+        try:
+            _schedule_esa_batch(new_iocs_for_push)
+        except Exception as esa_err:
+            logging.warning('ESA dictionary after submit_staging failed: %s', esa_err)
 
         # DXL: push new hashes to TIE if enabled
         try:
@@ -1653,6 +1802,8 @@ def upload_txt():
         text = decode_uploaded_text_bytes(file.read())
         exp_date = calculate_expiration_date(ttl)
         findings = {'IP': {}, 'Domain': {}, 'Hash': {}, 'Email': {}, 'URL': {}}
+        from utils.ioc_push import ioc_context_from_submission
+        new_iocs_for_push = []
 
         for raw_line in text.splitlines():
             line = raw_line.strip()
@@ -1755,6 +1906,19 @@ def upload_txt():
                         payload_hist['expiration_date'] = exp_date.isoformat()
                     _log_ioc_history(ioc_type, value, 'created', store_analyst, payload_hist)
                     new_count += 1
+                    new_iocs_for_push.append(ioc_context_from_submission(
+                        ioc_type=ioc_type,
+                        value=value,
+                        analyst=store_analyst,
+                        ticket_id=meta['ticket_id'],
+                        comment=meta['comment'],
+                        expiration_date=exp_date,
+                        campaign_id=campaign_id,
+                        tags_json=tags_json,
+                        submission_method='txt',
+                        user_id=store_user_id,
+                        created_at=meta['created_at'],
+                    ))
             summary[ioc_type] = {'updated': updated_count, 'new': new_count}
             total_updated += updated_count
             total_new += new_count
@@ -1777,6 +1941,15 @@ def upload_txt():
                         push_hash_to_tie(config_path, hash_value, audit_log_fn)
         except Exception as dxl_err:
             logging.warning('DXL push after upload_txt failed: %s', dxl_err)
+
+        try:
+            _schedule_ioc_push_batch(new_iocs_for_push)
+        except Exception as ioc_push_err:
+            logging.warning('IOC push after upload_txt failed: %s', ioc_push_err)
+        try:
+            _schedule_esa_batch(new_iocs_for_push)
+        except Exception as esa_err:
+            logging.warning('ESA dictionary after upload_txt failed: %s', esa_err)
 
         # Build summary message
         summary_parts = []

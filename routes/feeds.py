@@ -145,8 +145,8 @@ def _feed_resolve_ioc_type(ioc_type_raw):
 def _feed_cp_resolve_ioc_type(ioc_type_raw):
     """Checkpoint CSV: IP, Domain, URL, Hash (all algorithms), or Hash filtered by type.
 
-    - /feed/cp/hash — all supported hashes (MD5, SHA-1, SHA-256, SHA-512).
-    - /feed/cp/md5, /sha1, /sha256, /sha2 — only that algorithm (sha2 = SHA-256).
+    - /feed/cp/hash-all supported hashes (MD5, SHA-1, SHA-256, SHA-512).
+    - /feed/cp/md5, /sha1, /sha256, /sha2-only that algorithm (sha2 = SHA-256).
     Email is not supported here (use /feed/esa/email or /feed/email).
     """
     key = (ioc_type_raw or '').strip().lower()

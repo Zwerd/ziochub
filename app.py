@@ -154,7 +154,7 @@ def _log_yara_python_availability():
         app.logger.info('yara-python OK (syntax check enabled), version %s', ver)
     except Exception as e:
         app.logger.warning(
-            'yara-python not importable — "Check syntax" in YARA Manager will fail. '
+            'yara-python not importable-"Check syntax" in YARA Manager will fail. '
             'Install: pip install -r requirements.txt (same Python as this process). Error: %s',
             e,
         )

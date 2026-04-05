@@ -147,6 +147,26 @@ class SanityExclusion(db.Model):
     __table_args__ = (UniqueConstraint('value', 'ioc_type', 'anomaly_type', name='u_sanity_excl_key'),)
 
 
+class FeedSourceLastSeen(db.Model):
+    """Last HTTP GET to /feed/* per client IP + path (for Connections panel)."""
+    __tablename__ = 'feed_source_last_seen'
+    id = db.Column(db.Integer, primary_key=True)
+    client_ip = db.Column(db.String(45), nullable=False)
+    feed_path = db.Column(db.String(512), nullable=False)
+    last_seen_at = db.Column(db.DateTime, nullable=False, default=_utcnow)
+    __table_args__ = (UniqueConstraint('client_ip', 'feed_path', name='u_feed_source_last_seen_ip_path'),)
+
+
+class FeedCacheEntry(db.Model):
+    """Shared response body for /feed/* endpoints (all Gunicorn workers read same SQLite rows)."""
+    __tablename__ = 'feed_cache_entries'
+    cache_key = db.Column(db.String(512), primary_key=True)
+    body = db.Column(db.Text, nullable=False)
+    content_type = db.Column(db.String(255), nullable=False, default='text/plain')
+    extra_headers_json = db.Column(db.Text, nullable=True)
+    updated_at = db.Column(db.DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+
+
 class YaraRule(db.Model):
     __tablename__ = 'yara_rules'
     id = db.Column(db.Integer, primary_key=True)

@@ -179,6 +179,7 @@
 
     function _renderSearchRow(result, query) {
         const isYara = result.file_type === 'YARA';
+        const isCampaign = result.file_type === 'Campaign';
         const row = document.createElement('tr');
         row.className = 'border border-white/10';
         row.dataset.iocValue = result.ioc;
@@ -190,6 +191,7 @@
         row.dataset.tags = Array.isArray(result.tags) ? result.tags.join(',') : (result.tags || '');
         row.dataset.analyst = result.user || '';
         row.dataset.isYara = isYara ? '1' : '0';
+        row.dataset.campaignId = (result.campaign_id != null && result.campaign_id !== '') ? String(result.campaign_id) : '';
 
         const expirationBadge = getExpirationBadge(
             result.expiration_status || 'Unknown',
@@ -202,9 +204,18 @@
         const userDisplay = highlightMatch(result.user || 'N/A', query);
         const commentDisplay = highlightMatch(result.comment || 'N/A', query);
         const iocAttr = escapeAttr(result.ioc || '');
-        const typeCellClass = isYara ? 'border border-white/10 px-4 py-2 font-mono text-sm text-amber-400' : 'border border-white/10 px-4 py-2 font-mono text-sm';
+        const typeCellClass = isYara
+            ? 'border border-white/10 px-4 py-2 font-mono text-sm text-amber-400'
+            : (isCampaign ? 'border border-white/10 px-4 py-2 font-mono text-sm text-rose-300' : 'border border-white/10 px-4 py-2 font-mono text-sm');
         const isDeleted = result.status === 'Deleted';
-        const actionsCell = isYara
+        const graphBtnLabel = (typeof t === 'function' && t('tab.campaign')) ? t('tab.campaign') : 'Campaign Graph';
+        const actionsCell = isCampaign
+            ? `<td class="border border-white/10 px-3 py-2">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                    <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="open-campaign-graph" title="${escapeAttr(graphBtnLabel)}">${escapeHtml(graphBtnLabel)}</button>
+                </div>
+               </td>`
+            : isYara
             ? `<td class="border border-white/10 px-3 py-2">
                 <div class="flex items-center gap-1.5 flex-wrap">
                     <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="edit-yara-meta" title="${t('actions.edit_metadata')}">${t('actions.edit')}</button>
@@ -298,6 +309,19 @@
                         row.dataset.comment || '',
                         row.dataset.campaign || ''
                     );
+                }
+            });
+        });
+        resultsTableBody.querySelectorAll('[data-action="open-campaign-graph"]').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const row = this.closest('tr');
+                const cid = row.dataset.campaignId;
+                const idNum = cid ? parseInt(cid, 10) : NaN;
+                if (typeof global.switchTab === 'function') {
+                    global.switchTab('campaigns');
+                }
+                if (!isNaN(idNum) && typeof global.renderGraph === 'function') {
+                    setTimeout(function() { global.renderGraph(idNum); }, 150);
                 }
             });
         });

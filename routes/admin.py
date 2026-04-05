@@ -163,6 +163,9 @@ _SETTINGS_DEFAULTS = {
     'automation_fireeye_ignore_ssl': 'false',
     'sanity_check_mode': 'block_non_admin',
     'search_comment_rtl_by_script': 'true',  # In search results: if comment has more Hebrew/Arabic than other text, show RTL
+    'feeds_public_enabled': 'true',
+    'feed_cache_enabled': 'true',
+    'feed_cache_ttl_seconds': '300',
 }
 
 
@@ -233,7 +236,7 @@ def save_settings():
         dxl_keys = ('dxl_enabled', 'dxl_config_path')
         automation_keys = ('automation_fireeye_enabled', 'automation_fireeye_appliances', 'automation_fireeye_ignore_ssl')
         sanity_keys = ('sanity_check_mode',)
-        feed_keys = ('feeds_public_enabled',)
+        feed_keys = ('feeds_public_enabled', 'feed_cache_enabled', 'feed_cache_ttl_seconds')
         search_keys = ('search_comment_rtl_by_script',)
         sections = []
         for key in ldap_keys + misp_keys + syslog_keys + dxl_keys + automation_keys + sanity_keys + feed_keys + search_keys:
@@ -245,6 +248,17 @@ def save_settings():
                 elif key == 'ldap_servers':
                     import json
                     _set_setting(key, json.dumps(val) if isinstance(val, (list, dict)) else str(val).strip())
+                elif key == 'feed_cache_ttl_seconds':
+                    from utils.feed_cache import FEED_CACHE_TTL_DEFAULT, FEED_CACHE_TTL_PRESETS
+                    try:
+                        n = int(str(val).strip())
+                    except ValueError:
+                        n = FEED_CACHE_TTL_DEFAULT
+                    if n not in FEED_CACHE_TTL_PRESETS:
+                        n = FEED_CACHE_TTL_DEFAULT
+                    _set_setting(key, str(n))
+                elif key == 'feed_cache_enabled':
+                    _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
                 else:
                     _set_setting(key, str(val).strip())
                 if key in ldap_keys and 'LDAP' not in sections:
@@ -263,6 +277,12 @@ def save_settings():
                     sections.append('Feeds')
                 elif key in search_keys and 'Search' not in sections:
                     sections.append('Search')
+        if any(k in data for k in ('feeds_public_enabled', 'feed_cache_enabled', 'feed_cache_ttl_seconds')):
+            try:
+                from utils.feed_cache import clear_all_feed_cache
+                clear_all_feed_cache()
+            except Exception:
+                pass
         try:
             from utils.cef_logger import refresh_cef_udp_target
             udp_enabled = _get_setting('syslog_udp_enabled', 'false').lower() == 'true'
@@ -906,9 +926,17 @@ def admin_settings():
         except ImportError:
             misp_settings_dict = _misp_settings_fallback(_get_setting)
         ldap_servers = _get_ldap_servers_for_form(_get_setting)
+        try:
+            from utils.feed_cache import FEED_CACHE_TTL_DEFAULT, normalize_feed_cache_ttl_seconds
+            _ttl_raw = int(_get_setting('feed_cache_ttl_seconds', '300') or '300')
+        except ValueError:
+            _ttl_raw = FEED_CACHE_TTL_DEFAULT
+        _feed_ttl = str(normalize_feed_cache_ttl_seconds(_ttl_raw))
         settings = {
             'auth_mode': _get_setting('auth_mode', 'local_only'),
             'feeds_public_enabled': _get_setting('feeds_public_enabled', 'true'),
+            'feed_cache_enabled': _get_setting('feed_cache_enabled', 'true'),
+            'feed_cache_ttl_seconds': _feed_ttl,
             'ldap_enabled': _get_setting('ldap_enabled', 'false'),
             'ldap_url': _get_setting('ldap_url', ''),
             'ldap_base_dn': _get_setting('ldap_base_dn', ''),

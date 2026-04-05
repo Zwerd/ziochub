@@ -19,6 +19,7 @@ from constants import IOC_FILES
 from utils.yara_utils import yara_safe_path
 from utils.feed_helpers import strip_url_protocol, format_checkpoint_feed
 from utils.validation_messages import MSG_INVALID_IOC_TYPE, MSG_INVALID_FILENAME, MSG_FILE_NOT_FOUND
+from utils.feed_cache import serve_feed_cached
 
 
 bp = Blueprint('feeds', __name__, url_prefix='/feed')
@@ -44,6 +45,17 @@ def _require_feeds_enabled():
         mimetype='text/plain',
         headers={'Retry-After': '60'},
     )
+
+
+@bp.after_request
+def _record_feed_connection_telemetry(response):
+    """Track last successful pull per client IP + feed path (Feed Pulse → Connections)."""
+    try:
+        from utils.integration_telemetry import record_feed_pull_if_ok
+        record_feed_pull_if_ok(response)
+    except Exception:
+        pass
+    return response
 
 
 def _get_data_yara():
@@ -399,20 +411,23 @@ def _feed_stix_object_versions(object_id):
 @bp.route('/yara-list', methods=['GET'])
 def feed_yara_list():
     """Plain text list of all .yar filenames in DATA_YARA (one per line)."""
-    try:
-        data_yara = _get_data_yara()
-        if not os.path.isdir(data_yara):
-            return Response("", mimetype='text/plain')
-        names = []
-        for name in sorted(os.listdir(data_yara)):
-            if not name.lower().endswith('.yar'):
-                continue
-            fp = os.path.join(data_yara, name)
-            if os.path.isfile(fp):
-                names.append(name)
-        return Response(('\n'.join(names) + ('\n' if names else '')), mimetype='text/plain')
-    except Exception as e:
-        return Response(f"Error: {e}", mimetype='text/plain', status=500)
+    def build():
+        try:
+            data_yara = _get_data_yara()
+            if not os.path.isdir(data_yara):
+                return Response("", mimetype='text/plain')
+            names = []
+            for name in sorted(os.listdir(data_yara)):
+                if not name.lower().endswith('.yar'):
+                    continue
+                fp = os.path.join(data_yara, name)
+                if os.path.isfile(fp):
+                    names.append(name)
+            return Response(('\n'.join(names) + ('\n' if names else '')), mimetype='text/plain')
+        except Exception as e:
+            return Response(f"Error: {e}", mimetype='text/plain', status=500)
+
+    return serve_feed_cached('yara-list', build)
 
 
 @bp.route('/yara-content/<path:filename>', methods=['GET'])
@@ -423,12 +438,16 @@ def feed_yara_content(filename):
         return Response(MSG_INVALID_FILENAME, mimetype='text/plain', status=400)
     if not os.path.isfile(filepath):
         return Response(MSG_FILE_NOT_FOUND, mimetype='text/plain', status=404)
-    try:
-        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
-            content = f.read()
-        return Response(content, mimetype='text/plain')
-    except Exception as e:
-        return Response(f"Error: {e}", mimetype='text/plain', status=500)
+
+    def build():
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+            return Response(content, mimetype='text/plain')
+        except Exception as e:
+            return Response(f"Error: {e}", mimetype='text/plain', status=500)
+
+    return serve_feed_cached(f'yara-content:{safe}', build)
 
 
 # --- STIX 2.x feed (TAXII/STIX format) ---
@@ -438,17 +457,23 @@ def feed_yara_content(filename):
 def feed_stix(ioc_type=None):
     """STIX 2.1 JSON bundle of active IOCs. /feed/stix = all types; /feed/stix/ip = IP only, etc."""
     hash_length = None
+    path_suffix = 'all'
     if ioc_type:
+        path_suffix = (ioc_type or '').strip().lower() or 'all'
         mapped_type, hash_length = _feed_resolve_ioc_type(ioc_type)
         if mapped_type is None or mapped_type not in IOC_FILES or mapped_type == 'YARA':
             return Response(json.dumps({'error': 'Invalid type'}), mimetype='application/json', status=404)
         ioc_type = mapped_type
-    bundle = _feed_stix_bundle(ioc_type_filter=ioc_type, hash_length=hash_length)
-    return Response(
-        json.dumps(bundle, ensure_ascii=False),
-        mimetype='application/json',
-        headers={'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff'}
-    )
+
+    def build():
+        bundle = _feed_stix_bundle(ioc_type_filter=ioc_type, hash_length=hash_length)
+        return Response(
+            json.dumps(bundle, ensure_ascii=False),
+            mimetype='application/json',
+            headers={'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff'}
+        )
+
+    return serve_feed_cached(f'stix:{path_suffix}', build)
 
 
 # --- Generic IOC feed ---
@@ -459,7 +484,12 @@ def feed_ioc(ioc_type):
     mapped_type, hash_length = _feed_resolve_ioc_type(ioc_type)
     if mapped_type is None or mapped_type not in IOC_FILES or mapped_type == 'YARA':
         return Response(MSG_INVALID_IOC_TYPE, mimetype='text/plain', status=404)
-    return _feed_plain_response(_feed_ioc_plain(mapped_type, hash_length))
+    seg = (ioc_type or '').strip().lower()
+
+    def build():
+        return _feed_plain_response(_feed_ioc_plain(mapped_type, hash_length))
+
+    return serve_feed_cached(f'plain:{seg}', build)
 
 
 @bp.route('/pa/<ioc_type>', methods=['GET'])
@@ -468,8 +498,13 @@ def feed_pa(ioc_type):
     mapped_type, hash_length = _feed_resolve_ioc_type(ioc_type)
     if mapped_type is None or mapped_type not in IOC_FILES or mapped_type == 'YARA':
         return Response(MSG_INVALID_IOC_TYPE, mimetype='text/plain', status=404)
+    seg = (ioc_type or '').strip().lower()
     formatter = _pa_url_formatter if mapped_type == 'URL' else _pa_plain_formatter
-    return _feed_ioc_formatted(mapped_type, formatter, hash_length=hash_length)
+
+    def build():
+        return _feed_ioc_formatted(mapped_type, formatter, hash_length=hash_length)
+
+    return serve_feed_cached(f'pa:{seg}', build)
 
 
 @bp.route('/cp/<ioc_type>', methods=['GET'])
@@ -478,14 +513,22 @@ def feed_cp(ioc_type):
     mapped_type, hash_length = _feed_cp_resolve_ioc_type(ioc_type)
     if mapped_type is None or mapped_type not in IOC_FILES or mapped_type == 'YARA':
         return Response(MSG_INVALID_IOC_TYPE, mimetype='text/plain', status=404)
+    seg = (ioc_type or '').strip().lower()
     formatter = lambda rows: format_checkpoint_feed(rows, mapped_type)
-    return _feed_ioc_formatted(mapped_type, formatter, hash_length=hash_length)
+
+    def build():
+        return _feed_ioc_formatted(mapped_type, formatter, hash_length=hash_length)
+
+    return serve_feed_cached(f'cp:{seg}', build)
 
 
 @bp.route('/esa/email', methods=['GET'])
 def feed_esa_email():
     """Cisco ESA email feed: comma-separated list of active email IOCs."""
-    return _feed_ioc_formatted('Email', _esa_comma_formatter)
+    def build():
+        return _feed_ioc_formatted('Email', _esa_comma_formatter)
+
+    return serve_feed_cached('esa:email', build)
 
 
 # --- Trellix ePO feeds ---
@@ -508,11 +551,14 @@ def _epo_feed_ticket_ids():
 @bp.route('/epo/files-list', methods=['GET'])
 def feed_epo_files_list():
     """Trellix ePO: list of ticket_id values that have at least one hash. One per line."""
-    try:
-        names = _epo_feed_ticket_ids()
-        return Response('\n'.join(names) + ('\n' if names else ''), mimetype='text/plain')
-    except Exception:
-        return Response('', mimetype='text/plain')
+    def build():
+        try:
+            names = _epo_feed_ticket_ids()
+            return Response('\n'.join(names) + ('\n' if names else ''), mimetype='text/plain')
+        except Exception:
+            return Response('', mimetype='text/plain')
+
+    return serve_feed_cached('epo:files-list', build)
 
 
 def _epo_feed_rows_for_ticket(ticket_id, now):
@@ -539,14 +585,19 @@ def feed_epo_file(ticket_id):
     """Trellix ePO: CSV for one ticket_id from Hash IOCs in DB."""
     if not ticket_id or not re.match(r'^[a-zA-Z0-9._-]+$', ticket_id):
         return Response("Invalid ticket id", mimetype='text/plain', status=400)
-    now = datetime.now()
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['All File Names', 'MD5 Hash', 'SHA-1 Hash', 'SHA-256 Hash'])
-    for row in _epo_feed_rows_for_ticket(ticket_id, now):
-        writer.writerow(list(row))
-    return Response(
-        output.getvalue(),
-        mimetype='text/plain; charset=utf-8',
-        headers={'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff'}
-    )
+    cache_key = f'epo:ticket:{ticket_id.strip().lower()}'
+
+    def build():
+        now = datetime.now()
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['All File Names', 'MD5 Hash', 'SHA-1 Hash', 'SHA-256 Hash'])
+        for row in _epo_feed_rows_for_ticket(ticket_id, now):
+            writer.writerow(list(row))
+        return Response(
+            output.getvalue(),
+            mimetype='text/plain; charset=utf-8',
+            headers={'Content-Disposition': 'inline', 'X-Content-Type-Options': 'nosniff'}
+        )
+
+    return serve_feed_cached(cache_key, build)

@@ -1,6 +1,6 @@
 /**
  * Campaign Graph tab logic (Step 10.4 - extracted from index.html).
- * Depends on globals: escapeHtml, escapeAttr, showToast, t, vis (vis-network).
+ * Depends on globals: escapeHtml, escapeAttr, showToast, t, vis (vis-network), copyToClipboard.
  * Exposes: populateCampaignDropdowns, loadUsersForAssignDropdown, loadCampaigns, renderGraph.
  */
 (function(global) {
@@ -395,11 +395,25 @@
                 campaignNetwork.on('click', function(params) {
                     if (!params.nodes || params.nodes.length === 0) return;
                     const nid = params.nodes[0];
-                    if (String(nid).indexOf('camp_') !== 0) return;
+                    const sid = String(nid);
                     const node = nodes.get(nid);
-                    if (!node || !node.has_reference_image) return;
+                    if (!node) return;
+                    if (sid.startsWith('ioc_') || sid.startsWith('yara_')) {
+                        let text = node.copyValue;
+                        if (text == null || text === '') {
+                            const title = node.title != null ? String(node.title) : '';
+                            const m = title.match(/^[^:]+:\s*(.+)$/);
+                            if (m) text = m[1].split('\n')[0].trim();
+                        }
+                        if (text && typeof global.copyToClipboard === 'function') {
+                            global.copyToClipboard(String(text));
+                        }
+                        return;
+                    }
+                    if (sid.indexOf('camp_') !== 0) return;
+                    if (!node.has_reference_image) return;
                     hideCampaignGraphTooltip();
-                    const graphCid = parseInt(String(nid).replace(/^camp_/, ''), 10);
+                    const graphCid = parseInt(sid.replace(/^camp_/, ''), 10);
                     if (!isNaN(graphCid)) openCampaignReferenceModal(graphCid);
                 });
                 if (exportBtn) exportBtn.classList.remove('hidden');

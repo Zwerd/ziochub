@@ -162,6 +162,11 @@ def upload_yara():
         _log_champs_event('yara_upload', user_id=current_user.id, payload={'filename': safe_filename})
         refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
         refresh_champ_score_for_user(current_user.id)
+        try:
+            from utils.integration_telemetry import record_api_yara_upload
+            record_api_yara_upload()
+        except Exception:
+            pass
         message = f'YARA rule uploaded and pending approval: {safe_filename}'
         if ticket_id:
             message += f' (Ticket: {ticket_id})'

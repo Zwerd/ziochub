@@ -359,6 +359,26 @@
                 </label>
                 <p class="text-secondary text-xs mt-2">Uncheck to disable public access to Feed and TAXII (clients will receive 503).</p>
             </div>
+            <div class="pt-2 border-t border-white/10">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="feed_cache_enabled" name="feed_cache_enabled" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" {% if settings.feed_cache_enabled != 'false' %}checked{% endif %}>
+                    <span class="text-sm text-primary font-medium">Cache /feed responses (shared, all workers)</span>
+                </label>
+                <p class="text-secondary text-xs mt-2">When enabled, each feed URL (plain, Palo Alto, Check Point, STIX, YARA list, ePO, etc.) is built at most once per TTL; repeat clients read from SQLite. Reduces DB load when many systems poll frequently. New IOCs may appear in feeds after up to the TTL delay.</p>
+            </div>
+            <div>
+                <label for="feed_cache_ttl_seconds" class="block text-sm font-semibold text-secondary mb-1">Feed cache refresh interval</label>
+                <select id="feed_cache_ttl_seconds" name="feed_cache_ttl_seconds" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="60" {% if settings.feed_cache_ttl_seconds == '60' %}selected{% endif %}>1 minute</option>
+                    <option value="300" {% if settings.feed_cache_ttl_seconds == '300' %}selected{% endif %}>5 minutes</option>
+                    <option value="600" {% if settings.feed_cache_ttl_seconds == '600' %}selected{% endif %}>10 minutes</option>
+                    <option value="900" {% if settings.feed_cache_ttl_seconds == '900' %}selected{% endif %}>15 minutes</option>
+                    <option value="1800" {% if settings.feed_cache_ttl_seconds == '1800' %}selected{% endif %}>30 minutes</option>
+                    <option value="3600" {% if settings.feed_cache_ttl_seconds == '3600' %}selected{% endif %}>1 hour</option>
+                    <option value="43200" {% if settings.feed_cache_ttl_seconds == '43200' %}selected{% endif %}>12 hours</option>
+                </select>
+                <p class="text-secondary text-xs mt-1">How often cached /feed bodies may be rebuilt from the database. After saving Feeds settings, the cache is cleared once so the new interval applies. Legacy custom TTL values are normalized to the nearest preset when the page loads.</p>
+            </div>
             <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Feeds Settings</button>
         </form>
         <div id="feedsMessage" class="mt-4 hidden text-sm"></div>
@@ -520,7 +540,9 @@ document.getElementById('feedsForm').addEventListener('submit', async function(e
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                feeds_public_enabled: document.getElementById('feeds_public_enabled').checked ? 'true' : 'false'
+                feeds_public_enabled: document.getElementById('feeds_public_enabled').checked ? 'true' : 'false',
+                feed_cache_enabled: document.getElementById('feed_cache_enabled').checked ? 'true' : 'false',
+                feed_cache_ttl_seconds: document.getElementById('feed_cache_ttl_seconds').value
             })
         });
         var data = await res.json();

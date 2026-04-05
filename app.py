@@ -346,6 +346,7 @@ def _resolve_analyst_to_user(analyst_or_id):
 
 from models import (
     Campaign, IOC, IocHistory, IocNote, YaraRule, SanityExclusion,
+    FeedSourceLastSeen, FeedCacheEntry,
     User, UserProfile, UserSession, SystemSetting,
     TeamGoal, ActivityEvent, ChampRankSnapshot,
     _utcnow,

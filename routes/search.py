@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, Response
 from flask_login import current_user
 from sqlalchemy import func, cast, String, text
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, aliased
 
 from extensions import db
 from models import Campaign, IOC, IocHistory, IocNote, YaraRule, User, UserProfile, _utcnow
@@ -83,6 +83,131 @@ def api_tags_suggestions():
     if q:
         tags = [t for t in tags if t.startswith(q)]
     return jsonify({'success': True, 'tags': tags[:500]})
+
+
+def _campaign_creator_username(campaign):
+    if not getattr(campaign, 'created_by', None):
+        return ''
+    u = db.session.get(User, campaign.created_by)
+    return (u.username if u else '') or ''
+
+
+def _campaign_to_search_result_dict(campaign):
+    """Single Search row for a campaign: description in comment, metadata appended."""
+    creator = _campaign_creator_username(campaign)
+    desc = (campaign.description or '').strip()
+    meta_parts = [
+        f"ID: {campaign.id}",
+        f"Created by: {creator or '—'}",
+        f"Direction: {getattr(campaign, 'dir', None) or 'ltr'}",
+    ]
+    if getattr(campaign, 'reference_image_ext', None):
+        meta_parts.append('Reference image: yes')
+    else:
+        meta_parts.append('Reference image: no')
+    meta_line = ' | '.join(meta_parts)
+    comment = (desc + '\n\n' + meta_line) if desc else meta_line
+    date_s = campaign.created_at.isoformat() if campaign.created_at else None
+    return {
+        'ioc': campaign.name,
+        'value': campaign.name,
+        'file_type': 'Campaign',
+        'date': date_s,
+        'user': creator,
+        'ref': f'CAMP-{campaign.id}',
+        'comment': comment,
+        'expiration': 'N/A',
+        'line_number': campaign.id,
+        'raw_line': f"Campaign:{campaign.name}",
+        'expiration_status': 'Permanent',
+        'expires_on': None,
+        'is_expired': False,
+        'status': 'Active',
+        'campaign_name': None,
+        'tags': [],
+        'is_campaign': True,
+        'campaign_id': campaign.id,
+    }
+
+
+def _search_matching_campaign_models(filter_type: str, query_lower: str):
+    """Campaign ORM rows that should appear as standalone search results."""
+    Creator = aliased(User)
+    base = Campaign.query.outerjoin(Creator, Campaign.created_by == Creator.id)
+
+    if filter_type == 'all':
+        conds = [
+            func.lower(Campaign.name).contains(query_lower),
+            db.and_(Campaign.description.isnot(None), func.lower(Campaign.description).contains(query_lower)),
+            db.and_(Creator.username.isnot(None), func.lower(Creator.username).contains(query_lower)),
+            func.lower(cast(Campaign.created_at, String)).contains(query_lower),
+        ]
+        if query_lower.isdigit():
+            try:
+                conds.append(Campaign.id == int(query_lower))
+            except ValueError:
+                pass
+        return base.filter(db.or_(*conds)).order_by(Campaign.created_at.desc()).limit(500).all()
+
+    if filter_type == 'campaign':
+        return base.filter(
+            db.or_(
+                func.lower(Campaign.name).contains(query_lower),
+                db.and_(Campaign.description.isnot(None), func.lower(Campaign.description).contains(query_lower)),
+            )
+        ).order_by(Campaign.created_at.desc()).limit(500).all()
+
+    if filter_type == 'user':
+        return base.filter(
+            db.and_(Creator.username.isnot(None), func.lower(Creator.username).contains(query_lower))
+        ).order_by(Campaign.created_at.desc()).limit(500).all()
+
+    if filter_type == 'comment':
+        return base.filter(
+            db.and_(Campaign.description.isnot(None), func.lower(Campaign.description).contains(query_lower))
+        ).order_by(Campaign.created_at.desc()).limit(500).all()
+
+    if filter_type == 'ioc_value':
+        return base.filter(func.lower(Campaign.name).contains(query_lower)).order_by(Campaign.created_at.desc()).limit(500).all()
+
+    if filter_type == 'file_type':
+        if query_lower in ('campaign', 'קמפיין', 'camp', 'campaigns'):
+            return Campaign.query.order_by(Campaign.created_at.desc()).limit(500).all()
+        return []
+
+    if filter_type == 'ticket_id':
+        qn = query_lower.replace(' ', '')
+        cid = None
+        if qn.startswith('camp-') and len(qn) > 5 and qn[5:].isdigit():
+            cid = int(qn[5:])
+        elif query_lower.isdigit():
+            cid = int(query_lower)
+        if cid is not None:
+            c = db.session.get(Campaign, cid)
+            return [c] if c else []
+        return []
+
+    if filter_type == 'date':
+        rows = base.filter(Campaign.created_at.isnot(None)).order_by(Campaign.created_at.desc()).limit(1000).all()
+        return [
+            c for c in rows
+            if query_lower in (c.created_at.isoformat() if c.created_at else '').lower()
+        ]
+
+    return []
+
+
+def _append_campaign_search_results(results, filter_type, query_lower):
+    """Append campaign rows without duplicating an existing Campaign row (same name)."""
+    keys = {(r.get('file_type'), (r.get('ioc') or r.get('value') or '').lower()) for r in results}
+    for camp in _search_matching_campaign_models(filter_type, query_lower):
+        if camp is None:
+            continue
+        key = ('Campaign', (camp.name or '').lower())
+        if key in keys:
+            continue
+        keys.add(key)
+        results.append(_campaign_to_search_result_dict(camp))
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +457,12 @@ def search_ioc():
     elif filter_type == 'comment':
         q = q.filter(IOC.comment.isnot(None), func.lower(IOC.comment).contains(query_lower))
     elif filter_type == 'campaign':
-        q = q.join(IOC.campaign).filter(func.lower(Campaign.name).contains(query_lower))
+        q = q.join(IOC.campaign).filter(
+            db.or_(
+                func.lower(Campaign.name).contains(query_lower),
+                db.and_(Campaign.description.isnot(None), func.lower(Campaign.description).contains(query_lower)),
+            )
+        )
     elif filter_type == 'file_type':
         if query_lower == 'yara':
             q = q.filter(IOC.id < 0)
@@ -378,12 +508,14 @@ def search_ioc():
         q = q.filter(IOC.created_at.isnot(None))
         rows_all = q.limit(1000).all()
         rows = [r for r in rows_all if query_lower in (r.created_at.isoformat() if r.created_at else '').lower()]
+        results = [_ioc_row_to_search_result(r, r.type, query_lower, filter_type) for r in rows]
+        _append_campaign_search_results(results, filter_type, query_lower)
         return jsonify({
             'success': True,
             'query': query,
             'filter': filter_type,
-            'results': [_ioc_row_to_search_result(r, r.type, query_lower, filter_type) for r in rows],
-            'count': len(rows), 'total': len(rows), 'page': 1, 'per_page': per_page
+            'results': results,
+            'count': len(results), 'total': len(results), 'page': 1, 'per_page': per_page
         })
     elif filter_type == 'all':
         all_conditions = [
@@ -404,7 +536,8 @@ def search_ioc():
         q = q.outerjoin(IOC.campaign).filter(
             db.or_(
                 db.or_(*all_conditions),
-                db.and_(Campaign.name.isnot(None), func.lower(Campaign.name).contains(query_lower))
+                db.and_(Campaign.name.isnot(None), func.lower(Campaign.name).contains(query_lower)),
+                db.and_(Campaign.description.isnot(None), func.lower(Campaign.description).contains(query_lower)),
             )
         )
     else:
@@ -432,7 +565,10 @@ def search_ioc():
                 query_lower in (r.comment or '').lower() or
                 (r.created_at and query_lower in (r.created_at.isoformat() or '').lower()) or
                 _tag_matches(getattr(r, 'tags', None), query_lower) or
-                (getattr(r, 'campaign', None) and query_lower in ((r.campaign.name or '').lower())) or
+                (getattr(r, 'campaign', None) and (
+                    query_lower in ((r.campaign.name or '').lower()) or
+                    query_lower in ((r.campaign.description or '').lower())
+                )) or
                 query_lower in (r.type or '').lower() or
                 _search_expiration_status_matches(r, query_lower)
             ):
@@ -482,6 +618,7 @@ def search_ioc():
             'status': 'Active',
             'campaign_name': campaign_name,
         })
+    _append_campaign_search_results(results, filter_type, query_lower)
     current_keys = {(r.get('file_type'), (r.get('ioc') or r.get('value') or '').lower()) for r in results}
     dq = IocHistory.query.filter(IocHistory.event_type == 'deleted')
     if filter_type == 'file_type':

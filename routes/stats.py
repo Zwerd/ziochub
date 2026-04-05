@@ -198,6 +198,22 @@ def api_sanity_exclude():
 
 
 # ---------------------------------------------------------------------------
+# /api/integration-connections (Feed Pulse → Connections panel)
+# ---------------------------------------------------------------------------
+@stats_bp.route('/api/integration-connections', methods=['GET'])
+@login_required
+def api_integration_connections():
+    """Last feed pull per IP+path; last IOC API ingest, YARA upload, DXL/TIE push."""
+    try:
+        from utils.integration_telemetry import get_connections_snapshot
+        data = get_connections_snapshot()
+        return jsonify({'success': True, **data})
+    except Exception as e:
+        log.exception('api_integration_connections failed')
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
 # /api/feed-pulse
 # ---------------------------------------------------------------------------
 @stats_bp.route('/api/feed-pulse', methods=['GET'])

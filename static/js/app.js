@@ -656,6 +656,8 @@ function getIocTypeIcon(iocType, iocValue, countryCode) {
         return '📧';
     } else if (iocType === 'YARA') {
         return '<span>📜</span>';
+    } else if (iocType === 'Campaign') {
+        return '🎯';
     } else if (iocType === 'Hash') {
         const len = iocValue ? iocValue.length : 0;
         if (len === 32) {
@@ -748,7 +750,7 @@ initApp();
 // ---------------------------------------------------------------------------
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-        ['editModal', 'deleteIocModal', 'yaraConfirmModal', 'yaraPreviewModal', 'yaraEditModal', 'campaignEditModal', 'yaraMetaEditModal', 'addNoteModal', 'feedCatalogModal', 'taxiiCatalogModal'].forEach(id => {
+        ['editModal', 'deleteIocModal', 'yaraConfirmModal', 'yaraPreviewModal', 'yaraEditModal', 'campaignEditModal', 'yaraMetaEditModal', 'addNoteModal', 'feedCatalogModal', 'feedConnectionsModal', 'taxiiCatalogModal'].forEach(id => {
             const m = document.getElementById(id);
             if (m && !m.classList.contains('hidden')) m.classList.add('hidden');
         });

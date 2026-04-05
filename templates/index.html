@@ -929,6 +929,10 @@
                                 <img src="{{ url_for('static', filename='ziochub_smaller.png') }}" alt="" class="w-4 h-4 object-contain">
                                 <span data-i18n="feedpulse.feed_catalog">Feed Catalog</span>
                             </button>
+                            <button type="button" id="feedConnectionsBtn" class="btn-cmd-neutral btn-cmd-sm flex items-center gap-1.5">
+                                <span>🔌</span>
+                                <span data-i18n="feedpulse.connections_btn">Connections</span>
+                            </button>
                             <button type="button" id="taxiiCatalogBtn" class="btn-cmd-neutral btn-cmd-sm flex items-center gap-1.5">
                                 <span>📦</span>
                                 <span data-i18n="taxii_catalog.btn">TAXII Catalog</span>
@@ -1726,6 +1730,46 @@
             <div class="flex gap-2 justify-end mt-4">
                 <button type="button" id="yaraAdminDeleteCancel" class="btn-cmd-neutral" data-i18n="actions.cancel">Cancel</button>
                 <button type="button" id="yaraAdminDeleteSubmit" class="btn-cmd-danger" data-i18n="actions.delete">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Connections: last feed pulls + API / DXL activity -->
+    <div id="feedConnectionsModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-3xl w-full mx-4 max-h-[85vh] flex flex-col border border-white/10">
+            <div class="flex items-center justify-between mb-3 flex-shrink-0">
+                <h3 class="text-xl font-bold accent-blue flex items-center gap-2">
+                    <span>🔌</span>
+                    <span data-i18n="feedpulse.connections_title">Connections</span>
+                </h3>
+                <button type="button" id="feedConnectionsModalClose" class="text-secondary hover:text-primary text-2xl leading-none" aria-label="Close">&times;</button>
+            </div>
+            <p class="text-sm text-secondary mb-4 flex-shrink-0" data-i18n="feedpulse.connections_subtitle">Last activity from feed consumers and ZIoCHub integrations (no server log access required).</p>
+            <div class="space-y-4 overflow-y-auto flex-1 min-h-0 text-sm">
+                <div>
+                    <h4 class="text-sm font-semibold text-cyan-400 mb-2" data-i18n="feedpulse.connections_api_section">API &amp; DXL (outbound from ZIoCHub)</h4>
+                    <ul class="bg-tertiary rounded border border-white/10 divide-y divide-white/5 font-mono text-xs">
+                        <li class="px-3 py-2 flex justify-between gap-2"><span data-i18n="feedpulse.connections_last_ioc_api">Last IOC API ingest</span><span id="connLastIocApi" class="text-secondary shrink-0">—</span></li>
+                        <li class="px-3 py-2 flex justify-between gap-2"><span data-i18n="feedpulse.connections_last_yara_api">Last YARA upload</span><span id="connLastYaraApi" class="text-secondary shrink-0">—</span></li>
+                        <li class="px-3 py-2 flex justify-between gap-2"><span data-i18n="feedpulse.connections_last_dxl">Last DXL/TIE push</span><span id="connLastDxl" class="text-secondary shrink-0">—</span></li>
+                    </ul>
+                </div>
+                <div class="flex-1 min-h-0 flex flex-col">
+                    <h4 class="text-sm font-semibold text-cyan-400 mb-2" data-i18n="feedpulse.connections_feed_section">Feed access (last pull per source)</h4>
+                    <div class="border border-white/10 rounded overflow-hidden flex-1 min-h-[120px] max-h-[40vh] overflow-y-auto">
+                        <table class="w-full text-xs border-collapse">
+                            <thead class="sticky top-0 bg-tertiary z-10 border-b border-white/10">
+                                <tr>
+                                    <th class="text-left px-2 py-1.5 font-semibold" data-i18n="feedpulse.connections_col_source">Source IP</th>
+                                    <th class="text-left px-2 py-1.5 font-semibold" data-i18n="feedpulse.connections_col_path">Feed path</th>
+                                    <th class="text-left px-2 py-1.5 font-semibold" data-i18n="feedpulse.connections_col_last">Last seen</th>
+                                </tr>
+                            </thead>
+                            <tbody id="feedConnectionsTableBody"></tbody>
+                        </table>
+                    </div>
+                    <p id="feedConnectionsEmpty" class="hidden text-secondary text-xs mt-2" data-i18n="feedpulse.connections_empty_feeds">No feed access recorded yet.</p>
+                </div>
             </div>
         </div>
     </div>

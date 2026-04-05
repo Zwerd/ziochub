@@ -143,6 +143,11 @@ def push_hash_to_tie(config_path, hash_value, audit_log_fn=None):
                 audit_log_fn('DXL_TIE_PUSH', f'hash={hash_value[:16]}... type={hash_type}')
             except Exception:
                 pass
+        try:
+            from utils.integration_telemetry import record_dxl_tie_push
+            record_dxl_tie_push()
+        except Exception:
+            pass
         return True
     except Exception as e:
         logging.exception('DXL TIE push failed for hash %s: %s', hash_value[:16] + '...', e)

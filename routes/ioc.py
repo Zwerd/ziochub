@@ -732,6 +732,11 @@ def ingest_ioc():
                             push_hash_to_tie(config_path, value, audit_log)
                 except Exception as dxl_err:
                     logging.warning('DXL push after ingest_ioc failed: %s', dxl_err)
+            try:
+                from utils.integration_telemetry import record_api_ioc_ingest
+                record_api_ioc_ingest()
+            except Exception:
+                pass
             if user_id_ingest:
                 refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
                 refresh_champ_score_for_user(user_id_ingest)

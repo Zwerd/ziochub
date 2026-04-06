@@ -1,5 +1,5 @@
 """
-Last-seen telemetry: /feed pulls (per client IP + path), API IOC ingest, YARA upload, DXL TIE push.
+Last-seen telemetry: /feed and /taxii2 pulls (per client IP + path), API IOC ingest, YARA upload, DXL TIE push.
 Used by Feed Pulse → Connections (no Linux log access required).
 """
 import logging
@@ -22,6 +22,9 @@ KEY_API_IOC = 'telemetry_last_api_ioc_ingest_at'
 KEY_API_YARA = 'telemetry_last_api_yara_upload_at'
 KEY_DXL = 'telemetry_last_dxl_tie_push_at'
 
+# Successful HTTP 200 pulls on these URL prefixes are recorded (throttled per IP + path).
+_TELEMETRY_PULL_PREFIXES = ('/feed', '/taxii2')
+
 
 def _client_ip():
     if not has_request_context():
@@ -33,14 +36,17 @@ def _client_ip():
 
 
 def record_feed_pull_if_ok(response):
-    """Record successful feed response (200). Throttled per (IP, path). Call from feeds after_request."""
+    """Record successful public pull response (200) for /feed or /taxii2. Throttled per (IP, path).
+
+    Call from feeds and taxii2 blueprint after_request handlers.
+    """
     if not has_request_context():
         return
     try:
         if response is None or getattr(response, 'status_code', None) != 200:
             return
         path = request.path or ''
-        if not path.startswith('/feed'):
+        if not any(path.startswith(p) for p in _TELEMETRY_PULL_PREFIXES):
             return
         path = path[:512]
         ip = _client_ip() or 'unknown'

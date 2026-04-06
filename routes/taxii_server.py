@@ -36,6 +36,17 @@ MAX_PAGE_LIMIT = 10000
 bp = Blueprint('taxii2', __name__, url_prefix='/taxii2')
 
 
+@bp.after_request
+def _record_taxii_connection_telemetry(response):
+    """Track last successful TAXII response per client IP + path (Feed Pulse → Connections)."""
+    try:
+        from utils.integration_telemetry import record_feed_pull_if_ok
+        record_feed_pull_if_ok(response)
+    except Exception:
+        pass
+    return response
+
+
 def _taxii_json_response(data, status=200, extra_headers=None):
     headers = {'X-Content-Type-Options': 'nosniff'}
     if extra_headers:

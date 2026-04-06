@@ -49,7 +49,7 @@ def _require_feeds_enabled():
 
 @bp.after_request
 def _record_feed_connection_telemetry(response):
-    """Track last successful pull per client IP + feed path (Feed Pulse → Connections)."""
+    """Track last successful /feed pull per client IP + path (Feed Pulse → Connections; TAXII uses same telemetry)."""
     try:
         from utils.integration_telemetry import record_feed_pull_if_ok
         record_feed_pull_if_ok(response)

@@ -203,7 +203,7 @@ def api_sanity_exclude():
 @stats_bp.route('/api/integration-connections', methods=['GET'])
 @login_required
 def api_integration_connections():
-    """Last feed pull per IP+path; last IOC API ingest, YARA upload, DXL/TIE push."""
+    """Last feed or TAXII pull per IP+path; last IOC API ingest, YARA upload, DXL/TIE push."""
     try:
         from utils.integration_telemetry import get_connections_snapshot
         data = get_connections_snapshot()

@@ -114,8 +114,6 @@
         }
     }
 
-    document.getElementById('feedPulseRefreshBtn')?.addEventListener('click', loadFeedPulse);
-
     // Allowlist popup: show read-only content (admin edits in Admin → Allowlist)
     const allowlistBtn = document.getElementById('feedPulseAllowlistBtn');
     const allowlistModal = document.getElementById('feedPulseAllowlistModal');

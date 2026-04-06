@@ -1040,19 +1040,6 @@
                         <ul id="feedPulseAnomaliesList" class="space-y-2 text-sm text-amber-100"></ul>
                     </div>
 
-                    <!-- Allowlist view popup (read-only; admin edits in Admin → Allowlist) -->
-                    <div id="feedPulseAllowlistModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-                        <div class="bg-secondary rounded-lg shadow-xl border border-white/10 w-full max-w-2xl max-h-[85vh] flex flex-col mx-4">
-                            <div class="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-white/10">
-                                <h3 class="text-lg font-bold accent-blue" data-i18n="feedpulse.allowlist_title">Allowlist (read-only)</h3>
-                                <button type="button" id="feedPulseAllowlistModalClose" class="btn-cmd-neutral modal-close-btn" aria-label="Close">&times;</button>
-                            </div>
-                            <div class="flex-1 min-h-0 overflow-hidden p-4">
-                                <p class="text-xs text-secondary mb-2" data-i18n="feedpulse.allowlist_hint">Content managed by Admin. Lines starting with # are comments.</p>
-                                <pre id="feedPulseAllowlistContent" class="w-full h-full min-h-[200px] max-h-[60vh] overflow-auto p-3 rounded bg-tertiary border border-white/10 text-sm font-mono whitespace-pre-wrap break-words text-primary">Loading...</pre>
-                            </div>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- Tab: Reports (Master-Detail) - Champs-style -->
@@ -1892,6 +1879,25 @@
             </div>
             <div class="flex justify-end mt-4 flex-shrink-0">
                 <button type="button" id="feedCatalogCloseBottom" class="btn-cmd-neutral" data-i18n="modal.close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Allowlist modal (same layout as Feed Catalog; root level so overflow/scroll works like catalog) -->
+    <div id="feedPulseAllowlistModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-2xl w-full mx-4 max-h-[85vh] flex flex-col border border-white/10">
+            <div class="flex items-center justify-between mb-4 flex-shrink-0">
+                <h3 class="text-xl font-bold accent-blue" data-i18n="feedpulse.allowlist_title">Allowlist (read-only)</h3>
+                <button type="button" id="feedPulseAllowlistModalClose" class="text-secondary hover:text-primary text-2xl leading-none" aria-label="Close">&times;</button>
+            </div>
+            <p class="text-sm text-secondary mb-4 flex-shrink-0" data-i18n="feedpulse.allowlist_hint">Content managed by Admin. Lines starting with # are comments.</p>
+            <div class="overflow-y-auto flex-1 min-h-0">
+                <div class="bg-tertiary rounded border border-white/5 p-3 font-mono text-xs text-slate-300">
+                    <pre id="feedPulseAllowlistContent" class="m-0 p-0 whitespace-pre-wrap break-words">Loading...</pre>
+                </div>
+            </div>
+            <div class="flex justify-end mt-4 flex-shrink-0">
+                <button type="button" id="feedPulseAllowlistModalCloseBottom" class="btn-cmd-neutral" data-i18n="modal.close">Close</button>
             </div>
         </div>
     </div>

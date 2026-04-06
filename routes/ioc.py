@@ -1471,9 +1471,12 @@ def preview_single():
         should_block, should_warn = _sanity_should_block_else_warn(is_crit, is_admin, sanity_mode)
         if should_block:
             return jsonify({'success': False, 'message': f'⛔ {crit_msg}' if crit_msg else 'Critical/sanity block'}), 400
-        is_blocked, _ = check_allowlist(value, ioc_type)
+        is_blocked, al_reason = check_allowlist(value, ioc_type)
         if is_blocked:
-            return jsonify({'success': False, 'message': 'Allowlist block'}), 403
+            return jsonify({
+                'success': False,
+                'message': f'⛔ Allowlist: Block Prevented! {al_reason}' if al_reason else '⛔ Allowlist: Block Prevented!',
+            }), 403
         warnings = []
         if should_warn and crit_msg:
             warnings.append(crit_msg)

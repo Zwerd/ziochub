@@ -119,7 +119,11 @@
     const allowlistModal = document.getElementById('feedPulseAllowlistModal');
     const allowlistContent = document.getElementById('feedPulseAllowlistContent');
     const allowlistClose = document.getElementById('feedPulseAllowlistModalClose');
+    const allowlistCloseBottom = document.getElementById('feedPulseAllowlistModalCloseBottom');
     if (allowlistBtn && allowlistModal && allowlistContent) {
+        function hideAllowlistModal() {
+            allowlistModal.classList.add('hidden');
+        }
         allowlistBtn.addEventListener('click', async function () {
             allowlistModal.classList.remove('hidden');
             allowlistContent.textContent = (typeof t === 'function' && t('feedpulse.loading') ? t('feedpulse.loading') : '') || 'Loading...';
@@ -136,10 +140,13 @@
             }
         });
         if (allowlistClose) {
-            allowlistClose.addEventListener('click', function () { allowlistModal.classList.add('hidden'); });
+            allowlistClose.addEventListener('click', hideAllowlistModal);
+        }
+        if (allowlistCloseBottom) {
+            allowlistCloseBottom.addEventListener('click', hideAllowlistModal);
         }
         allowlistModal.addEventListener('click', function (e) {
-            if (e.target === allowlistModal) allowlistModal.classList.add('hidden');
+            if (e.target === allowlistModal) hideAllowlistModal();
         });
     }
 

@@ -750,7 +750,7 @@ initApp();
 // ---------------------------------------------------------------------------
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
-        ['editModal', 'deleteIocModal', 'yaraConfirmModal', 'yaraPreviewModal', 'yaraEditModal', 'campaignEditModal', 'yaraMetaEditModal', 'addNoteModal', 'feedCatalogModal', 'feedConnectionsModal', 'taxiiCatalogModal'].forEach(id => {
+        ['editModal', 'deleteIocModal', 'yaraConfirmModal', 'yaraPreviewModal', 'yaraEditModal', 'campaignEditModal', 'yaraMetaEditModal', 'addNoteModal', 'feedCatalogModal', 'feedPulseAllowlistModal', 'feedConnectionsModal', 'taxiiCatalogModal'].forEach(id => {
             const m = document.getElementById(id);
             if (m && !m.classList.contains('hidden')) m.classList.add('hidden');
         });

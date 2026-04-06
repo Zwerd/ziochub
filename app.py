@@ -895,7 +895,7 @@ def health_check():
     health_status = {
         'status': 'healthy',
         'timestamp': _utcnow().isoformat(),
-        'version': '5.3',
+        'version': VERSION,
         'checks': {}
     }
     

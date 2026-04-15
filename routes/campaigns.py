@@ -676,9 +676,28 @@ def campaign_graph(campaign_id):
         camp_node_id = f'camp_{campaign.id}'
         camp_label = campaign.name[:30] + ('…' if len(campaign.name) > 30 else '')
         has_ref = bool(getattr(campaign, 'reference_image_ext', None))
-        # 🎯 on the red node only when a reference image exists; otherwise a neutral campaign glyph.
+
+        iocs = IOC.query.filter(IOC.campaign_id == campaign_id).all()
+        yara_rules = YaraRule.query.filter(YaraRule.campaign_id == campaign_id).all()
+        now = datetime.now()
+        active_ioc_count = sum(
+            1 for ioc in iocs
+            if ioc.expiration_date is None or ioc.expiration_date > now
+        )
+        expired_ioc_count = len(iocs) - active_ioc_count
+        yara_count = len(yara_rules)
+        has_active_iocs = active_ioc_count > 0
+        # Align with /api/stats Campaign Impact: "active" = non-expired IOC only (YARA counted separately in UI).
+        camp_border = '#ef4444'
+        camp_border_hi = '#f87171'
+        camp_emoji_bg = '#ef4444'
+        if not has_active_iocs:
+            camp_border = '#64748b'
+            camp_border_hi = '#94a3b8'
+            camp_emoji_bg = '#475569'
+        # 🎯 on the red/slate node only when a reference image exists; otherwise a neutral campaign glyph.
         camp_circle_image = (
-            _emoji_svg_data_uri('🎯', '#ef4444') if has_ref else _emoji_svg_data_uri('📋', '#ef4444')
+            _emoji_svg_data_uri('🎯', camp_emoji_bg) if has_ref else _emoji_svg_data_uri('📋', camp_emoji_bg)
         )
         nodes = [{
             'id': camp_node_id,
@@ -691,7 +710,7 @@ def campaign_graph(campaign_id):
             'x': 0, 'y': 0,
             'fixed': {'x': True, 'y': True},
             'borderWidth': 3,
-            'color': {'border': '#ef4444', 'highlight': {'border': '#f87171'}},
+            'color': {'border': camp_border, 'highlight': {'border': camp_border_hi}},
             'font': {
                 'multi': 'html',
                 'vadjust': -140,
@@ -716,7 +735,6 @@ def campaign_graph(campaign_id):
             })
 
         col_y = {}
-        iocs = IOC.query.filter(IOC.campaign_id == campaign_id).all()
         for ioc in iocs:
             ioc_type = ioc.type or 'Hash'
             col_x = _COLUMN_X.get(ioc_type, 400)
@@ -745,15 +763,19 @@ def campaign_graph(campaign_id):
                 node['image'] = f'/static/flags/1x1/{cc}.svg' if cc else _EMOJI_SVGS['IP']
             else:
                 node['image'] = _EMOJI_SVGS.get(ioc_type, _EMOJI_SVGS['Hash'])
+            ioc_active = ioc.expiration_date is None or ioc.expiration_date > now
+            if not ioc_active:
+                node['opacity'] = 0.5
+                exp_hint = ioc.expiration_date.strftime('%Y-%m-%d') if ioc.expiration_date else ''
+                node['title'] = (node.get('title') or '') + (f"\n(Expired {exp_hint})" if exp_hint else '\n(Expired)')
             nodes.append(node)
             edges.append({
                 'from': camp_node_id,
                 'to': f'ioc_{ioc.id}',
-                'color': {'color': node_color, 'opacity': 0.5},
+                'color': {'color': node_color, 'opacity': 0.45 if not ioc_active else 0.5},
                 'width': 1.5,
             })
 
-        yara_rules = YaraRule.query.filter(YaraRule.campaign_id == campaign_id).all()
         y_key_yara = 'YARA'
         for rule in yara_rules:
             if y_key_yara not in col_y:
@@ -785,7 +807,14 @@ def campaign_graph(campaign_id):
             'success': True,
             'nodes': nodes,
             'edges': edges,
-            'campaign': {'id': campaign.id, 'name': campaign.name, 'description': campaign.description}
+            'campaign': {'id': campaign.id, 'name': campaign.name, 'description': campaign.description},
+            'activity': {
+                'has_active_iocs': has_active_iocs,
+                'linked_ioc_count': len(iocs),
+                'active_ioc_count': active_ioc_count,
+                'expired_ioc_count': expired_ioc_count,
+                'yara_count': yara_count,
+            },
         })
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500

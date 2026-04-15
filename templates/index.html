@@ -81,6 +81,13 @@
                         <span id="authAvatarPlaceholder" class="analyst-avatar-placeholder w-14 h-14 rounded-full flex items-center justify-center text-xl">👤</span>
                         {% endif %}
                     </button>
+                    <button id="adminInboxBtn" type="button" class="relative px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-amber-300 hidden" title="Admin inbox">
+                        <span class="inline-flex items-center gap-1">
+                            <span aria-hidden="true">🔔</span>
+                            <span class="hidden sm:inline">Inbox</span>
+                        </span>
+                        <span id="adminInboxBadge" class="hidden absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] leading-[18px] text-center font-bold"></span>
+                    </button>
                     <a id="authAdmin" href="/admin" class="px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400 {% if not is_admin %}hidden{% endif %}" data-i18n="auth.admin">Admin</a>
                     <a id="authLogout" href="/logout" class="px-3 py-1 bg-tertiary rounded hover:border-red-400/70 transition text-sm text-red-400 {% if not authenticated %}hidden{% endif %}" data-i18n="auth.logout">Logout</a>
                 </div>
@@ -217,6 +224,12 @@
                             <input type="text" id="searchInput" 
                                    class="flex-1 min-w-[200px]"
                                    data-i18n-placeholder="search.placeholder">
+                            <label for="searchBrowseSelect" class="sr-only" data-i18n="search.browse_label">Browse by country, domain, email, URL, or hash</label>
+                            <select id="searchBrowseSelect"
+                                    class="px-3 py-2 bg-tertiary min-w-[12rem] max-w-[22rem] text-sm"
+                                    title="Country with count, or type lines: domain (N), email (N), md5 (N), …">
+                                <option value="" data-i18n="search.browse_none">— None —</option>
+                            </select>
                             <select id="searchFilter" 
                                     class="px-4 py-2 bg-tertiary">
                                 <option value="all" data-i18n="search.filter.all">All</option>
@@ -818,8 +831,9 @@
                             </div>
                         </aside>
                         <!-- Center: Graph (fills remaining space) -->
-                        <div class="flex-1 min-w-0 min-h-0 flex flex-col">
-                            <div id="campaign-network" class="campaign-network-canvas w-full h-full min-h-0 rounded-xl border-2"></div>
+                        <div class="flex-1 min-w-0 min-h-0 flex flex-col gap-2 min-h-0">
+                            <div id="campaignGraphActivityBanner" class="hidden flex-shrink-0 rounded-lg border border-amber-500/40 bg-amber-950/40 px-3 py-2 text-sm text-amber-100/95" role="status"></div>
+                            <div id="campaign-network" class="campaign-network-canvas w-full flex-1 min-h-0 rounded-xl border-2"></div>
                         </div>
                         <!-- Right Sidebar: Create Campaign + Link IOC -->
                         <aside class="w-[300px] flex-shrink-0 flex flex-col gap-3 min-h-0">
@@ -1724,40 +1738,166 @@
         </div>
     </div>
 
-    <!-- Connections: last feed pulls + API / DXL activity -->
-    <div id="feedConnectionsModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-secondary rounded-lg p-6 max-w-3xl w-full mx-4 max-h-[85vh] flex flex-col border border-white/10">
-            <div class="flex items-center justify-between mb-3 flex-shrink-0">
-                <h3 class="text-xl font-bold accent-blue flex items-center gap-2">
-                    <span>🔌</span>
-                    <span data-i18n="feedpulse.connections_title">Connections</span>
+    <!-- Connections: last feed pulls + API / DXL activity (layout aligned with Feed Catalog modal) -->
+    <div id="feedConnectionsModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
+        <div class="bg-secondary rounded-lg p-4 sm:p-6 max-w-2xl w-full max-h-[85vh] flex flex-col border border-white/10 min-w-0">
+            <div class="flex items-center justify-between mb-4 flex-shrink-0 gap-2 min-w-0">
+                <h3 class="text-xl font-bold accent-blue flex items-center gap-2 min-w-0">
+                    <img src="{{ url_for('static', filename='ziochub_smaller.png') }}" alt="" class="w-7 h-7 object-contain shrink-0">
+                    <span class="break-words" data-i18n="feedpulse.connections_title">Connections</span>
                 </h3>
-                <button type="button" id="feedConnectionsModalClose" class="text-secondary hover:text-primary text-2xl leading-none" aria-label="Close">&times;</button>
+                <button type="button" id="feedConnectionsModalClose" class="text-secondary hover:text-primary text-2xl leading-none shrink-0" aria-label="Close">&times;</button>
             </div>
-            <p class="text-sm text-secondary mb-4 flex-shrink-0" data-i18n="feedpulse.connections_subtitle">Last activity from feed consumers and ZIoCHub integrations (no server log access required).</p>
-            <div class="space-y-4 overflow-y-auto flex-1 min-h-0 text-sm">
-                <div>
-                    <h4 class="text-sm font-semibold text-cyan-400 mb-2" data-i18n="feedpulse.connections_api_section">API &amp; DXL (outbound from ZIoCHub)</h4>
-                    <ul class="bg-tertiary rounded border border-white/10 divide-y divide-white/5 font-mono text-xs">
-                        <li class="px-3 py-2 flex justify-between gap-2"><span data-i18n="feedpulse.connections_last_ioc_api">Last IOC API ingest</span><span id="connLastIocApi" class="text-secondary shrink-0">—</span></li>
-                        <li class="px-3 py-2 flex justify-between gap-2"><span data-i18n="feedpulse.connections_last_yara_api">Last YARA upload</span><span id="connLastYaraApi" class="text-secondary shrink-0">—</span></li>
-                        <li class="px-3 py-2 flex justify-between gap-2"><span data-i18n="feedpulse.connections_last_dxl">Last DXL/TIE push</span><span id="connLastDxl" class="text-secondary shrink-0">—</span></li>
-                    </ul>
+            <p class="text-sm text-secondary mb-4 flex-shrink-0 break-words" data-i18n="feedpulse.connections_subtitle">Last activity from feed consumers and ZIoCHub integrations (no server log access required).</p>
+            <div class="overflow-y-auto overflow-x-hidden flex-1 min-h-0 min-w-0 space-y-5 text-sm">
+                <div class="min-w-0">
+                    <h4 class="text-base font-semibold text-cyan-400 mb-2 flex items-center gap-2 min-w-0">
+                        <span class="shrink-0">📤</span>
+                        <span class="break-words min-w-0" data-i18n="feedpulse.connections_automation_section">Outbound push targets (IOC &amp; YARA)</span>
+                    </h4>
+                    <p class="text-xs text-secondary mb-2 break-words" data-i18n="feedpulse.connections_automation_sub">One row per admin-defined URL: display name, host, latest attempt time across IOC/YARA push types.</p>
+                    <div id="connAutomationTargetsList" class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs max-h-52 min-w-0 overflow-y-auto overflow-x-hidden"></div>
+                    <p id="connAutomationTargetsEmpty" class="hidden text-secondary text-xs mt-2" data-i18n="feedpulse.connections_empty_automation">No outbound push targets recorded yet.</p>
                 </div>
-                <div class="flex-1 min-h-0 flex flex-col">
-                    <h4 class="text-sm font-semibold text-cyan-400 mb-2" data-i18n="feedpulse.connections_feed_section">Feed access (last pull per source)</h4>
-                    <div class="border border-white/10 rounded overflow-hidden flex-1 min-h-[120px] max-h-[40vh] overflow-y-auto">
-                        <table class="w-full text-xs border-collapse">
-                            <thead class="sticky top-0 bg-tertiary z-10 border-b border-white/10">
+                <div class="min-w-0">
+                    <h4 class="text-base font-semibold text-cyan-400 mb-2 flex items-center gap-2 min-w-0">
+                        <span class="shrink-0">📥</span>
+                        <span class="break-words min-w-0" data-i18n="feedpulse.connections_api_section">API &amp; DXL (outbound from ZIoCHub)</span>
+                    </h4>
+                    <ul class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 text-xs min-w-0">
+                        <li class="px-3 py-2 min-w-0 space-y-1">
+                            <div class="text-primary/95 leading-snug" data-i18n="feedpulse.connections_last_ioc_api">Last IOC API ingest</div>
+                            <div class="flex justify-end font-mono"><span id="connLastIocApi" class="text-slate-400 text-[11px] text-end break-all max-w-full">—</span></div>
+                        </li>
+                        <li class="px-3 py-2 min-w-0 space-y-1">
+                            <div class="text-primary/95 leading-snug" data-i18n="feedpulse.connections_last_yara_api">Last YARA upload to ZIoCHub (API)</div>
+                            <div class="flex justify-end font-mono"><span id="connLastYaraApi" class="text-slate-400 text-[11px] text-end break-all max-w-full">—</span></div>
+                        </li>
+                        <li class="px-3 py-2 min-w-0 space-y-1">
+                            <div class="text-primary/95 leading-snug" data-i18n="feedpulse.connections_last_dxl">Last DXL/TIE push</div>
+                            <div class="flex justify-end font-mono"><span id="connLastDxl" class="text-slate-400 text-[11px] text-end break-all max-w-full">—</span></div>
+                        </li>
+                        <li class="px-3 py-2 min-w-0 space-y-1.5">
+                            <div class="text-primary/95 leading-snug" data-i18n="feedpulse.connections_last_yara_auto_push">Last YARA push to external targets</div>
+                            <div class="flex flex-wrap items-center justify-end gap-1.5 font-mono">
+                                <span id="connLastYaraAutoPush" class="text-slate-400 text-[11px] text-end break-all max-w-full min-w-0">—</span>
+                                <button type="button" id="connYaraAutoPushDetailsToggle" class="hidden px-2 py-0.5 rounded border border-white/10 hover:border-accent-green transition text-[10px] text-cyan-300 shrink-0">Details</button>
+                                <button type="button" id="connYaraAutoPushRetryBtn" class="hidden px-2 py-0.5 rounded border border-white/10 hover:border-accent-green transition text-[10px] text-amber-300 shrink-0">Retry</button>
+                            </div>
+                        </li>
+                        <li class="px-3 py-2 min-w-0 space-y-1.5">
+                            <div class="text-primary/95 leading-snug" data-i18n="feedpulse.connections_last_yara_auto_delete">Last YARA delete on external targets</div>
+                            <div class="flex flex-wrap items-center justify-end gap-1.5 font-mono">
+                                <span id="connLastYaraAutoDelete" class="text-slate-400 text-[11px] text-end break-all max-w-full min-w-0">—</span>
+                                <button type="button" id="connYaraAutoDeleteDetailsToggle" class="hidden px-2 py-0.5 rounded border border-white/10 hover:border-accent-green transition text-[10px] text-cyan-300 shrink-0">Details</button>
+                                <button type="button" id="connYaraAutoDeleteRetryBtn" class="hidden px-2 py-0.5 rounded border border-white/10 hover:border-accent-green transition text-[10px] text-amber-300 shrink-0">Retry</button>
+                            </div>
+                        </li>
+                        <li class="px-3 py-2 min-w-0 space-y-1.5">
+                            <div class="text-primary/95 leading-snug" data-i18n="feedpulse.connections_last_ioc_push_short">Last IOC push (outbound)</div>
+                            <div class="flex flex-wrap items-center justify-end gap-1.5 font-mono">
+                                <span id="connLastIocPush" class="text-slate-400 text-[11px] text-end break-all max-w-full min-w-0">—</span>
+                                <button type="button" id="connIocPushDetailsToggle" class="hidden px-2 py-0.5 rounded border border-white/10 hover:border-accent-green transition text-[10px] text-cyan-300 shrink-0">Details</button>
+                                <button type="button" id="connIocPushRetryBtn" class="hidden px-2 py-0.5 rounded border border-white/10 hover:border-accent-green transition text-[10px] text-amber-300 shrink-0">Retry</button>
+                            </div>
+                        </li>
+                        <li class="px-3 py-2 min-w-0 space-y-1.5">
+                            <div class="text-primary/95 leading-snug" data-i18n="feedpulse.connections_last_ioc_expire_short">Last expired IOC removal (outbound)</div>
+                            <div class="flex flex-wrap items-center justify-end gap-1.5 font-mono">
+                                <span id="connLastIocExpirePush" class="text-slate-400 text-[11px] text-end break-all max-w-full min-w-0">—</span>
+                                <button type="button" id="connIocExpirePushDetailsToggle" class="hidden px-2 py-0.5 rounded border border-white/10 hover:border-accent-green transition text-[10px] text-cyan-300 shrink-0">Details</button>
+                                <button type="button" id="connIocExpirePushRetryBtn" class="hidden px-2 py-0.5 rounded border border-white/10 hover:border-accent-green transition text-[10px] text-amber-300 shrink-0">Retry</button>
+                            </div>
+                        </li>
+                        <li class="px-3 py-2 min-w-0 space-y-1.5">
+                            <div class="text-primary/95 leading-snug" data-i18n="feedpulse.connections_last_ioc_manual_short">Last manual IOC removal (outbound)</div>
+                            <div class="flex flex-wrap items-center justify-end gap-1.5 font-mono">
+                                <span id="connLastIocManualRemovePush" class="text-slate-400 text-[11px] text-end break-all max-w-full min-w-0">—</span>
+                                <button type="button" id="connIocManualRemovePushDetailsToggle" class="hidden px-2 py-0.5 rounded border border-white/10 hover:border-accent-green transition text-[10px] text-cyan-300 shrink-0">Details</button>
+                                <button type="button" id="connIocManualRemovePushRetryBtn" class="hidden px-2 py-0.5 rounded border border-white/10 hover:border-accent-green transition text-[10px] text-amber-300 shrink-0">Retry</button>
+                            </div>
+                        </li>
+                    </ul>
+                    <div class="mt-2 space-y-2 min-w-0">
+                    <div id="connIocPushDetailsWrap" class="hidden rounded border border-white/5 overflow-x-auto max-w-full min-w-0">
+                        <table class="w-full min-w-[28rem] text-xs border-collapse">
+                            <thead class="bg-tertiary border-b border-white/10">
                                 <tr>
-                                    <th class="text-left px-2 py-1.5 font-semibold" data-i18n="feedpulse.connections_col_source">Source IP</th>
-                                    <th class="text-left px-2 py-1.5 font-semibold" data-i18n="feedpulse.connections_col_path">Feed path</th>
-                                    <th class="text-left px-2 py-1.5 font-semibold" data-i18n="feedpulse.connections_col_last">Last seen</th>
+                                    <th class="text-left px-2 py-1 font-semibold">Target</th>
+                                    <th class="text-left px-2 py-1 font-semibold">URL</th>
+                                    <th class="text-left px-2 py-1 font-semibold">Status</th>
+                                    <th class="text-left px-2 py-1 font-semibold">Message</th>
                                 </tr>
                             </thead>
-                            <tbody id="feedConnectionsTableBody"></tbody>
+                            <tbody id="connIocPushDetailsBody" class="divide-y divide-white/5"></tbody>
                         </table>
+                        <p id="connIocPushDetailsEmpty" class="hidden px-2 py-2 text-secondary text-xs">No IOC push attempts recorded yet.</p>
                     </div>
+                    <div id="connIocExpirePushDetailsWrap" class="hidden rounded border border-white/5 overflow-x-auto max-w-full min-w-0">
+                        <table class="w-full min-w-[28rem] text-xs border-collapse">
+                            <thead class="bg-tertiary border-b border-white/10">
+                                <tr>
+                                    <th class="text-left px-2 py-1 font-semibold">Target</th>
+                                    <th class="text-left px-2 py-1 font-semibold">URL</th>
+                                    <th class="text-left px-2 py-1 font-semibold">Status</th>
+                                    <th class="text-left px-2 py-1 font-semibold">Message</th>
+                                </tr>
+                            </thead>
+                            <tbody id="connIocExpirePushDetailsBody" class="divide-y divide-white/5"></tbody>
+                        </table>
+                        <p id="connIocExpirePushDetailsEmpty" class="hidden px-2 py-2 text-secondary text-xs">No expired IOC removals recorded yet.</p>
+                    </div>
+                    <div id="connIocManualRemovePushDetailsWrap" class="hidden rounded border border-white/5 overflow-x-auto max-w-full min-w-0">
+                        <table class="w-full min-w-[28rem] text-xs border-collapse">
+                            <thead class="bg-tertiary border-b border-white/10">
+                                <tr>
+                                    <th class="text-left px-2 py-1 font-semibold">Target</th>
+                                    <th class="text-left px-2 py-1 font-semibold">URL</th>
+                                    <th class="text-left px-2 py-1 font-semibold">Status</th>
+                                    <th class="text-left px-2 py-1 font-semibold">Message</th>
+                                </tr>
+                            </thead>
+                            <tbody id="connIocManualRemovePushDetailsBody" class="divide-y divide-white/5"></tbody>
+                        </table>
+                        <p id="connIocManualRemovePushDetailsEmpty" class="hidden px-2 py-2 text-secondary text-xs">No manual IOC removals recorded yet.</p>
+                    </div>
+                    <div id="connYaraAutoPushDetailsWrap" class="hidden rounded border border-white/5 overflow-x-auto max-w-full min-w-0">
+                        <table class="w-full min-w-[28rem] text-xs border-collapse">
+                            <thead class="bg-tertiary border-b border-white/10">
+                                <tr>
+                                    <th class="text-left px-2 py-1 font-semibold">Target</th>
+                                    <th class="text-left px-2 py-1 font-semibold">URL</th>
+                                    <th class="text-left px-2 py-1 font-semibold">Status</th>
+                                    <th class="text-left px-2 py-1 font-semibold">Message</th>
+                                </tr>
+                            </thead>
+                            <tbody id="connYaraAutoPushDetailsBody" class="divide-y divide-white/5"></tbody>
+                        </table>
+                        <p id="connYaraAutoPushDetailsEmpty" class="hidden px-2 py-2 text-secondary text-xs">No YARA automation push attempts recorded yet.</p>
+                    </div>
+                    <div id="connYaraAutoDeleteDetailsWrap" class="hidden rounded border border-white/5 overflow-x-auto max-w-full min-w-0">
+                        <table class="w-full min-w-[28rem] text-xs border-collapse">
+                            <thead class="bg-tertiary border-b border-white/10">
+                                <tr>
+                                    <th class="text-left px-2 py-1 font-semibold">Target</th>
+                                    <th class="text-left px-2 py-1 font-semibold">URL</th>
+                                    <th class="text-left px-2 py-1 font-semibold">Status</th>
+                                    <th class="text-left px-2 py-1 font-semibold">Message</th>
+                                </tr>
+                            </thead>
+                            <tbody id="connYaraAutoDeleteDetailsBody" class="divide-y divide-white/5"></tbody>
+                        </table>
+                        <p id="connYaraAutoDeleteDetailsEmpty" class="hidden px-2 py-2 text-secondary text-xs">No YARA automation delete attempts recorded yet.</p>
+                    </div>
+                    </div>
+                </div>
+                <div class="min-w-0">
+                    <h4 class="text-base font-semibold text-cyan-400 mb-2 flex items-center gap-2 min-w-0">
+                        <span class="shrink-0">🌐</span>
+                        <span class="break-words min-w-0" data-i18n="feedpulse.connections_feed_section">Feed access (last pull per source)</span>
+                    </h4>
+                    <p class="text-xs text-secondary mb-2 break-words" data-i18n="feedpulse.connections_feed_hint">Consumers that successfully pulled /feed or /taxii2 (throttled).</p>
+                    <div id="feedConnectionsList" class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs max-h-48 min-w-0 overflow-y-auto overflow-x-hidden"></div>
                     <p id="feedConnectionsEmpty" class="hidden text-secondary text-xs mt-2" data-i18n="feedpulse.connections_empty_feeds">No feed access recorded yet.</p>
                 </div>
             </div>
@@ -1947,6 +2087,19 @@
 
     <!-- Toast Container -->
     <div id="toastContainer"></div>
+
+    <!-- Admin Inbox Modal -->
+    <div id="adminInboxModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div class="relative w-full max-w-2xl mx-4 rounded-2xl border border-white/15 bg-[#0f172a] shadow-2xl p-6 max-h-[85vh] overflow-y-auto">
+            <div class="flex items-center justify-between gap-3 mb-4">
+                <h3 class="text-xl font-bold text-amber-300">Admin Inbox</h3>
+                <button id="adminInboxClose" type="button" class="btn-cmd-neutral">Close</button>
+            </div>
+            <div id="adminInboxContent" class="space-y-4">
+                <div class="text-secondary text-sm">Loading…</div>
+            </div>
+        </div>
+    </div>
 
     <!-- Global app-style modal for alert/confirm (same as base_app) -->
     <div id="appModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100]">

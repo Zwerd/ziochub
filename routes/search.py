@@ -7,7 +7,6 @@ import csv
 import io
 import logging
 from datetime import datetime, timezone
-
 from flask import Blueprint, request, jsonify, Response
 from flask_login import current_user
 from sqlalchemy import func, cast, String, text
@@ -25,6 +24,7 @@ from utils.validation_messages import (
 )
 from constants import IOC_FILES, DEFAULT_PAGE_SIZE, DEFAULT_IOC_LIMIT
 from utils.tags import normalize_tags_from_input
+from utils.tags import parse_allowed_tags_setting, enforce_allowed_tags
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +79,86 @@ def _distinct_ioc_tags_from_db():
 def api_tags_suggestions():
     """Distinct IOC tags for label-style autocomplete. Optional query: ?q=prefix (lowercase)."""
     q = (request.args.get('q') or '').strip().lower()
-    tags = _distinct_ioc_tags_from_db()
+    # If admin configured an allowlist taxonomy, return those tags (stable, clean),
+    # otherwise fall back to distinct tags from existing IOC rows.
+    try:
+        (_get_setting,) = _from_app('_get_setting')
+        restricted = (_get_setting('tags_restricted_enabled', 'false') or 'false').lower() == 'true'
+        allowed = parse_allowed_tags_setting(_get_setting('allowed_tags', '[]'))
+        if restricted and allowed:
+            tags = allowed
+        else:
+            tags = _distinct_ioc_tags_from_db()
+    except Exception:
+        tags = _distinct_ioc_tags_from_db()
     if q:
         tags = [t for t in tags if t.startswith(q)]
     return jsonify({'success': True, 'tags': tags[:500]})
+
+
+@bp.route('/api/tags/suggest', methods=['POST'])
+@login_required
+def api_tags_suggest():
+    """
+    Suggest one or more new tags for admin approval.
+    Body: { "tag": "foo" } or { "tags": ["foo","bar"] }.
+    """
+    (_api_ok, _api_error, _get_setting, _set_setting, audit_log, _utcnow) = _from_app(
+        '_api_ok', '_api_error', '_get_setting', '_set_setting', 'audit_log', '_utcnow'
+    )
+    import json
+    import uuid
+    try:
+        if not request.is_json:
+            return jsonify({'success': False, 'message': 'JSON body required'}), 400
+        data = request.get_json(silent=True) or {}
+        raw = data.get('tags')
+        if raw is None:
+            raw = data.get('tag')
+        tags_list = normalize_tags_from_input(raw)
+        if not tags_list:
+            return jsonify({'success': False, 'message': 'Missing tag(s)'}), 400
+
+        allow_suggest = (_get_setting('tags_allow_suggest', 'true') or 'true').lower() == 'true'
+        if not allow_suggest:
+            return jsonify({'success': False, 'message': 'Tag suggestions are disabled'}), 403
+
+        allowed = parse_allowed_tags_setting(_get_setting('allowed_tags', '[]'))
+        allowed_set = set(allowed)
+        # Load existing suggestions
+        raw_s = (_get_setting('tag_suggestions', '[]') or '[]').strip()
+        try:
+            suggestions = json.loads(raw_s) if raw_s else []
+        except Exception:
+            suggestions = []
+        if not isinstance(suggestions, list):
+            suggestions = []
+        pending_set = {str(x.get('tag') or '').strip().lower() for x in suggestions if isinstance(x, dict)}
+
+        added = []
+        for t in tags_list:
+            tag = (t or '').strip().lower()
+            if not tag:
+                continue
+            if tag in allowed_set:
+                continue
+            if tag in pending_set:
+                continue
+            suggestions.append({
+                'id': uuid.uuid4().hex,
+                'tag': tag,
+                'suggested_by': current_user.username or '',
+                'suggested_at': _utcnow().isoformat(),
+            })
+            pending_set.add(tag)
+            added.append(tag)
+
+        _set_setting('tag_suggestions', json.dumps(suggestions, ensure_ascii=False))
+        audit_log('tag_suggest', f'by={current_user.username} count={len(added)}')
+        return _api_ok(data={'added': added}, message='Suggestion submitted')
+    except Exception as e:
+        logging.exception('api_tags_suggest failed')
+        return _api_error(str(e), 500)
 
 
 def _campaign_creator_username(campaign):
@@ -432,9 +508,274 @@ def add_ioc_note():
 # Search
 # ---------------------------------------------------------------------------
 
+def _apply_ip_country_filter(sq, country_cc):
+    """Restrict query to IP IOCs whose stored GeoIP country_code matches (lowercase ISO2)."""
+    if not country_cc:
+        return sq
+    return sq.filter(
+        IOC.type == 'IP',
+        IOC.country_code.isnot(None),
+        func.lower(IOC.country_code) == country_cc,
+    )
+
+
+def _ioc_row_matches_country(row, country_cc):
+    if not country_cc:
+        return True
+    return (
+        row.type == 'IP'
+        and row.country_code
+        and row.country_code.lower() == country_cc
+    )
+
+
+def _search_browse_aggregate_counts() -> dict[str, int]:
+    """Row counts for Search browse lines: domain (N), email (N), URL, and Hash by hex length."""
+    vlen = func.length(func.trim(IOC.value))
+
+    def one(*criteria):
+        q = db.session.query(func.count(IOC.id))
+        for c in criteria:
+            q = q.filter(c)
+        return int(q.scalar() or 0)
+
+    yara_count = int(
+        (db.session.query(func.count(YaraRule.id)).filter(YaraRule.status == 'approved').scalar() or 0)
+    )
+    camp_count = int((db.session.query(func.count(Campaign.id)).scalar() or 0))
+    return {
+        'domain': one(IOC.type == 'Domain'),
+        'email': one(IOC.type == 'Email'),
+        'url': one(IOC.type == 'URL'),
+        'yara': yara_count,
+        'campaign': camp_count,
+        'hash_md5': one(IOC.type == 'Hash', vlen == 32),
+        'hash_sha1': one(IOC.type == 'Hash', vlen == 40),
+        'hash_sha256': one(IOC.type == 'Hash', vlen == 64),
+        'hash_sha512': one(IOC.type == 'Hash', vlen == 128),
+        'hash_other': one(IOC.type == 'Hash', ~vlen.in_((32, 40, 64, 128))),
+    }
+
+
+_BROWSE_AGGREGATE_KEYS = frozenset({
+    'domain', 'email', 'url', 'yara', 'campaign', 'hash_md5', 'hash_sha1', 'hash_sha256', 'hash_sha512', 'hash_other',
+})
+
+
+def _ioc_query_browse_aggregate(agg: str):
+    """Return IOC query for ``browse_aggregate`` (empty ``q`` browse), or ``None`` if unknown."""
+    vlen = func.length(func.trim(IOC.value))
+    ag = (agg or '').strip().lower()
+    q = IOC.query.options(joinedload(IOC.campaign))
+    if ag == 'domain':
+        return q.filter(IOC.type == 'Domain')
+    if ag == 'email':
+        return q.filter(IOC.type == 'Email')
+    if ag == 'url':
+        return q.filter(IOC.type == 'URL')
+    if ag == 'yara':
+        return None
+    if ag == 'campaign':
+        return None
+    if ag == 'hash_md5':
+        return q.filter(IOC.type == 'Hash', vlen == 32)
+    if ag == 'hash_sha1':
+        return q.filter(IOC.type == 'Hash', vlen == 40)
+    if ag == 'hash_sha256':
+        return q.filter(IOC.type == 'Hash', vlen == 64)
+    if ag == 'hash_sha512':
+        return q.filter(IOC.type == 'Hash', vlen == 128)
+    if ag == 'hash_other':
+        return q.filter(IOC.type == 'Hash', ~vlen.in_((32, 40, 64, 128)))
+    return None
+
+
+def _ioc_type_label_for_browse_aggregate(agg):
+    """Map browse_aggregate bucket to ``IocHistory.ioc_type`` / ``IOC.type`` (Hash buckets → ``Hash``)."""
+    if not agg:
+        return None
+    ag = str(agg).strip().lower()
+    if ag == 'domain':
+        return 'Domain'
+    if ag == 'email':
+        return 'Email'
+    if ag == 'url':
+        return 'URL'
+    if ag == 'yara':
+        return 'YARA'
+    if ag == 'campaign':
+        return 'Campaign'
+    if ag in ('hash_md5', 'hash_sha1', 'hash_sha256', 'hash_sha512', 'hash_other'):
+        return 'Hash'
+    return None
+
+
+def _ioc_row_in_browse_aggregate_bucket(row, agg):
+    """True if ``row`` (IOC model) belongs to the same bucket as ``_ioc_query_browse_aggregate``."""
+    if not agg or row is None:
+        return True
+    ag = str(agg).strip().lower()
+    vlen = len((getattr(row, 'value', None) or '').strip())
+    if ag == 'domain':
+        return row.type == 'Domain'
+    if ag == 'email':
+        return row.type == 'Email'
+    if ag == 'url':
+        return row.type == 'URL'
+    if ag == 'hash_md5':
+        return row.type == 'Hash' and vlen == 32
+    if ag == 'hash_sha1':
+        return row.type == 'Hash' and vlen == 40
+    if ag == 'hash_sha256':
+        return row.type == 'Hash' and vlen == 64
+    if ag == 'hash_sha512':
+        return row.type == 'Hash' and vlen == 128
+    if ag == 'hash_other':
+        return row.type == 'Hash' and vlen not in (32, 40, 64, 128)
+    return True
+
+
+def _yara_rules_for_search_filter(filter_type, query_lower):
+    """
+    YARA rules are merged into Search results for unified UI. Match fields consistently with IOC
+    ``filter_type`` (e.g. *user* → ``YaraRule.analyst``, not filename/comment).
+    """
+    ql = (query_lower or '').strip().lower()
+    if not ql:
+        return []
+    base = YaraRule.query.filter(YaraRule.status == 'approved')
+    ft = (filter_type or 'all').strip().lower()
+    if ft == 'user':
+        return base.filter(func.lower(YaraRule.analyst).contains(ql)).all()
+    if ft == 'ioc_value':
+        return base.filter(func.lower(YaraRule.filename).contains(ql)).all()
+    if ft == 'ticket_id':
+        return base.filter(
+            YaraRule.ticket_id.isnot(None),
+            func.lower(YaraRule.ticket_id).contains(ql),
+        ).all()
+    if ft == 'comment':
+        return base.filter(
+            YaraRule.comment.isnot(None),
+            func.lower(YaraRule.comment).contains(ql),
+        ).all()
+    if ft == 'campaign':
+        return (
+            base.join(Campaign, YaraRule.campaign_id == Campaign.id)
+            .filter(
+                db.or_(
+                    func.lower(Campaign.name).contains(ql),
+                    db.and_(Campaign.description.isnot(None), func.lower(Campaign.description).contains(ql)),
+                )
+            )
+            .all()
+        )
+    if ft == 'all':
+        return base.filter(
+            db.or_(
+                func.lower(YaraRule.filename).contains(ql),
+                func.lower(YaraRule.comment).contains(ql),
+                func.lower(YaraRule.analyst).contains(ql),
+                db.and_(YaraRule.ticket_id.isnot(None), func.lower(YaraRule.ticket_id).contains(ql)),
+            )
+        ).all()
+    if ft == 'file_type':
+        if ql == 'yara':
+            return base.order_by(YaraRule.uploaded_at.desc()).limit(2000).all()
+        return []
+    if ft in ('tag', 'note', 'date', 'expiration_status'):
+        return []
+    return base.filter(
+        db.or_(
+            func.lower(YaraRule.filename).contains(ql),
+            func.lower(YaraRule.comment).contains(ql),
+            func.lower(YaraRule.analyst).contains(ql),
+            db.and_(YaraRule.ticket_id.isnot(None), func.lower(YaraRule.ticket_id).contains(ql)),
+        )
+    ).all()
+
+
+def _yara_query_for_search_filter(filter_type, query_lower):
+    """SQLAlchemy query for YARA search, aligned with IOC ``filter_type`` semantics."""
+    ql = (query_lower or '').strip().lower()
+    base = YaraRule.query.filter(YaraRule.status == 'approved')
+    if not ql:
+        return base
+    ft = (filter_type or 'all').strip().lower()
+    if ft == 'user':
+        return base.filter(func.lower(YaraRule.analyst).contains(ql))
+    if ft == 'ioc_value':
+        return base.filter(func.lower(YaraRule.filename).contains(ql))
+    if ft == 'ticket_id':
+        return base.filter(YaraRule.ticket_id.isnot(None), func.lower(YaraRule.ticket_id).contains(ql))
+    if ft == 'comment':
+        return base.filter(YaraRule.comment.isnot(None), func.lower(YaraRule.comment).contains(ql))
+    if ft == 'campaign':
+        return (
+            base.join(Campaign, YaraRule.campaign_id == Campaign.id)
+            .filter(
+                db.or_(
+                    func.lower(Campaign.name).contains(ql),
+                    db.and_(Campaign.description.isnot(None), func.lower(Campaign.description).contains(ql)),
+                )
+            )
+        )
+    if ft == 'all':
+        return base.filter(
+            db.or_(
+                func.lower(YaraRule.filename).contains(ql),
+                func.lower(YaraRule.comment).contains(ql),
+                func.lower(YaraRule.analyst).contains(ql),
+                db.and_(YaraRule.ticket_id.isnot(None), func.lower(YaraRule.ticket_id).contains(ql)),
+            )
+        )
+    if ft == 'file_type':
+        return base if ql == 'yara' else base.filter(YaraRule.id < 0)
+    if ft in ('tag', 'note', 'date', 'expiration_status'):
+        return base.filter(YaraRule.id < 0)
+    return base.filter(
+        db.or_(
+            func.lower(YaraRule.filename).contains(ql),
+            func.lower(YaraRule.comment).contains(ql),
+            func.lower(YaraRule.analyst).contains(ql),
+            db.and_(YaraRule.ticket_id.isnot(None), func.lower(YaraRule.ticket_id).contains(ql)),
+        )
+    )
+
+
+@bp.route('/api/search/browse-filters', methods=['GET'])
+def search_browse_filters():
+    """Aggregate IOC counts for the Search browse ``<select>`` (domain (N), email (N), md5 (N), …)."""
+    return jsonify({'success': True, 'aggregates': _search_browse_aggregate_counts()})
+
+
+@bp.route('/api/ip-country-codes', methods=['GET'])
+def list_ip_country_codes():
+    """Distinct ``country_code`` values on IP IOCs (non-empty), with row counts. Sorted by count descending."""
+    code_expr = func.lower(func.trim(IOC.country_code))
+    rows = (
+        db.session.query(code_expr.label('code'), func.count(IOC.id).label('cnt'))
+        .filter(IOC.type == 'IP', IOC.country_code.isnot(None))
+        .group_by(code_expr)
+        .order_by(func.count(IOC.id).desc(), code_expr.asc())
+        .all()
+    )
+    countries = [{'code': r.code, 'count': int(r.cnt)} for r in rows if r.code and str(r.code).strip()]
+    return jsonify({'success': True, 'countries': countries})
+
+
 @bp.route('/api/search', methods=['GET'])
 def search_ioc():
-    """Search for an IOC across all types with optional field filter (including tag)."""
+    """Search for an IOC across all types with optional field filter (including tag).
+
+    Optional query param ``country_code`` (or ``country``): ISO 3166-1 alpha-2, e.g. ``us`` for United States.
+    When set, results are limited to IP IOCs with a matching stored ``country_code`` (GeoIP at ingest).
+    ``q`` may be empty if ``country_code`` is set (lists IPs for that country, paginated).
+
+    When ``q`` is empty, you may pass ``browse_aggregate`` = ``domain`` | ``email`` | ``url`` | ``hash_md5`` |
+    ``hash_sha1`` | ``hash_sha256`` | ``hash_sha512`` | ``hash_other`` to list all matching IOC rows (paginated),
+    same style as choosing a country for IPs. Hash buckets use trimmed value length (32/40/64/128 hex chars).
+    """
     (_tag_matches, _search_expiration_status_matches, _ioc_row_to_search_result,
      _deleted_history_matches, _history_deleted_to_search_result) = _from_app(
         '_tag_matches', '_search_expiration_status_matches', '_ioc_row_to_search_result',
@@ -443,11 +784,190 @@ def search_ioc():
     filter_type = request.args.get('filter', 'all').strip().lower()
     page = max(1, int(request.args.get('page', 1)))
     per_page = min(max(1, int(request.args.get('per_page') or request.args.get('limit') or 100)), 1000)
-    if not query:
-        return jsonify({'success': False, 'message': 'Search query is required'}), 400
+    country_raw = (request.args.get('country_code') or request.args.get('country') or '').strip()
+    country_cc = country_raw.lower()
+    if country_raw and (len(country_cc) != 2 or not country_cc.isalpha()):
+        return jsonify({
+            'success': False,
+            'message': 'country_code must be a 2-letter ISO code (e.g. us for United States)',
+        }), 400
+
+    # Allow combining free-text search with the "Browse" dropdown.
+    # browse_aggregate acts as an additional type/bucket constraint (domain/email/url/hash buckets).
+    browse_aggregate = (request.args.get('browse_aggregate') or '').strip().lower()
+    if browse_aggregate and browse_aggregate not in _BROWSE_AGGREGATE_KEYS:
+        return jsonify({
+            'success': False,
+            'message': 'Invalid browse_aggregate (use domain, email, url, hash_md5, hash_sha1, …)',
+        }), 400
+
+    # Empty search: treat as "All Groups" + "All Columns" and return all IOCs (paginated).
+    # (YARA/Campaign have their own browse_aggregate buckets.)
+    if not query and not country_cc and not browse_aggregate:
+        total = IOC.query.count()
+        rows = (
+            IOC.query.options(joinedload(IOC.campaign))
+            .order_by(IOC.created_at.desc(), IOC.id.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        results = [_ioc_row_to_search_result(row, row.type, '', 'all') for row in rows]
+        return jsonify({
+            'success': True,
+            'query': query,
+            'filter': filter_type,
+            'results': results,
+            'count': len(results),
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+        })
+
+    # YARA-only browse bucket: behaves like other browse filters, but queries `yara_rules` instead of IOC table.
+    if browse_aggregate == 'yara':
+        yq = _yara_query_for_search_filter(filter_type, query.lower() if query else '')
+        total = yq.count()
+        rules = (
+            yq.order_by(YaraRule.uploaded_at.desc(), YaraRule.id.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        results = []
+        for rule in rules:
+            campaign_name = None
+            if rule.campaign_id:
+                c = db.session.get(Campaign, rule.campaign_id)
+                if c:
+                    campaign_name = c.name
+            results.append({
+                'ioc': rule.filename,
+                'value': rule.filename,
+                'file_type': 'YARA',
+                'date': rule.uploaded_at.isoformat() if rule.uploaded_at else None,
+                'user': rule.analyst or '',
+                'ref': rule.ticket_id or '',
+                'comment': rule.comment or '',
+                'expiration': 'NEVER',
+                'line_number': rule.id,
+                'raw_line': f"YARA:{rule.filename}",
+                'expiration_status': 'Permanent',
+                'expires_on': None,
+                'is_expired': False,
+                'status': 'Active',
+                'campaign_name': campaign_name,
+            })
+        return jsonify({
+            'success': True,
+            'query': query,
+            'filter': filter_type,
+            'browse_aggregate': browse_aggregate,
+            'results': results,
+            'count': len(results),
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+        })
+
+    # Campaign-only browse bucket.
+    if browse_aggregate == 'campaign':
+        if query:
+            camps = _search_matching_campaign_models(filter_type, query.lower())
+            total = len(camps)
+            # Simple pagination over in-memory results (bounded to 500 by helper).
+            start = (page - 1) * per_page
+            sub = camps[start:start + per_page]
+        else:
+            total = Campaign.query.count()
+            sub = (
+                Campaign.query.order_by(Campaign.created_at.desc(), Campaign.id.desc())
+                .offset((page - 1) * per_page)
+                .limit(per_page)
+                .all()
+            )
+        results = [_campaign_to_search_result_dict(c) for c in sub]
+        return jsonify({
+            'success': True,
+            'query': query,
+            'filter': filter_type,
+            'browse_aggregate': browse_aggregate,
+            'results': results,
+            'count': len(results),
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+        })
+
+    if not query and browse_aggregate:
+        oq = _ioc_query_browse_aggregate(browse_aggregate)
+        if oq is None:
+            return jsonify({'success': False, 'message': 'Invalid browse_aggregate'}), 400
+        total = oq.count()
+        rows = (
+            oq.order_by(IOC.created_at.desc(), IOC.id.desc())
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+        results = [_ioc_row_to_search_result(row, row.type, '', filter_type) for row in rows]
+        return jsonify({
+            'success': True,
+            'query': query,
+            'filter': filter_type,
+            'browse_aggregate': browse_aggregate,
+            'results': results,
+            'count': len(results),
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+        })
+
+    if not query and country_cc:
+        q = _apply_ip_country_filter(
+            IOC.query.options(joinedload(IOC.campaign)),
+            country_cc,
+        )
+        total = q.count()
+        rows = q.offset((page - 1) * per_page).limit(per_page).all()
+        query_lower = ''
+        results = [_ioc_row_to_search_result(row, row.type, query_lower, filter_type) for row in rows]
+        return jsonify({
+            'success': True,
+            'query': query,
+            'filter': filter_type,
+            'country_code': country_cc,
+            'results': results,
+            'count': len(results),
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+        })
+
     query_lower = query.lower()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     q = IOC.query.options(joinedload(IOC.campaign))
+    if country_cc:
+        q = _apply_ip_country_filter(q, country_cc)
+    if browse_aggregate:
+        vlen = func.length(func.trim(IOC.value))
+        ag = browse_aggregate
+        if ag == 'domain':
+            q = q.filter(IOC.type == 'Domain')
+        elif ag == 'email':
+            q = q.filter(IOC.type == 'Email')
+        elif ag == 'url':
+            q = q.filter(IOC.type == 'URL')
+        elif ag == 'hash_md5':
+            q = q.filter(IOC.type == 'Hash', vlen == 32)
+        elif ag == 'hash_sha1':
+            q = q.filter(IOC.type == 'Hash', vlen == 40)
+        elif ag == 'hash_sha256':
+            q = q.filter(IOC.type == 'Hash', vlen == 64)
+        elif ag == 'hash_sha512':
+            q = q.filter(IOC.type == 'Hash', vlen == 128)
+        elif ag == 'hash_other':
+            q = q.filter(IOC.type == 'Hash', ~vlen.in_((32, 40, 64, 128)))
     if filter_type == 'ioc_value':
         q = q.filter(func.lower(IOC.value).contains(query_lower))
     elif filter_type == 'ticket_id':
@@ -478,45 +998,83 @@ def search_ioc():
         elif query_lower in ('permanent', 'קבוע', 'permanent'):
             q = q.filter(IOC.expiration_date.is_(None))
         else:
+            q = _apply_ip_country_filter(q, country_cc)
             rows_all = q.limit(1000).all()
             rows = [r for r in rows_all if _search_expiration_status_matches(r, query_lower)]
             results = [_ioc_row_to_search_result(r, r.type, query_lower, filter_type) for r in rows]
-            return jsonify({
-                'success': True, 'query': query, 'filter': filter_type,
-                'results': results, 'count': len(results), 'total': len(results), 'page': 1, 'per_page': per_page
-            })
+            _eo = {
+                'success': True,
+                'query': query,
+                'filter': filter_type,
+                'results': results,
+                'count': len(results),
+                'total': len(results),
+                'page': 1,
+                'per_page': per_page,
+            }
+            if country_cc:
+                _eo['country_code'] = country_cc
+            return jsonify(_eo)
     elif filter_type == 'tag':
         q = q.filter(IOC.tags.isnot(None), IOC.tags.contains(query_lower))
+        q = _apply_ip_country_filter(q, country_cc)
         rows = q.limit(1000).all()
         rows = [r for r in rows if _tag_matches(r.tags, query_lower)]
         results = [_ioc_row_to_search_result(row, row.type, query_lower, filter_type) for row in rows]
-        return jsonify({
-            'success': True, 'query': query, 'filter': filter_type,
-            'results': results, 'count': len(results), 'total': len(results), 'page': 1, 'per_page': per_page
-        })
-    elif filter_type == 'note':
-        note_rows = IocNote.query.filter(func.lower(IocNote.content).contains(query_lower)).limit(500).all()
-        note_keys = {(n.ioc_type, n.ioc_value.lower()) for n in note_rows}
-        rows = q.limit(1000).all()
-        rows = [r for r in rows if (r.type, (r.value or '').lower()) in note_keys]
-        results = [_ioc_row_to_search_result(row, row.type, query_lower, filter_type) for row in rows]
-        return jsonify({
-            'success': True, 'query': query, 'filter': filter_type,
-            'results': results, 'count': len(results), 'total': len(results), 'page': 1, 'per_page': per_page
-        })
-    elif filter_type == 'date':
-        q = q.filter(IOC.created_at.isnot(None))
-        rows_all = q.limit(1000).all()
-        rows = [r for r in rows_all if query_lower in (r.created_at.isoformat() if r.created_at else '').lower()]
-        results = [_ioc_row_to_search_result(r, r.type, query_lower, filter_type) for r in rows]
-        _append_campaign_search_results(results, filter_type, query_lower)
-        return jsonify({
+        _to = {
             'success': True,
             'query': query,
             'filter': filter_type,
             'results': results,
-            'count': len(results), 'total': len(results), 'page': 1, 'per_page': per_page
-        })
+            'count': len(results),
+            'total': len(results),
+            'page': 1,
+            'per_page': per_page,
+        }
+        if country_cc:
+            _to['country_code'] = country_cc
+        return jsonify(_to)
+    elif filter_type == 'note':
+        note_rows = IocNote.query.filter(func.lower(IocNote.content).contains(query_lower)).limit(500).all()
+        note_keys = {(n.ioc_type, n.ioc_value.lower()) for n in note_rows}
+        q = _apply_ip_country_filter(q, country_cc)
+        rows = q.limit(1000).all()
+        rows = [r for r in rows if (r.type, (r.value or '').lower()) in note_keys]
+        results = [_ioc_row_to_search_result(row, row.type, query_lower, filter_type) for row in rows]
+        _no = {
+            'success': True,
+            'query': query,
+            'filter': filter_type,
+            'results': results,
+            'count': len(results),
+            'total': len(results),
+            'page': 1,
+            'per_page': per_page,
+        }
+        if country_cc:
+            _no['country_code'] = country_cc
+        return jsonify(_no)
+    elif filter_type == 'date':
+        q = q.filter(IOC.created_at.isnot(None))
+        q = _apply_ip_country_filter(q, country_cc)
+        rows_all = q.limit(1000).all()
+        rows = [r for r in rows_all if query_lower in (r.created_at.isoformat() if r.created_at else '').lower()]
+        results = [_ioc_row_to_search_result(r, r.type, query_lower, filter_type) for r in rows]
+        if not country_cc:
+            _append_campaign_search_results(results, filter_type, query_lower)
+        out = {
+            'success': True,
+            'query': query,
+            'filter': filter_type,
+            'results': results,
+            'count': len(results),
+            'total': len(results),
+            'page': 1,
+            'per_page': per_page,
+        }
+        if country_cc:
+            out['country_code'] = country_cc
+        return jsonify(out)
     elif filter_type == 'all':
         all_conditions = [
             func.lower(IOC.value).contains(query_lower),
@@ -549,6 +1107,7 @@ def search_ioc():
                 func.lower(IOC.comment).contains(query_lower)
             )
         )
+    q = _apply_ip_country_filter(q, country_cc)
     total = q.count()
     rows = q.offset((page - 1) * per_page).limit(per_page).all()
     if filter_type == 'all':
@@ -585,59 +1144,63 @@ def search_ioc():
                     extra = IOC.query.options(joinedload(IOC.campaign)).filter(
                         IOC.type == ntype, func.lower(IOC.value) == nval
                     ).first()
-                    if extra:
+                    if extra and _ioc_row_matches_country(extra, country_cc):
+                        if browse_aggregate and not _ioc_row_in_browse_aggregate_bucket(extra, browse_aggregate):
+                            continue
                         rows.append(extra)
     results = [_ioc_row_to_search_result(row, row.type, query_lower, filter_type) for row in rows]
-    yara_matches = YaraRule.query.filter(
-        YaraRule.status == 'approved',
-        db.or_(
-            func.lower(YaraRule.filename).contains(query_lower),
-            func.lower(YaraRule.comment).contains(query_lower)
-        )
-    ).all()
-    for rule in yara_matches:
-        campaign_name = None
-        if rule.campaign_id:
-            c = db.session.get(Campaign, rule.campaign_id)
-            if c:
-                campaign_name = c.name
-        results.append({
-            'ioc': rule.filename,
-            'value': rule.filename,
-            'file_type': 'YARA',
-            'date': rule.uploaded_at.isoformat() if rule.uploaded_at else None,
-            'user': rule.analyst or '',
-            'ref': rule.ticket_id or '',
-            'comment': rule.comment or '',
-            'expiration': 'NEVER',
-            'line_number': rule.id,
-            'raw_line': f"YARA:{rule.filename}",
-            'expiration_status': 'Permanent',
-            'expires_on': None,
-            'is_expired': False,
-            'status': 'Active',
-            'campaign_name': campaign_name,
-        })
-    _append_campaign_search_results(results, filter_type, query_lower)
+    # Merge YARA + Campaign pseudo-rows only when not restricting by country or browse bucket.
+    # browse_aggregate scopes to IOC buckets (domain/email/url/hash); YARA and Campaign rows are not in those buckets.
+    if not country_cc and not browse_aggregate:
+        yara_matches = _yara_rules_for_search_filter(filter_type, query_lower)
+        for rule in yara_matches:
+            campaign_name = None
+            if rule.campaign_id:
+                c = db.session.get(Campaign, rule.campaign_id)
+                if c:
+                    campaign_name = c.name
+            results.append({
+                'ioc': rule.filename,
+                'value': rule.filename,
+                'file_type': 'YARA',
+                'date': rule.uploaded_at.isoformat() if rule.uploaded_at else None,
+                'user': rule.analyst or '',
+                'ref': rule.ticket_id or '',
+                'comment': rule.comment or '',
+                'expiration': 'NEVER',
+                'line_number': rule.id,
+                'raw_line': f"YARA:{rule.filename}",
+                'expiration_status': 'Permanent',
+                'expires_on': None,
+                'is_expired': False,
+                'status': 'Active',
+                'campaign_name': campaign_name,
+            })
+    if not country_cc and not browse_aggregate:
+        _append_campaign_search_results(results, filter_type, query_lower)
     current_keys = {(r.get('file_type'), (r.get('ioc') or r.get('value') or '').lower()) for r in results}
-    dq = IocHistory.query.filter(IocHistory.event_type == 'deleted')
-    if filter_type == 'file_type':
-        if query_lower.upper() in ('IP', 'DOMAIN', 'URL', 'HASH', 'EMAIL'):
-            dq = dq.filter(IocHistory.ioc_type == query_lower.upper())
-        elif query_lower == 'yara':
-            dq = dq.filter(IocHistory.ioc_type == 'YARA')
-        else:
-            dq = dq.filter(func.lower(IocHistory.ioc_type).contains(query_lower))
-    deleted_rows = dq.order_by(IocHistory.at.desc()).all()
-    for h in deleted_rows:
-        key = (h.ioc_type, (h.ioc_value or '').lower())
-        if key in current_keys:
-            continue
-        if not _deleted_history_matches(h, query_lower, filter_type):
-            continue
-        current_keys.add(key)
-        results.append(_history_deleted_to_search_result(h))
-    return jsonify({
+    if not country_cc:
+        dq = IocHistory.query.filter(IocHistory.event_type == 'deleted')
+        agg_hist_type = _ioc_type_label_for_browse_aggregate(browse_aggregate)
+        if agg_hist_type:
+            dq = dq.filter(IocHistory.ioc_type == agg_hist_type)
+        if filter_type == 'file_type':
+            if query_lower.upper() in ('IP', 'DOMAIN', 'URL', 'HASH', 'EMAIL'):
+                dq = dq.filter(IocHistory.ioc_type == query_lower.upper())
+            elif query_lower == 'yara':
+                dq = dq.filter(IocHistory.ioc_type == 'YARA')
+            else:
+                dq = dq.filter(func.lower(IocHistory.ioc_type).contains(query_lower))
+        deleted_rows = dq.order_by(IocHistory.at.desc()).all()
+        for h in deleted_rows:
+            key = (h.ioc_type, (h.ioc_value or '').lower())
+            if key in current_keys:
+                continue
+            if not _deleted_history_matches(h, query_lower, filter_type):
+                continue
+            current_keys.add(key)
+            results.append(_history_deleted_to_search_result(h))
+    out = {
         'success': True,
         'query': query,
         'filter': filter_type,
@@ -645,8 +1208,11 @@ def search_ioc():
         'count': len(results),
         'total': total,
         'page': page,
-        'per_page': per_page
-    })
+        'per_page': per_page,
+    }
+    if country_cc:
+        out['country_code'] = country_cc
+    return jsonify(out)
 
 
 # ---------------------------------------------------------------------------
@@ -655,13 +1221,22 @@ def search_ioc():
 
 @bp.route('/api/all-iocs', methods=['GET'])
 def get_all_iocs():
-    """Get all IOCs for historical table with pagination (page, per_page)."""
+    """Get all IOCs for historical table with pagination (page, per_page).
+
+    Optional ``country_code`` / ``country``: restrict to IP IOCs with that stored ISO2 country (e.g. ``us``).
+    """
     (check_expiration_status, get_country_code) = _from_app('check_expiration_status', 'get_country_code')
     page = max(1, int(request.args.get('page', 1)))
     per_page_arg = request.args.get('per_page') or request.args.get('limit')
     per_page = min(max(1, int(per_page_arg or DEFAULT_PAGE_SIZE)), DEFAULT_IOC_LIMIT)
-    total = IOC.query.filter(IOC.type != 'YARA').count()
-    q = IOC.query.filter(IOC.type != 'YARA').order_by(IOC.created_at.desc())
+    country_raw = (request.args.get('country_code') or request.args.get('country') or '').strip()
+    country_cc = country_raw.lower()
+    if country_raw and (len(country_cc) != 2 or not country_cc.isalpha()):
+        return jsonify({'success': False, 'message': 'country_code must be a 2-letter ISO code'}), 400
+    base = IOC.query.filter(IOC.type != 'YARA')
+    base = _apply_ip_country_filter(base, country_cc)
+    total = base.count()
+    q = base.order_by(IOC.created_at.desc())
     rows = q.offset((page - 1) * per_page).limit(per_page).all()
     iocs = []
     for row in rows:
@@ -688,10 +1263,17 @@ def get_all_iocs():
         else:
             item['tags'] = []
         iocs.append(item)
-    return jsonify({
-        'success': True, 'iocs': iocs, 'count': len(iocs), 'total': total,
-        'page': page, 'per_page': per_page
-    })
+    out = {
+        'success': True,
+        'iocs': iocs,
+        'count': len(iocs),
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+    }
+    if country_cc:
+        out['country_code'] = country_cc
+    return jsonify(out)
 
 
 # ---------------------------------------------------------------------------
@@ -792,6 +1374,20 @@ def revoke_ioc():
         if not row:
             return jsonify({'success': False, 'message': MSG_IOC_NOT_FOUND}), 404
 
+        # Prepare outbound removal push context before deleting DB row.
+        remove_payload = {
+            'ioc_type': row.type,
+            'value': row.value,
+            'analyst': (row.analyst or current_user.username or 'system'),
+            'ticket_id': row.ticket_id,
+            'comment': row.comment,
+            'expiration_date': row.expiration_date,
+            'campaign_id': row.campaign_id,
+            'tags_json': row.tags,
+            'user_id': row.user_id,
+            'created_at': row.created_at,
+        }
+
         champs_before = _capture_champs_before(current_user.id, (current_user.username or '').lower())
 
         was_expired = row.expiration_date is not None and row.expiration_date < datetime.now(timezone.utc).replace(tzinfo=None)
@@ -819,10 +1415,24 @@ def revoke_ioc():
         audit_log('IOC_DELETE', f'type={ioc_type} value={value[:80]} reason={reason[:100]}')
         try:
             from flask import current_app
-            from utils.esa_dictionary import schedule_esa_remove_after_revoke
+            from utils.cisco_esa import schedule_esa_remove_after_revoke
             schedule_esa_remove_after_revoke(current_app._get_current_object(), ioc_type, value)
         except Exception as esa_err:
             logger.warning('ESA dictionary schedule after revoke failed: %s', esa_err)
+
+        # Outbound API remove (IOC push) - fire-and-forget.
+        try:
+            from flask import current_app
+            from utils.outbound_ioc import schedule_outbound_ioc_event
+            schedule_outbound_ioc_event(
+                current_app._get_current_object(),
+                action='remove',
+                remove_reason='manual_delete',
+                submission_method='manual_delete',
+                **remove_payload,
+            )
+        except Exception as push_err:
+            logger.warning('IOC push after revoke failed: %s', push_err)
         refresh_champ_score_for_user(current_user.id)
         response = {'success': True, 'message': f'{ioc_type} IOC revoked successfully'}
         try:
@@ -887,6 +1497,12 @@ def edit_ioc():
         if row.campaign_id:
             c = Campaign.query.get(row.campaign_id)
             old_campaign = (c.name if c else '').strip()
+        # If IOC was expired and now becomes active again, re-push to outbound systems.
+        try:
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            old_was_expired = (row.expiration_date is not None) and (row.expiration_date <= now_utc)
+        except Exception:
+            old_was_expired = False
         try:
             old_tags_list = json.loads(row.tags) if row.tags else []
         except (TypeError, ValueError):
@@ -909,6 +1525,22 @@ def edit_ioc():
                 return jsonify({'success': False, 'message': f'Campaign "{campaign_name}" not found'}), 400
         if 'tags' in data:
             tags_list = normalize_tags_from_input(data.get('tags'))
+            try:
+                restricted = (_get_setting('tags_restricted_enabled', 'false') or 'false').lower() == 'true'
+                allowed = parse_allowed_tags_setting(_get_setting('allowed_tags', '[]'))
+                allow_suggest = (_get_setting('tags_allow_suggest', 'true') or 'true').lower() == 'true'
+                if restricted and allowed:
+                    _, invalid = enforce_allowed_tags(tags_list or [], allowed)
+                    if invalid:
+                        invalid = sorted(set(invalid))
+                        return jsonify({
+                            'success': False,
+                            'message': 'Invalid tag(s). Please select from the allowed tags list.',
+                            'invalid_tags': invalid,
+                            'suggest_allowed': bool(allow_suggest),
+                        }), 400
+            except Exception:
+                pass
             row.tags = json.dumps(tags_list) if tags_list else '[]'
         else:
             tags_list = old_tags_list
@@ -946,6 +1578,32 @@ def edit_ioc():
         _commit_with_retry()
         changes_desc = '; '.join(f"{c['field']}: {c['old'][:30]}->{c['new'][:30]}" for c in edit_changes[:5])
         audit_log('IOC_EDIT', f'type={ioc_type} value={value[:80]} changes=[{changes_desc}]')
+
+        # Reactivation: if previously expired, and new expiration is Permanent or future, push create again.
+        try:
+            now_utc2 = datetime.now(timezone.utc).replace(tzinfo=None)
+            new_is_active = (row.expiration_date is None) or (row.expiration_date > now_utc2)
+            if old_was_expired and new_is_active:
+                from flask import current_app
+                from utils.outbound_ioc import schedule_outbound_ioc_event
+                schedule_outbound_ioc_event(
+                    current_app._get_current_object(),
+                    action='create',
+                    remove_reason='',
+                    ioc_type=row.type,
+                    value=row.value,
+                    analyst=(row.analyst or current_user.username or 'system'),
+                    ticket_id=row.ticket_id,
+                    comment=row.comment,
+                    expiration_date=row.expiration_date,
+                    campaign_id=row.campaign_id,
+                    tags_json=row.tags,
+                    submission_method='reactivate',
+                    user_id=row.user_id,
+                    created_at=row.created_at,
+                )
+        except Exception as e:
+            logger.warning('edit_ioc: reactivation push failed: %s', e)
 
         # If IOC was linked to a campaign, log Champs event and return achievement data for popup
         campaign_linked = (old_campaign != new_campaign_val) and bool(new_campaign_val)

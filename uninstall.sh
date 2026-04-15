@@ -17,7 +17,7 @@
 #    sudo ./setup.sh                  # Online
 #    sudo ./setup.sh --offline        # Offline (from installer ZIP)
 #
-#  Updated: 2025-03-11
+#  Updated: 2026-04-12
 # ============================================================================
 set -euo pipefail
 
@@ -303,7 +303,7 @@ info "Removed:"
 echo "    - All systemd services, timers, and override directories"
 echo "    - All ZIoCHub processes"
 echo "    - ${APP_DIR}/ (application code, templates, static, Python venv)"
-echo "      (includes all pip dependencies such as yara-python)"
+echo "      (includes all pip dependencies: yara-python, google-auth, requests, …)"
 echo "    - ${DATA_DIR}/ziochub.db (SQLite database)"
 echo "    - ${DATA_DIR}/Main/ (IOC files)"
 echo "    - ${DATA_DIR}/YARA/ and YARA_pending/ (YARA rules)"

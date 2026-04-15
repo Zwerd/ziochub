@@ -10,3 +10,6 @@ ldap3>=2.9
 pymisp>=2.4.187
 # YARA syntax check — same pin as requirements.txt; wheel must match target Linux/Python
 yara-python==4.5.0
+# Admin → Integrations → Google SecOps “Test connection” (no DXL)
+google-auth>=2.23.0
+requests>=2.28.0

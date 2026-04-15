@@ -1,0 +1,164 @@
+// ============================================================================
+// ACCESSIBILITY - Focus states, screen reader, reduced motion
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Focus Visible States
+// ----------------------------------------------------------------------------
+
+// Buttons - glow effect
+.btn-cmd-primary:focus-visible,
+.btn-cmd-danger:focus-visible,
+.btn-cmd-neutral:focus-visible,
+button:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.5);
+}
+
+[data-theme="light"] .btn-cmd-primary:focus-visible,
+[data-theme="light"] .btn-cmd-danger:focus-visible,
+[data-theme="light"] .btn-cmd-neutral:focus-visible,
+[data-theme="light"] button:focus-visible {
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.4);
+}
+
+// Links and interactive elements - outline
+a:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+}
+
+// Inputs - no double outline (already have box-shadow)
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+    outline: none;
+}
+
+// ----------------------------------------------------------------------------
+// Skip Links
+// ----------------------------------------------------------------------------
+.skip-link {
+    position: absolute;
+    top: -40px;
+    left: 0;
+    background: var(--accent-blue);
+    color: #fff;
+    padding: var(--space-2) var(--space-4);
+    z-index: 1000;
+    text-decoration: none;
+    font-weight: 600;
+    border-radius: 0 0 var(--radius-md) 0;
+    
+    &:focus {
+        top: 0;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// High Contrast Mode
+// ----------------------------------------------------------------------------
+@media (prefers-contrast: high) {
+    :root {
+        --border-light: rgba(0, 0, 0, 0.3);
+        --border-medium: rgba(0, 0, 0, 0.5);
+    }
+    
+    [data-theme="dark"] {
+        --border-light: rgba(255, 255, 255, 0.3);
+        --border-medium: rgba(255, 255, 255, 0.5);
+    }
+    
+    .btn-cmd-primary,
+    .btn-cmd-danger,
+    .btn-cmd-neutral {
+        border-width: 2px;
+    }
+    
+    a:focus-visible,
+    button:focus-visible {
+        outline-width: 3px;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Forced Colors Mode (Windows High Contrast)
+// ----------------------------------------------------------------------------
+@media (forced-colors: active) {
+    .btn-cmd-primary,
+    .btn-cmd-danger,
+    .btn-cmd-neutral {
+        border: 2px solid currentColor;
+    }
+    
+    .tab-button.active::after {
+        background: currentColor;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Screen Reader Announcements
+// ----------------------------------------------------------------------------
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.sr-only-focusable:focus,
+.sr-only-focusable:active {
+    position: static;
+    width: auto;
+    height: auto;
+    padding: inherit;
+    margin: inherit;
+    overflow: visible;
+    clip: auto;
+    white-space: inherit;
+}
+
+// Live regions for dynamic content
+[aria-live="polite"],
+[aria-live="assertive"] {
+    position: absolute;
+    left: -10000px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+// Make live regions visible when needed
+.live-region-visible {
+    position: static;
+    left: auto;
+    width: auto;
+    height: auto;
+    overflow: visible;
+}
+
+// ----------------------------------------------------------------------------
+// Touch Targets
+// ----------------------------------------------------------------------------
+@media (pointer: coarse) {
+    // Minimum 44x44px touch targets on touch devices
+    button,
+    a,
+    input[type="checkbox"],
+    input[type="radio"],
+    select {
+        min-height: 44px;
+        min-width: 44px;
+    }
+    
+    .btn-cmd-sm {
+        min-height: 36px;
+        padding: 0.5rem 0.75rem;
+    }
+}

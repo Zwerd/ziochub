@@ -235,11 +235,15 @@
                     const ownerLower = (f.user || '').toString().toLowerCase();
                     const canEdit = isAdmin || (ownerLower && ownerLower === usernameLower);
                     const canDelete = isAdmin || (ownerLower && ownerLower === usernameLower);
+                    const displayName = (f.display_name != null && f.display_name !== '') ? f.display_name : f.filename;
+                    const storeTitle = (f.filename && displayName !== f.filename)
+                        ? ` title="${escapeAttr('Stored file: ' + f.filename)}"`
+                        : '';
                     const editBtn = canEdit ? `<button type="button" class="btn-cmd-primary btn-cmd-sm edit-yara-btn" data-filename="${escapeHtml(f.filename)}">${t('actions.edit')}</button>` : '';
                     const deleteBtn = canDelete ? `<button type="button" class="btn-cmd-danger btn-cmd-sm delete-yara-btn" data-filename="${escapeHtml(f.filename)}">${t('actions.delete')}</button>` : '';
                     return `
                     <tr class="border border-white/10">
-                        <td class="border border-white/10 px-4 py-2 text-sm font-mono">${escapeHtml(f.filename)}</td>
+                        <td class="border border-white/10 px-4 py-2 text-sm font-mono"${storeTitle}>${escapeHtml(displayName)}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm text-secondary truncate max-w-xs" title="${escapeHtml((f.comment || '').trim()).replace(/"/g, '&quot;')}" dir="${typeof detectTextDir==='function'?detectTextDir(f.comment||''):'auto'}">${escapeHtml(f.comment || '-')}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm">${f.size_kb} KB</td>
                         <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.upload_date || '')}</td>
@@ -476,7 +480,7 @@
             const response = await fetch('/api/upload-yara', { method: 'POST', body: formData });
             const result = await response.json().catch(() => ({}));
             if (response.status === 409) {
-                showToast(t('toast.duplicate_entry'), 'error');
+                showToast((result && result.message) ? result.message : t('toast.duplicate_entry'), 'error');
                 return;
             }
             if (result.success) {
@@ -752,8 +756,12 @@
                            <button type="button" class="btn-cmd-danger btn-cmd-sm reject-pending-yara-btn" data-filename="${escapeAttr(f.filename)}">Reject</button>`
                         : `<button type="button" class="btn-cmd-primary btn-cmd-sm view-pending-yara-btn" data-filename="${escapeAttr(f.filename)}">${t('actions.view')}</button>`;
                     const pendingBadge = '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/40 mr-2 flex-shrink-0">Pending</span>';
+                    const displayPend = (f.display_name != null && f.display_name !== '') ? f.display_name : f.filename;
+                    const storeTitlePend = (f.filename && displayPend !== f.filename)
+                        ? ` title="${escapeAttr('Stored file: ' + f.filename)}"`
+                        : '';
                     return `<tr class="border border-white/10">
-                        <td class="border border-white/10 px-4 py-2 text-sm font-mono"><span class="inline-flex items-center gap-1 flex-wrap">${pendingBadge}${escapeHtml(f.filename)}</span></td>
+                        <td class="border border-white/10 px-4 py-2 text-sm font-mono"${storeTitlePend}><span class="inline-flex items-center gap-1 flex-wrap">${pendingBadge}${escapeHtml(displayPend)}</span></td>
                         <td class="border border-white/10 px-4 py-2 text-sm text-secondary truncate max-w-xs" title="${escapeAttr((f.comment || '').trim())}" dir="${typeof detectTextDir==='function'?detectTextDir(f.comment||''):'auto'}">${escapeHtml(f.comment || '-')}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.upload_date || '-')}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm">${analystCell}</td>

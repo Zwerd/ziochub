@@ -166,6 +166,36 @@ const privateConfirmMessage = document.getElementById('privateConfirmMessage');
 const privateConfirmCancel = document.getElementById('privateConfirmCancel');
 const privateConfirmYes = document.getElementById('privateConfirmYes');
 
+async function maybeSuggestInvalidTags(result) {
+    try {
+        if (!result || !Array.isArray(result.invalid_tags) || !result.invalid_tags.length) return false;
+        if (!result.suggest_allowed) return false;
+        if (typeof window.appConfirm !== 'function') return false;
+        const list = result.invalid_tags.slice(0, 10).join(', ') + (result.invalid_tags.length > 10 ? '…' : '');
+        const ok = await window.appConfirm({
+            title: t('tags.suggest_title') || 'Suggest new tag(s)?',
+            message: (t('tags.suggest_message') || 'These tags are not allowed yet:') + '\n\n' + list,
+            okText: t('tags.suggest_ok') || 'Suggest',
+            cancelText: t('tags.suggest_cancel') || 'Cancel'
+        });
+        if (!ok) return true;
+        const res = await fetch('/api/tags/suggest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tags: result.invalid_tags })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data && data.success) {
+            showToast(t('tags.suggested') || 'Suggestion submitted to admin for approval.', 'success');
+        } else {
+            showToast((data && data.message) ? data.message : 'Failed to suggest tags', 'error');
+        }
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 function showPrivateConfirmStep(step, value) {
     const displayVal = value ? (value.length > 50 ? value.substring(0, 47) + '...' : value) : '';
     if (step === 1) {
@@ -219,6 +249,7 @@ if (privateConfirmYes) {
                     loadStats();
                     loadLiveFeed();
                 } else {
+                    if (await maybeSuggestInvalidTags(result)) return;
                     showToast(result.message || 'Submission failed', 'error');
                 }
             } catch (error) {
@@ -253,6 +284,7 @@ async function doSubmitIoc(data) {
             loadStats();
             loadLiveFeed();
         } else {
+            if (await maybeSuggestInvalidTags(result)) return;
             showToast(result.message || 'Submission failed', 'error');
         }
     } catch (error) {

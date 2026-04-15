@@ -9,6 +9,7 @@
 #    sudo ./setup.sh              # Online install  (pip fetches from PyPI)
 #    sudo ./setup.sh --offline    # Offline install  (uses local wheels in ./packages)
 #    sudo ./setup.sh --upgrade    # Upgrade existing installation
+#    ./setup.sh --check [--offline]   # Prerequisites only (no root; no install)
 #    sudo ./setup.sh --help       # Full help with steps and paths
 #
 #  Installs to /opt/ziochub with data in /opt/ziochub/data/
@@ -16,7 +17,7 @@
 #  Auto-generates a self-signed SSL certificate if openssl is available.
 #  HTTPS port: 8443 (default), or 443 / custom. Port 443 requires setcap; see security note in installer.
 #
-#  Updated: 2025-03-11
+#  Updated: 2026-04-13 — --check/--preflight; venv preflight uses real test create.
 # ============================================================================
 set -euo pipefail
 
@@ -26,6 +27,83 @@ info()  { echo -e "${CYAN}[INFO]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[ OK ]${NC}  $*"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
+
+# ── Air-gap / offline: python3-venv install hints (no apt on target assumption) ─
+# Prints one line per echo; consume with: done < <(ziochub_python3_venv_preflight_notes "$OFFLINE" "$PY_MM_FALLBACK")
+# Arg2 is only used if python3 cannot report its version (fallback major.minor, e.g. 3.12).
+ziochub_python3_venv_preflight_notes() {
+    local want_offline="${1:-false}"
+    local py_mm_fallback="${2:-3}"
+    local pretty="unknown"
+    local codename=""
+    local os_id=""
+    local arch
+    arch=$(dpkg --print-architecture 2>/dev/null || uname -m 2>/dev/null || echo "amd64")
+    if [[ -f /etc/os-release ]]; then
+        # shellcheck disable=SC1091
+        . /etc/os-release
+        pretty="${PRETTY_NAME:-${NAME:-unknown}}"
+        codename="${VERSION_CODENAME:-}"
+        os_id="${ID:-}"
+    fi
+
+    local py_path
+    py_path=$(command -v python3 2>/dev/null || true)
+    local py_full="unknown"
+    local py_dot="${py_mm_fallback}"
+    if [[ -n "${py_path}" ]]; then
+        py_full=$("${py_path}" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null || echo "unknown")
+        py_dot=$("${py_path}" -c 'import sys; print("%d.%d" % (sys.version_info.major, sys.version_info.minor))' 2>/dev/null || true)
+    fi
+    [[ -z "${py_dot}" ]] && py_dot="${py_mm_fallback}"
+    # Debian/Ubuntu: version-tied package is python3.12-venv not python312-venv
+    local ver_pkg="python${py_dot}-venv"
+
+    local pkg_url_meta=""
+    local pkg_url_ver=""
+    if [[ "${os_id}" == "ubuntu" && -n "${codename}" ]]; then
+        pkg_url_meta="https://packages.ubuntu.com/${codename}/python3-venv"
+        pkg_url_ver="https://packages.ubuntu.com/${codename}/${ver_pkg}"
+    elif [[ "${os_id}" == "debian" && -n "${codename}" ]]; then
+        pkg_url_meta="https://packages.debian.org/${codename}/python3-venv"
+        pkg_url_ver="https://packages.debian.org/${codename}/${ver_pkg}"
+    else
+        pkg_url_meta="https://packages.ubuntu.com/ or https://packages.debian.org/ (search: python3-venv; arch ${arch})"
+        pkg_url_ver="(same site, search: ${ver_pkg})"
+    fi
+
+    echo "  Detected host: ${pretty}  (dpkg architecture: ${arch})."
+    echo "  This machine python3: ${py_path:-python3}  →  Python ${py_full}"
+    echo "  Debian/Ubuntu package names to install/download:"
+    echo "       • python3-venv     — default choice (matches distro packaging for /usr/bin/python3)"
+    echo "       • ${ver_pkg}  — tied to Python ${py_dot} on this host (use if you need an explicit venv for this version)"
+
+    if [[ "${want_offline}" == "true" ]]; then
+        echo "  --- Air-gapped (--offline): this server usually cannot use apt against the internet ---"
+        echo "  A) On a PC with the SAME OS release and ${arch}, with network, run:"
+        echo "       mkdir -p /tmp/ziochub_debs && cd /tmp/ziochub_debs"
+        echo "       sudo apt-get update"
+        echo "       sudo apt-get install --download-only -y -o Dir::Cache::archives=/tmp/ziochub_debs python3-venv"
+        echo "     If python3-venv does not match Python ${py_full} on the target, also run:"
+        echo "       sudo apt-get install --download-only -y -o Dir::Cache::archives=/tmp/ziochub_debs ${ver_pkg}"
+        echo "     (Saves multiple .deb files into that folder — the requested package plus its dependencies, not a single file.)"
+        echo "  B) Copy the entire folder (every .deb inside it) to this server."
+        echo "  C) On this server:"
+        echo "       cd /path/to/copied/debs && sudo dpkg -i *.deb"
+        echo "     If dpkg reports missing packages, download those names on the online PC the same way."
+        echo "  D) Manual .deb pages (${arch}, this OS release):"
+        echo "       ${pkg_url_meta}"
+        echo "       ${pkg_url_ver}"
+    else
+        echo "  On this server (with working apt + network):"
+        echo "       sudo apt-get update && sudo apt-get install -y python3-venv"
+        echo "  If that does not fix venv for Python ${py_full}:"
+        echo "       sudo apt-get install -y ${ver_pkg}"
+        echo "  Air-gapped later? Use the same steps as --offline (download .deb elsewhere):"
+        echo "       ${pkg_url_meta}"
+        echo "       ${pkg_url_ver}"
+    fi
+}
 
 # ── Help ─────────────────────────────────────────────────────────────────────
 show_help() {
@@ -38,7 +116,11 @@ show_help() {
     echo "  --offline     Install from local wheel files in ./packages/ directory"
     echo "                (no internet required). Use package_offline.sh to prepare."
     echo "  --upgrade     Upgrade an existing installation. Preserves database,"
-    echo "                IOC files, YARA rules, and SSL certificates."
+    echo "                IOC files, YARA rules, SSL certificates, and allowlist.txt."
+    echo "  --check, --preflight"
+    echo "                Verify host prerequisites only (Python venv, systemd, files,"
+    echo "                offline packages if --offline). Does not require root; makes"
+    echo "                no changes. Example: ./setup.sh --check --offline"
     echo "  --help, -h    Show this help message and exit."
     echo ""
     echo "Modes:"
@@ -81,15 +163,15 @@ show_help() {
 # ── Pre-flight ──────────────────────────────────────────────────────────────
 OFFLINE=false
 UPGRADE=false
+CHECK_ONLY=false
 for arg in "$@"; do
     [[ "$arg" == "--help" || "$arg" == "-h" ]] && show_help
     [[ "$arg" == "--offline" ]] && OFFLINE=true
     [[ "$arg" == "--upgrade" ]] && UPGRADE=true
+    [[ "$arg" == "--check" || "$arg" == "--preflight" ]] && CHECK_ONLY=true
 done
 
-[[ $EUID -ne 0 ]] && fail "This script must be run as root (sudo ./setup.sh)"
-
-# ── Constants ───────────────────────────────────────────────────────────────
+# ── Constants (needed before --check and before root check) ─────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_USER="ziochub"
 APP_GROUP="ziochub"
@@ -97,22 +179,32 @@ APP_DIR="/opt/ziochub"
 DATA_DIR="${APP_DIR}/data"
 VENV_DIR="${APP_DIR}/venv"
 
+if ! $CHECK_ONLY; then
+    [[ $EUID -ne 0 ]] && fail "This script must be run as root (sudo ./setup.sh)"
+fi
+
 # ── Fix permissions (ZIP extraction may strip +x from .sh files) ───────────
 chmod +x "${SCRIPT_DIR}/"*.sh 2>/dev/null || true
 
 # ── Must NOT run from installed dir (upgrade would copy old over old) ───────
-SCRIPT_CANON=$(readlink -f "${SCRIPT_DIR}" 2>/dev/null || realpath "${SCRIPT_DIR}" 2>/dev/null || echo "${SCRIPT_DIR}")
-APP_CANON=$(readlink -f "${APP_DIR}" 2>/dev/null || realpath "${APP_DIR}" 2>/dev/null || echo "${APP_DIR}")
-if [[ "${SCRIPT_CANON}" == "${APP_CANON}" ]] || [[ "${SCRIPT_DIR}" == "${APP_DIR}" ]]; then
-    fail "Do not run setup.sh from the installed directory (${APP_DIR})." \
-         "Extract the installer ZIP to a separate folder (e.g. ziochub_install), then run: cd ziochub_install && sudo ./setup.sh --upgrade --offline"
+if ! $CHECK_ONLY; then
+    SCRIPT_CANON=$(readlink -f "${SCRIPT_DIR}" 2>/dev/null || realpath "${SCRIPT_DIR}" 2>/dev/null || echo "${SCRIPT_DIR}")
+    APP_CANON=$(readlink -f "${APP_DIR}" 2>/dev/null || realpath "${APP_DIR}" 2>/dev/null || echo "${APP_DIR}")
+    if [[ "${SCRIPT_CANON}" == "${APP_CANON}" ]] || [[ "${SCRIPT_DIR}" == "${APP_DIR}" ]]; then
+        fail "Do not run setup.sh from the installed directory (${APP_DIR})." \
+             "Extract the installer ZIP to a separate folder (e.g. ziochub_install), then run: cd ziochub_install && sudo ./setup.sh --upgrade --offline"
+    fi
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
 #  PRE-FLIGHT CHECKS — Verify all requirements before starting installation
 # ════════════════════════════════════════════════════════════════════════════
 echo ""
-info "Running pre-flight checks..."
+if $CHECK_ONLY; then
+    info "Running prerequisite check only (--check / --preflight). No installation will be performed."
+else
+    info "Running pre-flight checks..."
+fi
 echo ""
 
 PREFLIGHT_ERRORS=()
@@ -127,14 +219,74 @@ else
     PREFLIGHT_ERRORS+=("Python3 is not installed. Install with: apt install python3")
 fi
 
-# Check Python venv module
-if python3 -m venv --help &>/dev/null 2>&1; then
-    ok "Python venv module available"
-else
-    PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "3.x")
-    PREFLIGHT_ERRORS+=("Python venv module not available.")
-    PREFLIGHT_ERRORS+=("  Install with: sudo apt-get install python3-venv")
-    PREFLIGHT_ERRORS+=("  Or for your Python version: sudo apt-get install python${PY_VER}-venv")
+# Check Python venv: must be able to create a real environment (stricter than --help)
+if command -v python3 &>/dev/null; then
+    TEST_VENV_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ziochub_venv_test.XXXXXX" 2>/dev/null || true)
+    if [[ -n "${TEST_VENV_DIR}" ]] && [[ -d "${TEST_VENV_DIR}" ]]; then
+        if python3 -m venv "${TEST_VENV_DIR}" 2>/dev/null; then
+            rm -rf "${TEST_VENV_DIR}"
+            ok "Python venv: test environment created successfully"
+        else
+            rm -rf "${TEST_VENV_DIR}" 2>/dev/null || true
+            PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "3")
+            
+            # Online mode: try to install python3-venv automatically
+            if ! $OFFLINE && ! $CHECK_ONLY; then
+                warn "python3-venv not available. Attempting automatic installation..."
+                VENV_INSTALLED=false
+                
+                # Detect package manager and install
+                if command -v apt-get &>/dev/null; then
+                    info "Detected apt package manager. Installing python3-venv..."
+                    if apt-get update -qq 2>/dev/null && apt-get install -y python3-venv 2>/dev/null; then
+                        VENV_INSTALLED=true
+                    else
+                        # Try version-specific package (e.g., python3.12-venv)
+                        info "Trying version-specific package: python${PY_VER}-venv..."
+                        apt-get install -y "python${PY_VER}-venv" 2>/dev/null && VENV_INSTALLED=true
+                    fi
+                elif command -v dnf &>/dev/null; then
+                    info "Detected dnf package manager. Installing python3-venv..."
+                    dnf install -y python3-venv 2>/dev/null && VENV_INSTALLED=true
+                elif command -v yum &>/dev/null; then
+                    info "Detected yum package manager. Installing python3-venv..."
+                    yum install -y python3-venv 2>/dev/null && VENV_INSTALLED=true
+                fi
+                
+                # Verify installation worked
+                if $VENV_INSTALLED; then
+                    TEST_VENV_DIR2=$(mktemp -d "${TMPDIR:-/tmp}/ziochub_venv_test2.XXXXXX" 2>/dev/null || true)
+                    if [[ -n "${TEST_VENV_DIR2}" ]] && python3 -m venv "${TEST_VENV_DIR2}" 2>/dev/null; then
+                        rm -rf "${TEST_VENV_DIR2}"
+                        ok "python3-venv installed and verified successfully"
+                    else
+                        rm -rf "${TEST_VENV_DIR2}" 2>/dev/null || true
+                        PREFLIGHT_ERRORS+=("python3-venv was installed but venv creation still fails.")
+                        while IFS= read -r _venv_line || [[ -n "${_venv_line}" ]]; do
+                            [[ -z "${_venv_line}" ]] && continue
+                            PREFLIGHT_ERRORS+=("${_venv_line}")
+                        done < <(ziochub_python3_venv_preflight_notes "$OFFLINE" "${PY_VER}")
+                    fi
+                else
+                    PREFLIGHT_ERRORS+=("Failed to install python3-venv automatically.")
+                    PREFLIGHT_ERRORS+=("Please install it manually: sudo apt-get install python3-venv")
+                    while IFS= read -r _venv_line || [[ -n "${_venv_line}" ]]; do
+                        [[ -z "${_venv_line}" ]] && continue
+                        PREFLIGHT_ERRORS+=("${_venv_line}")
+                    done < <(ziochub_python3_venv_preflight_notes "$OFFLINE" "${PY_VER}")
+                fi
+            else
+                # Offline or check-only mode: cannot auto-install, show instructions
+                PREFLIGHT_ERRORS+=("Cannot create a Python virtual environment (python3 -m venv failed).")
+                while IFS= read -r _venv_line || [[ -n "${_venv_line}" ]]; do
+                    [[ -z "${_venv_line}" ]] && continue
+                    PREFLIGHT_ERRORS+=("${_venv_line}")
+                done < <(ziochub_python3_venv_preflight_notes "$OFFLINE" "${PY_VER}")
+            fi
+        fi
+    else
+        PREFLIGHT_ERRORS+=("Could not create a temporary directory to test python3 -m venv.")
+    fi
 fi
 
 # Check systemctl
@@ -274,6 +426,12 @@ echo -e "${GREEN}║         Pre-flight Check PASSED                         ║
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
+if $CHECK_ONLY; then
+    ok "Prerequisite check complete. No changes were made."
+    info "Next: install any missing packages above, then run: sudo ./setup.sh [--offline] [--upgrade]"
+    exit 0
+fi
+
 # ── Detect existing installation ────────────────────────────────────────────
 EXISTING_INSTALL=false
 if [[ -d "${APP_DIR}" ]] && [[ -f "${APP_DIR}/app.py" ]]; then
@@ -401,15 +559,15 @@ if [[ -f "${SCRIPT_DIR}/data/GeoLite2-City.mmdb" ]]; then
     ok "GeoIP database copied."
 fi
 
-# Copy allowlist if present (backup existing first)
+# Allowlist: seed from package on first install only — never overwrite ${DATA_DIR}/allowlist.txt
+# on upgrade (Admin panel edits and offline server config must survive ./setup.sh --upgrade).
 if [[ -f "${SCRIPT_DIR}/data/allowlist.txt" ]]; then
     if [[ -f "${DATA_DIR}/allowlist.txt" ]]; then
-        ALLOWLIST_BACKUP="${DATA_DIR}/allowlist.txt.bak.$(date +%Y%m%d_%H%M%S)"
-        cp "${DATA_DIR}/allowlist.txt" "${ALLOWLIST_BACKUP}"
-        warn "Existing allowlist backed up to: ${ALLOWLIST_BACKUP}"
+        ok "Allowlist already present — left unchanged (upgrade-safe)."
+    else
+        cp "${SCRIPT_DIR}/data/allowlist.txt" "${DATA_DIR}/"
+        ok "Allowlist seeded from package (first install)."
     fi
-    cp "${SCRIPT_DIR}/data/allowlist.txt" "${DATA_DIR}/"
-    ok "Allowlist copied."
 fi
 
 # Copy org_domains config if present (used by sanity checks for own-domain detection)
@@ -444,17 +602,16 @@ fi
 
 info "Creating Python virtual environment..."
 if ! python3 -m venv "${VENV_DIR}" 2>/dev/null; then
-    PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "3.x")
+    PY_VER=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "3")
     echo ""
-    fail "Failed to create virtual environment. Python venv module is not available." \
-         "" \
-         "To fix this, install the python3-venv package:" \
-         "  sudo apt-get install python3-venv" \
-         "" \
-         "Or for your specific Python version (${PY_VER}):" \
-         "  sudo apt-get install python${PY_VER}-venv" \
-         "" \
-         "After installing, run this installer again."
+    echo -e "${RED}[FAIL]${NC} Failed to create virtual environment (python3 -m venv)."
+    while IFS= read -r _venv_line || [[ -n "${_venv_line}" ]]; do
+        [[ -z "${_venv_line}" ]] && continue
+        echo "  ${_venv_line}"
+    done < <(ziochub_python3_venv_preflight_notes "$OFFLINE" "${PY_VER}")
+    echo ""
+    echo -e "${CYAN}[INFO]${NC}  After installing python3-venv (or equivalent), run this installer again."
+    exit 1
 fi
 chown -R "${APP_USER}:${APP_GROUP}" "${VENV_DIR}"
 ok "venv created at ${VENV_DIR}."

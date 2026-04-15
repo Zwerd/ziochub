@@ -29,3 +29,9 @@ MSG_YARA_SOURCE_TOO_LARGE = "Rule source exceeds maximum size"
 MSG_YARA_COMPILER_UNAVAILABLE = "YARA compiler is not available on this server"
 MSG_YARA_DELETE_REASON_REQUIRED = "Deletion reason is required (admin)"
 MSG_YARA_EDIT_REASON_REQUIRED = "Describe why you changed the rule (required when the rule text changes)"
+MSG_YARA_DUPLICATE_CONTENT_UPLOAD = (
+    'This YARA rule content already exists as "{filename}". Edit that rule instead of uploading a duplicate.'
+)
+MSG_YARA_DUPLICATE_CONTENT_UPDATE = (
+    'This content matches another rule ("{filename}"). Edit that rule or change the text so it is not identical.'
+)

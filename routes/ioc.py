@@ -26,6 +26,7 @@ from utils.validation_messages import MSG_MISSING_FIELDS, MSG_MISSING_FIELDS_TYP
 from utils.sanity_checks import check_critical as check_sanity_critical, get_sanity_warnings
 from constants import IOC_FILES
 from utils.tags import normalize_tags_from_input
+from utils.tags import parse_allowed_tags_setting, enforce_allowed_tags
 from utils.upload_text_encoding import decode_uploaded_text_bytes
 
 bp = Blueprint('ioc_bp', __name__)
@@ -43,8 +44,22 @@ def _schedule_ioc_push_from_submission(**kwargs):
         from utils.ioc_push import schedule_ioc_push_after_create, ioc_context_from_submission
         ctx = ioc_context_from_submission(**kwargs)
         schedule_ioc_push_after_create(current_app._get_current_object(), ctx)
+        _schedule_auxiliary_vendor_integrations([ctx])
     except Exception as e:
         logging.warning('IOC push schedule failed: %s', e)
+
+
+def _schedule_auxiliary_vendor_integrations(contexts):
+    """Cortex XDR + Google SecOps outbound (Integrations), same IOC context as HTTP push."""
+    if not contexts:
+        return
+    try:
+        from flask import current_app
+        from utils.outbound_ioc import schedule_auxiliary_vendor_integrations
+
+        schedule_auxiliary_vendor_integrations(current_app._get_current_object(), contexts)
+    except Exception as e:
+        logging.warning('Auxiliary vendor integrations schedule failed: %s', e)
 
 
 def _schedule_ioc_push_batch(contexts):
@@ -54,6 +69,7 @@ def _schedule_ioc_push_batch(contexts):
         from flask import current_app
         from utils.ioc_push import schedule_ioc_push_batch as _batch
         _batch(current_app._get_current_object(), contexts)
+        _schedule_auxiliary_vendor_integrations(contexts)
     except Exception as e:
         logging.warning('IOC push batch schedule failed: %s', e)
 
@@ -61,7 +77,7 @@ def _schedule_ioc_push_batch(contexts):
 def _schedule_esa_from_submission(**kwargs):
     try:
         from flask import current_app
-        from utils.esa_dictionary import schedule_esa_dictionary_after_submission
+        from utils.cisco_esa import schedule_esa_dictionary_after_submission
         schedule_esa_dictionary_after_submission(current_app._get_current_object(), **kwargs)
     except Exception as e:
         logging.warning('ESA dictionary schedule failed: %s', e)
@@ -72,7 +88,7 @@ def _schedule_esa_batch(contexts):
         return
     try:
         from flask import current_app
-        from utils.esa_dictionary import schedule_esa_dictionary_batch
+        from utils.cisco_esa import schedule_esa_dictionary_batch
         schedule_esa_dictionary_batch(current_app._get_current_object(), contexts)
     except Exception as e:
         logging.warning('ESA dictionary batch schedule failed: %s', e)
@@ -93,6 +109,37 @@ def _sanity_should_block_else_warn(is_blocked: bool, is_admin: bool, mode: str) 
     if mode == 'block_non_admin':
         return not is_admin, is_admin
     return False, True  # warn_all
+
+
+def _tags_governance(_get_setting):
+    """Return (restricted_enabled, allowed_tags_list, allow_suggest)."""
+    restricted = (_get_setting('tags_restricted_enabled', 'false') or 'false').strip().lower() == 'true'
+    allow_suggest = (_get_setting('tags_allow_suggest', 'true') or 'true').strip().lower() == 'true'
+    allowed = parse_allowed_tags_setting(_get_setting('allowed_tags', '[]'))
+    return restricted, allowed, allow_suggest
+
+
+def _validate_tags_or_reject(tags_list, _get_setting):
+    """
+    Enforce admin-allowed tags if enabled. Returns (tags_list_valid, error_response_or_none).
+    """
+    try:
+        restricted, allowed, allow_suggest = _tags_governance(_get_setting)
+        if not restricted or not allowed:
+            return tags_list, None
+        valid, invalid = enforce_allowed_tags(tags_list or [], allowed)
+        if invalid:
+            invalid = sorted(set(invalid))
+            msg = 'Invalid tag(s). Please select from the allowed tags list.'
+            return tags_list, (jsonify({
+                'success': False,
+                'message': msg,
+                'invalid_tags': invalid,
+                'suggest_allowed': bool(allow_suggest),
+            }), 400)
+        return valid, None
+    except Exception:
+        return tags_list, None
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +607,9 @@ def submit_ioc():
             if c:
                 campaign_id = c.id
         tags_list = normalize_tags_from_input(data.get('tags'))
+        tags_list, tags_err = _validate_tags_or_reject(tags_list, _get_setting)
+        if tags_err is not None:
+            return tags_err[0], tags_err[1]
         tags_json = json.dumps(tags_list) if tags_list else '[]'
         
         # Validation
@@ -886,6 +936,9 @@ def bulk_csv():
         tags_list = normalize_tags_from_input(
             request.form.get('tags') or request.form.get('tags_for_all') or ''
         )
+        tags_list, tags_err = _validate_tags_or_reject(tags_list, _get_setting)
+        if tags_err is not None:
+            return tags_err[0], tags_err[1]
         tags_json = json.dumps(tags_list) if tags_list else '[]'
         campaign_id = None
         if campaign_name:
@@ -1555,6 +1608,9 @@ def submit_staging():
         tags_for_all_list = normalize_tags_from_input(
             data.get('tags') or data.get('tags_for_all')
         )
+        tags_for_all_list, tags_err = _validate_tags_or_reject(tags_for_all_list, _get_setting)
+        if tags_err is not None:
+            return tags_err[0], tags_err[1]
         tags_json = json.dumps(tags_for_all_list) if tags_for_all_list else '[]'
         campaign_id = None
         if campaign_name:
@@ -1617,6 +1673,10 @@ def submit_staging():
                 item_tags_list = normalize_tags_from_input(item_tags_raw)
             else:
                 item_tags_list = list(tags_for_all_list)
+            item_tags_list, tags_err = _validate_tags_or_reject(item_tags_list, _get_setting)
+            if tags_err is not None:
+                db.session.rollback()
+                return tags_err[0], tags_err[1]
             item_tags_json = json.dumps(item_tags_list) if item_tags_list else '[]'
 
             exp_str = (raw.get('expiration') or '').strip()
@@ -1792,6 +1852,10 @@ def upload_txt():
         tags_list = normalize_tags_from_input(
             request.form.get('tags') or request.form.get('tags_for_all') or ''
         )
+        _get_setting = _from_app('_get_setting')[0]
+        tags_list, tags_err = _validate_tags_or_reject(tags_list, _get_setting)
+        if tags_err is not None:
+            return tags_err[0], tags_err[1]
         tags_json = json.dumps(tags_list) if tags_list else '[]'
         campaign_id = None
         if campaign_name:

@@ -1,0 +1,166 @@
+// ============================================================================
+// ANIMATIONS - Keyframes and animated elements
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Keyframes
+// ----------------------------------------------------------------------------
+
+// Pulse - for status indicators
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+// Spin - for loading indicators
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+// Glow Pulse - for header neon line
+@keyframes glow-pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+}
+
+// Live Block Pulse - for live stats indicator
+@keyframes live-block-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+// Fade In
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+// Slide Up
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+// Scale In
+@keyframes scaleIn {
+    from {
+        opacity: 0;
+        transform: scale(0.95);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Animated Elements
+// ----------------------------------------------------------------------------
+
+// Pulse dot (status indicator)
+.pulse-dot {
+    animation: pulse 2s ease-in-out infinite;
+}
+
+// Animate spin (loading)
+.animate-spin {
+    animation: spin 0.8s linear infinite;
+}
+
+// Live stats indicator
+#tab-live-stats #liveIndicator {
+    animation: live-block-pulse 2s ease-in-out infinite;
+    will-change: opacity;
+    transform: translateZ(0);
+    
+    .pulse-dot {
+        animation: none;
+    }
+}
+
+// Glow line in header
+.header-glow-line {
+    animation: glow-pulse 3s ease-in-out infinite;
+}
+
+// Fade in on load
+.animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+}
+
+// Slide up on load
+.animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+}
+
+// Scale in (for modals)
+.animate-scale-in {
+    animation: scaleIn 0.2s ease-out;
+}
+
+// ----------------------------------------------------------------------------
+// Reduced Motion Support
+// ----------------------------------------------------------------------------
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+    
+    .pulse-dot {
+        animation: none;
+    }
+    
+    #tab-live-stats #liveIndicator {
+        animation: none;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Skeleton Loading
+// ----------------------------------------------------------------------------
+@keyframes skeleton-shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+.skeleton {
+    background: linear-gradient(
+        90deg,
+        var(--bg-tertiary) 25%,
+        var(--hover-bg) 50%,
+        var(--bg-tertiary) 75%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.5s infinite;
+    border-radius: var(--radius-sm);
+}
+
+.skeleton-text {
+    @extend .skeleton;
+    height: 1rem;
+    margin-bottom: var(--space-2);
+    
+    &:last-child {
+        width: 60%;
+    }
+}
+
+.skeleton-circle {
+    @extend .skeleton;
+    border-radius: 50%;
+}

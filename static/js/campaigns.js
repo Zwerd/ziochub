@@ -317,9 +317,40 @@
         } catch (err) { showToast(t('toast.error_generic') + ': ' + err.message, 'error'); }
     });
 
+    function setCampaignGraphActivityBanner(data) {
+        const el = document.getElementById('campaignGraphActivityBanner');
+        if (!el) return;
+        const act = data && data.activity;
+        if (!act || act.has_active_iocs) {
+            el.textContent = '';
+            el.classList.add('hidden');
+            return;
+        }
+        const tFn = typeof t === 'function' ? t : function(k) { return k; };
+        const linked = act.linked_ioc_count != null ? act.linked_ioc_count : 0;
+        const active = act.active_ioc_count != null ? act.active_ioc_count : 0;
+        const expired = act.expired_ioc_count != null ? act.expired_ioc_count : 0;
+        const yara = act.yara_count != null ? act.yara_count : 0;
+        let msg;
+        if (linked === 0 && yara === 0) {
+            msg = tFn('campaign.graph_banner_inactive_empty');
+        } else if (linked === 0 && yara > 0) {
+            msg = (tFn('campaign.graph_banner_inactive_yara_only') || '').replace(/\{yara\}/g, String(yara));
+        } else {
+            msg = (tFn('campaign.graph_banner_inactive') || '')
+                .replace(/\{linked\}/g, String(linked))
+                .replace(/\{active\}/g, String(active))
+                .replace(/\{expired\}/g, String(expired))
+                .replace(/\{yara\}/g, String(yara));
+        }
+        el.textContent = msg;
+        el.classList.remove('hidden');
+    }
+
     function renderGraph(campaignId) {
         const container = document.getElementById('campaign-network');
         if (!container || typeof vis === 'undefined') return;
+        setCampaignGraphActivityBanner({ activity: { has_active_iocs: true } });
         if (campaignGraphTooltipDirTimer) {
             clearTimeout(campaignGraphTooltipDirTimer);
             campaignGraphTooltipDirTimer = null;
@@ -351,11 +382,13 @@
             .then(r => r.json())
             .then(data => {
                 if (!data.success || !data.nodes || data.nodes.length === 0) {
+                    setCampaignGraphActivityBanner({ activity: { has_active_iocs: true } });
                     container.innerHTML = '<div class="flex items-center justify-center h-full text-secondary">No data for this campaign</div>';
                     if (exportBtn) exportBtn.classList.add('hidden');
                     if (exportJsonBtn) exportJsonBtn.classList.add('hidden');
                     return;
                 }
+                setCampaignGraphActivityBanner(data);
                 const labelColor = isDark ? '#e2e8f0' : '#1e293b';
                 const campaignLabelColor = isDark ? '#ffffff' : '#0f172a';
                 data.nodes.forEach(n => {
@@ -421,6 +454,7 @@
                 setTimeout(() => campaignNetwork.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } }), 150);
             })
             .catch(() => {
+                setCampaignGraphActivityBanner({ activity: { has_active_iocs: true } });
                 container.innerHTML = '<div class="flex items-center justify-center h-full text-secondary">Failed to load graph</div>';
                 if (exportBtn) exportBtn.classList.add('hidden');
                 if (exportJsonBtn) exportJsonBtn.classList.add('hidden');

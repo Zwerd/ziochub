@@ -1,4 +1,79 @@
-/* Typography - Cyber War Room Look */
+/*
+ * ============================================================================
+ * ZIOC HUB - Commander Edition Stylesheet
+ * ============================================================================
+ *
+ * TABLE OF CONTENTS
+ * -----------------
+ * 1. TYPOGRAPHY (~line 30)
+ *    - Font families, monospace, scrollbar defaults
+ *
+ * 2. BADGES & TYPE INDICATORS (~line 50)
+ *    - .badge-type, .badge-md5, .badge-sha256
+ *
+ * 3. MODALS (~line 70)
+ *    - .modal-dialog, modal sizes (--sm, --lg, --xl, --2xl)
+ *    - Modal visibility rules
+ *
+ * 4. CARDS & PANELS (~line 110)
+ *    - .card-panel, .report-card, .header-bar
+ *
+ * 5. CSS VARIABLES (~line 300)
+ *    - :root (Light Mode defaults)
+ *    - [data-theme="dark"] (Dark Mode)
+ *    - Spacing tokens, semantic colors, border tokens
+ *
+ * 6. UTILITY CLASSES (~line 380)
+ *    - .bg-primary, .text-primary, etc.
+ *
+ * 7. ANIMATIONS (~line 500)
+ *    - pulse, spin, glow-pulse, live-block-pulse
+ *
+ * 8. HEADER & NAVIGATION (~line 550)
+ *    - .neon-header, .commander-badge
+ *
+ * 9. TABS (~line 900)
+ *    - .tab-button, .navbar-tabs
+ *    - .admin-tab, .admin-tab-nav
+ *    - .settings-tab-btn
+ *
+ * 10. BUTTONS (~line 1320)
+ *     - .btn-cmd-primary, .btn-cmd-danger, .btn-cmd-neutral
+ *     - .btn-cmd-sm (compact variant)
+ *
+ * 11. TABLES (~line 1430)
+ *     - Global table styles
+ *     - .data-table (opt-in enhanced styling)
+ *
+ * 12. FORMS & INPUTS (~line 1500)
+ *     - Input styles, focus states
+ *
+ * 13. ACCESSIBILITY (~line 1650)
+ *     - focus-visible states
+ *     - prefers-reduced-motion
+ *
+ * 14. FEED PULSE TAB (~line 1700)
+ *     - Light mode contrast fixes
+ *
+ * 15. CHAMPS / LEADERBOARD (~line 1940)
+ *     - Ladder, medals, trophy cabinet
+ *     - Achievement animations
+ *
+ * 16. PLAYBOOKS (~line 2890)
+ *     - Playbook tabs, sections, code blocks
+ *
+ * 17. LIGHT MODE OVERRIDES (~line 3200)
+ *     - Theme-specific adjustments
+ *
+ * 18. SEARCH RESULTS TABLE (~line 3840)
+ *     - Fixed columns, sticky actions
+ *
+ * ============================================================================
+ */
+
+/* ============================================================================
+   1. TYPOGRAPHY
+   ============================================================================ */
 /* UI: Inter when online; system fonts when offline (no external font load) */
 body, input, select, textarea, button, label, .tab-button {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
@@ -93,6 +168,15 @@ body, input, select, textarea, button, label, .tab-button {
 }
 .modal-dialog--lg {
     max-width: 32rem;
+}
+.modal-dialog--sm {
+    max-width: 24rem;  /* 384px */
+}
+.modal-dialog--xl {
+    max-width: 48rem;  /* 768px */
+}
+.modal-dialog--2xl {
+    max-width: 64rem;  /* 1024px */
 }
 
 /* Report card: single class for Reports tab (replaces long repeated string) */
@@ -231,6 +315,27 @@ body, input, select, textarea, button, label, .tab-button {
     --card-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
     --input-bg: #ffffff;
     --input-border: rgba(0, 0, 0, 0.1);
+    
+    /* Spacing tokens */
+    --space-1: 0.25rem;  /* 4px */
+    --space-2: 0.5rem;   /* 8px */
+    --space-3: 0.75rem;  /* 12px */
+    --space-4: 1rem;     /* 16px */
+    --space-6: 1.5rem;   /* 24px */
+    
+    /* Semantic colors - Light Mode */
+    --color-success: #15803d;
+    --color-danger: #dc2626;
+    --color-warning: #b45309;
+    --color-info: #0e7490;
+    
+    /* Hover background */
+    --hover-bg: rgba(0, 0, 0, 0.03);
+    
+    /* Border tokens - reduces repetition */
+    --border-subtle: rgba(0, 0, 0, 0.05);
+    --border-light: rgba(0, 0, 0, 0.1);
+    --border-medium: rgba(0, 0, 0, 0.15);
 }
 
 /* Dark Mode (Commander Edition) */
@@ -250,6 +355,20 @@ body, input, select, textarea, button, label, .tab-button {
     --card-shadow: none;
     --input-bg: rgba(255, 255, 255, 0.05);
     --input-border: transparent;
+    
+    /* Semantic colors - Dark Mode (brighter for contrast) */
+    --color-success: var(--accent-green);
+    --color-danger: #ef4444;
+    --color-warning: #f59e0b;
+    --color-info: var(--accent-blue);
+    
+    /* Hover background */
+    --hover-bg: rgba(255, 255, 255, 0.05);
+    
+    /* Border tokens - reduces repetition */
+    --border-subtle: rgba(255, 255, 255, 0.05);
+    --border-light: rgba(255, 255, 255, 0.1);
+    --border-medium: rgba(255, 255, 255, 0.15);
 }
 
 /* Utility classes mapped to CSS variables (used by Tailwind + base templates).
@@ -955,69 +1074,31 @@ header .navbar-tabs {
     opacity: 1 !important;
 }
 
-/* Tab container - ABSOLUTELY NO borders */
+/* Tab container - unified reset (removes Tailwind borders)
+   NOTE: .navbar-left and .navbar-tabs need align-items: stretch - excluded here */
+.tab-container,
 nav[role="tablist"],
-nav.flex:has(.tab-button),
-div.bg-secondary.flex:has(.tab-button),
-div.flex:has(.tab-button),
-div[class*="bg-secondary"]:has(.tab-button) {
+nav:has(.tab-button),
+div:has(.tab-button):not(.navbar-left):not(.navbar-tabs) {
     border: none !important;
-    border-bottom: none !important;
-    border-top: none !important;
-    border-left: none !important;
-    border-right: none !important;
     box-shadow: none !important;
+    outline: none !important;
     margin: 0 !important;
     padding-top: 0 !important;
-    margin-top: 0 !important;
 }
 
-/* Ensure tab container has proper spacing and alignment */
-/* EXCEPTION: .navbar-left and .navbar-tabs need align-items: stretch for full-height tabs - see .navbar-left, .navbar-tabs above */
-div:has(.tab-button):not(.navbar-left):not(.navbar-tabs),
-div.bg-secondary.flex:has(.tab-button):not(.navbar-left):not(.navbar-tabs) {
+/* Tab container layout */
+div:has(.tab-button):not(.navbar-left):not(.navbar-tabs) {
     padding-bottom: 0.25rem;
-    margin-bottom: 0;
     display: flex;
     align-items: center;
-    border: none !important;
-    border-bottom: none !important;
 }
 
-/* Force remove any Tailwind border classes - AGGRESSIVE */
-.bg-secondary.flex:has(.tab-button),
-div[class*="border"]:has(.tab-button),
-div.bg-secondary:has(.tab-button),
-div.flex:has(.tab-button),
-nav:has(.tab-button),
-nav.flex:has(.tab-button) {
-    border: none !important;
-    border-bottom: none !important;
-    border-top: none !important;
-    border-left: none !important;
-    border-right: none !important;
-    outline: none !important;
-    box-shadow: none !important;
-    margin: 0 !important;
-    padding-top: 0 !important;
-    margin-top: 0 !important;
-}
-
-/* Remove any pseudo-element borders or lines */
+/* Remove pseudo-element borders */
 div:has(.tab-button)::before,
-div:has(.tab-button)::after,
-div.bg-secondary.flex::before,
-div.bg-secondary.flex::after {
+div:has(.tab-button)::after {
     display: none !important;
     content: none !important;
-}
-
-/* Ensure no border appears on hover or focus */
-div:has(.tab-button):hover,
-div:has(.tab-button):focus,
-div:has(.tab-button):active {
-    border: none !important;
-    border-bottom: none !important;
 }
 
 /* ── Admin Panel Tabs ── */
@@ -1149,6 +1230,41 @@ div:has(.tab-button):active {
     color: #111;
     border-color: rgba(37, 99, 235, 0.4);
     background: rgba(37, 99, 235, 0.06);
+}
+
+/* ── Settings Sub-Tabs ── */
+.settings-tab-btn {
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    font-weight: 500;
+    font-size: 0.875rem;
+    transition: all 0.25s ease;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: none;
+    cursor: pointer;
+}
+
+.settings-tab-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.settings-tab-btn.active {
+    background: #0891b2;
+    color: #ffffff;
+}
+
+[data-theme="light"] .settings-tab-btn {
+    background: rgba(0, 0, 0, 0.03);
+}
+
+[data-theme="light"] .settings-tab-btn:hover {
+    background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light"] .settings-tab-btn.active {
+    background: #0891b2;
+    color: #ffffff;
 }
 
 /* Custom Scrollbar - Modern Thin Style */
@@ -1318,6 +1434,44 @@ tbody tr:hover {
 }
 [data-theme="light"] tbody tr:hover {
     background-color: rgba(0, 0, 0, 0.03);
+}
+
+/* ── Unified Data Table (opt-in class for enhanced styling) ── */
+.data-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+.data-table th {
+    background: var(--bg-tertiary);
+    font-weight: 600;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.data-table td {
+    padding: 0.5rem 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+}
+
+.data-table tbody tr:hover {
+    background: var(--hover-bg);
+}
+
+[data-theme="light"] .data-table th,
+[data-theme="light"] .data-table td {
+    border-color: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="light"] .data-table th {
+    background: rgba(0, 0, 0, 0.02);
 }
 
 /* Bulk Upload Info Card - Light Mode Fix */
@@ -1525,6 +1679,20 @@ button:focus-visible {
 [data-theme="light"] .btn-cmd-neutral:focus-visible,
 [data-theme="light"] button:focus-visible {
     box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.4);
+}
+
+/* Extended focus states for links and interactive elements */
+a:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid var(--accent-blue);
+    outline-offset: 2px;
+}
+
+/* Inputs already have box-shadow focus via Tailwind - just ensure no double outline */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+    outline: none;
 }
 
 /* --- Feed Pulse Tab: Light mode contrast + consistent table headers --- */

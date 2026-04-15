@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 
 MAX_BODY_TEMPLATE_CHARS = 32768
 DEFAULT_CONTENT_TYPE = 'application/json'
-REQUEST_TIMEOUT_SEC = 45
+# Per requirement: a 30s timeout is considered a failure and must be reported.
+REQUEST_TIMEOUT_SEC = 30
 
 
 def _get_setting(key: str, default: str = '') -> str:
@@ -73,6 +74,8 @@ def ioc_context_from_submission(
     submission_method: str = 'single',
     user_id: Optional[int] = None,
     created_at: Optional[datetime] = None,
+    action: str = 'create',
+    remove_reason: str = '',
 ) -> dict[str, Any]:
     """Build the dict passed to Jinja as `ioc` (also returned as top-level for helpers)."""
     tags_list: list[str] = []
@@ -93,6 +96,8 @@ def ioc_context_from_submission(
     created_s = created.isoformat() if hasattr(created, 'isoformat') else str(created)
 
     return {
+        'action': (action or '').strip() or 'create',
+        'remove_reason': (remove_reason or '').strip(),
         'type': (ioc_type or '').strip(),
         'value': (value or '').strip(),
         'analyst': (analyst or '').strip().lower(),
@@ -212,7 +217,7 @@ def push_one_ioc_to_all_targets(
 ) -> dict[str, Any]:
     """
     Push a single IOC (context dict) to all enabled targets. Synchronous.
-    Returns { 'overall_success': bool, 'results': [ { name, success, message } ] }.
+    Returns { 'overall_success': bool, 'results': [ { name, url, success, message } ] }.
     """
     if not audit_log_fn:
         def audit_log_fn(*_a, **_k):
@@ -236,22 +241,23 @@ def push_one_ioc_to_all_targets(
         if not t.get('enabled', True):
             continue
         name = (t.get('name') or '').strip() or 'Target'
+        url = (t.get('url') or '').strip()
         tmpl = (t.get('body_template') or '').strip()
         if not tmpl:
-            results.append({'name': name, 'success': False, 'message': 'Missing body_template'})
+            results.append({'name': name, 'url': url, 'success': False, 'message': 'Missing body_template'})
             audit_log_fn('ioc_push_skip', f'target={name} reason=no_template')
             continue
 
         rendered, err = render_body_template(tmpl, ioc)
         if err:
-            results.append({'name': name, 'success': False, 'message': err})
+            results.append({'name': name, 'url': url, 'success': False, 'message': err})
             audit_log_fn('ioc_push_fail', f'target={name} reason=template')
             continue
 
         ct = (t.get('content_type') or DEFAULT_CONTENT_TYPE).strip() or DEFAULT_CONTENT_TYPE
         json_err = _validate_json_body(rendered, ct)
         if json_err:
-            results.append({'name': name, 'success': False, 'message': json_err})
+            results.append({'name': name, 'url': url, 'success': False, 'message': json_err})
             audit_log_fn('ioc_push_fail', f'target={name} reason=invalid_json')
             continue
 
@@ -266,10 +272,61 @@ def push_one_ioc_to_all_targets(
         body_bytes = rendered.encode('utf-8')
         any_attempt = True
         ok, msg = _post_target(t, body_bytes, ct, verify_ssl=verify_ssl, audit_log_fn=audit_log_fn)
-        results.append({'name': name, 'success': ok, 'message': msg})
+        results.append({'name': name, 'url': url, 'success': ok, 'message': msg})
         if ok:
             any_ok = True
 
+    overall = (not any_attempt) or any_ok
+    return {'overall_success': overall, 'results': results}
+
+
+def push_one_ioc_to_targets(
+    ioc: dict[str, Any],
+    targets: list[dict[str, Any]],
+    *,
+    audit_log_fn: Optional[Callable[..., None]] = None,
+) -> dict[str, Any]:
+    """
+    Push a single IOC context to a specific list of targets (subset).
+    Same behavior as push_one_ioc_to_all_targets, but caller controls the target list.
+    """
+    if not audit_log_fn:
+        def audit_log_fn(*_a, **_k):
+            pass
+    global_insecure = (_get_setting('ioc_push_ignore_ssl', 'false') or '').strip().lower() in ('true', '1', 'yes')
+    results = []
+    any_ok = False
+    any_attempt = False
+    for t in targets or []:
+        if not isinstance(t, dict):
+            continue
+        if not t.get('enabled', True):
+            continue
+        name = (t.get('name') or '').strip() or 'Target'
+        url = (t.get('url') or '').strip()
+        tmpl = (t.get('body_template') or '').strip()
+        if not tmpl:
+            results.append({'name': name, 'url': url, 'success': False, 'message': 'Missing body_template'})
+            continue
+        rendered, err = render_body_template(tmpl, ioc)
+        if err:
+            results.append({'name': name, 'url': url, 'success': False, 'message': err})
+            continue
+        ct = (t.get('content_type') or DEFAULT_CONTENT_TYPE).strip() or DEFAULT_CONTENT_TYPE
+        json_err = _validate_json_body(rendered, ct)
+        if json_err:
+            results.append({'name': name, 'url': url, 'success': False, 'message': json_err})
+            continue
+        per_verify = t.get('verify_ssl')
+        if per_verify is None:
+            verify_ssl = not global_insecure
+        else:
+            verify_ssl = str(per_verify).lower() in ('true', '1', 'yes')
+        any_attempt = True
+        ok, msg = _post_target(t, rendered.encode('utf-8'), ct, verify_ssl=verify_ssl, audit_log_fn=audit_log_fn)
+        results.append({'name': name, 'url': url, 'success': ok, 'message': msg})
+        if ok:
+            any_ok = True
     overall = (not any_attempt) or any_ok
     return {'overall_success': overall, 'results': results}
 
@@ -315,7 +372,26 @@ def schedule_ioc_push_batch(app, contexts: list[dict[str, Any]], *, delay_sec: f
         with app_obj.app_context():
             for ctx in filtered:
                 try:
-                    push_one_ioc_to_all_targets(ctx, audit_log_fn=audit)
+                    res = push_one_ioc_to_all_targets(ctx, audit_log_fn=audit)
+                    try:
+                        from utils.integration_telemetry import record_ioc_push_results
+                        action = (ctx.get('action') or 'create') if isinstance(ctx, dict) else 'create'
+                        rr = (ctx.get('remove_reason') or '') if isinstance(ctx, dict) else ''
+                        action_l = str(action).strip().lower()
+                        rr_l = str(rr).strip().lower()
+                        if action_l in ('remove', 'delete', 'revoke') and rr_l in ('expired', 'expire'):
+                            kind = 'expire'
+                        elif action_l in ('remove', 'delete', 'revoke') and rr_l in ('manual_delete', 'manual', 'deleted'):
+                            kind = 'manual_remove'
+                        elif action_l == 'expire_remove':
+                            kind = 'expire'
+                        elif action_l == 'delete_remove':
+                            kind = 'manual_remove'
+                        else:
+                            kind = 'create'
+                        record_ioc_push_results(res, kind=kind, context=ctx if isinstance(ctx, dict) else None)
+                    except Exception:
+                        pass
                 except Exception:
                     logger.exception('IOC push batch item failed')
                 if delay_sec > 0:

@@ -3,10 +3,16 @@ YARA file path safety (path traversal prevention) and in-memory syntax validatio
 """
 from __future__ import annotations
 
+import hashlib
 import os
 
 # Max size for validate-syntax API (bytes)
 YARA_VALIDATE_MAX_SOURCE_BYTES = 512 * 1024
+
+
+def yara_content_sha256(content: str) -> str:
+    """Stable fingerprint of rule text as stored (UTF-8). Used for duplicate detection."""
+    return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
 def yara_safe_path(filename: str, yara_dir: str) -> tuple[str | None, str | None]:

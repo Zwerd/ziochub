@@ -17,13 +17,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
 from extensions import db
 from models import YaraRule, Campaign, User
-from utils.yara_utils import yara_safe_path, validate_yara_syntax
+from utils.yara_utils import yara_safe_path, validate_yara_syntax, yara_content_sha256
 from utils.decorators import login_required, admin_required
 from utils.refanger import sanitize_comment
 from utils.validation_messages import (
     MSG_CONTENT_REQUIRED,
     MSG_FILENAME_REQUIRED,
     MSG_YARA_DELETE_REASON_REQUIRED,
+    MSG_YARA_DUPLICATE_CONTENT_UPDATE,
+    MSG_YARA_DUPLICATE_CONTENT_UPLOAD,
     MSG_YARA_EDIT_REASON_REQUIRED,
     MSG_FILE_NOT_FOUND,
     MSG_INVALID_FILENAME,
@@ -87,6 +89,40 @@ def _reject_invalid_yara_syntax(content: str):
     return jsonify({'success': False, 'message': err or 'Invalid YARA syntax'}), 400
 
 
+def _find_existing_yara_with_same_content(content: str, exclude_filename: str | None = None) -> str | None:
+    """
+    Return basename of an existing rule with identical body (DB by content_sha256, else scan disk).
+    exclude_filename: when editing, ignore the file being updated.
+    """
+    h = yara_content_sha256(content)
+    q = YaraRule.query.filter(YaraRule.content_sha256 == h)
+    if exclude_filename:
+        q = q.filter(YaraRule.filename != exclude_filename)
+    row = q.first()
+    if row:
+        return row.filename
+    excl = {exclude_filename} if exclude_filename else set()
+    for base in (_data_yara(), _data_yara_pending()):
+        if not base or not os.path.isdir(base):
+            continue
+        for name in os.listdir(base):
+            if not name.lower().endswith('.yar'):
+                continue
+            if name in excl:
+                continue
+            path = os.path.join(base, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    other = f.read()
+            except OSError:
+                continue
+            if yara_content_sha256(other) == h:
+                return name
+    return None
+
+
 @bp.route('/upload-yara', methods=['POST'])
 @login_required
 def upload_yara():
@@ -106,12 +142,24 @@ def upload_yara():
             return jsonify({'success': False, 'message': 'No file selected'}), 400
         if not file.filename.lower().endswith('.yar'):
             return jsonify({'success': False, 'message': 'Invalid file type. Only .yar files are allowed'}), 400
-        safe_filename = re.sub(r'[^a-zA-Z0-9._-]', '_', file.filename)
+        file_content = file.read().decode('utf-8', errors='replace')
+        syntax_reject = _reject_invalid_yara_syntax(file_content)
+        if syntax_reject is not None:
+            return syntax_reject
+        dup_name = _find_existing_yara_with_same_content(file_content)
+        if dup_name:
+            msg = MSG_YARA_DUPLICATE_CONTENT_UPLOAD.format(filename=dup_name)
+            return jsonify({
+                'success': False,
+                'message': msg,
+                'code': 'duplicate_content',
+                'existing_filename': dup_name,
+            }), 409
+        raw_base = os.path.basename(file.filename or '').strip()
+        original_filename = (raw_base[:512] if raw_base else None)
+        safe_filename = re.sub(r'[^a-zA-Z0-9._-]', '_', raw_base) if raw_base else ''
         if not safe_filename:
             safe_filename = 'rule.yar'
-        if ticket_id:
-            base_name, ext = os.path.splitext(safe_filename)
-            safe_filename = f"{base_name}_T{ticket_id}{ext}"
         data_yara = _data_yara()
         data_pending = _data_yara_pending()
         filepath_approved = os.path.join(data_yara, safe_filename)
@@ -120,10 +168,6 @@ def upload_yara():
             return jsonify({'success': False, 'message': 'Rule name already exists'}), 409
         if YaraRule.query.filter_by(filename=safe_filename).first():
             return jsonify({'success': False, 'message': 'Rule name already exists'}), 409
-        file_content = file.read().decode('utf-8', errors='replace')
-        syntax_reject = _reject_invalid_yara_syntax(file_content)
-        if syntax_reject is not None:
-            return syntax_reject
         with open(filepath_pending, 'w', encoding='utf-8') as f:
             f.write(file_content)
         username = current_user.username.lower()
@@ -133,12 +177,14 @@ def upload_yara():
         try:
             db.session.add(YaraRule(
                 filename=safe_filename,
+                original_filename=original_filename,
                 analyst=username,
                 ticket_id=ticket_id or None,
                 comment=comment,
                 campaign_id=campaign_id,
                 quality_points=quality_pts,
-                status='pending'
+                status='pending',
+                content_sha256=yara_content_sha256(file_content),
             ))
             _commit_with_retry()
         except IntegrityError:
@@ -244,8 +290,13 @@ def list_yara():
                 upload_date = meta.uploaded_at.strftime('%Y-%m-%d %H:%M')
             else:
                 upload_date = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
+            display_name = name
+            if meta and getattr(meta, 'original_filename', None):
+                display_name = meta.original_filename
             files.append({
                 'filename': name,
+                'original_filename': (meta.original_filename if meta else None) or None,
+                'display_name': display_name,
                 'size_kb': size_kb,
                 'upload_date': upload_date,
                 'user': meta.analyst if meta else None,
@@ -314,19 +365,40 @@ def delete_yara():
         _get_setting = _from_app('_get_setting')[0]
         if _get_setting('automation_fireeye_enabled', 'false').lower() == 'true':
             try:
-                raw = _get_setting('automation_fireeye_appliances', '[]') or '[]'
-                appliances = json.loads(raw) if isinstance(raw, str) else raw
+                from utils.yara_push_targets import merged_yara_automation_appliances
+                appliances = merged_yara_automation_appliances(_get_setting)
                 if isinstance(appliances, list) and appliances:
-                    from utils.fireeye_push import delete_yara_from_appliances
+                    from utils.yara_http_push import delete_yara_from_appliances
                     app_obj = current_app._get_current_object()
                     verify_ssl = _get_setting('automation_fireeye_ignore_ssl', 'false').lower() != 'true'
 
                     def _auto_delete():
                         with app_obj.app_context():
                             try:
-                                delete_yara_from_appliances(safe, appliances, audit_log, verify_ssl=verify_ssl)
+                                result = delete_yara_from_appliances(safe, appliances, audit_log, verify_ssl=verify_ssl)
+                                try:
+                                    from utils.integration_telemetry import record_yara_automation_results
+                                    record_yara_automation_results(
+                                        result, kind='delete', context={'filename': safe}
+                                    )
+                                except Exception:
+                                    logging.debug('record_yara_automation_results delete failed', exc_info=True)
                             except Exception as e:
                                 logging.exception('Automation YARA delete failed for %s', safe)
+                                try:
+                                    from utils.integration_telemetry import record_yara_automation_results
+                                    record_yara_automation_results(
+                                        {
+                                            'overall_success': False,
+                                            'results': [
+                                                {'name': '—', 'url': '', 'success': False, 'message': str(e)}
+                                            ],
+                                        },
+                                        kind='delete',
+                                        context={'filename': safe},
+                                    )
+                                except Exception:
+                                    pass
                                 audit_log('yara_automation_delete_fail', f'file={safe} error={e}')
 
                     threading.Thread(target=_auto_delete, daemon=True).start()
@@ -382,6 +454,15 @@ def update_yara():
         syntax_reject = _reject_invalid_yara_syntax(content_str)
         if syntax_reject is not None:
             return syntax_reject
+        new_h = yara_content_sha256(content_str)
+        dup_other = _find_existing_yara_with_same_content(content_str, exclude_filename=safe)
+        if dup_other:
+            return jsonify({
+                'success': False,
+                'message': MSG_YARA_DUPLICATE_CONTENT_UPDATE.format(filename=dup_other),
+                'code': 'duplicate_content',
+                'existing_filename': dup_other,
+            }), 409
         old_content = ''
         if os.path.isfile(filepath_approved):
             with open(filepath_approved, 'r', encoding='utf-8', errors='replace') as f:
@@ -401,23 +482,27 @@ def update_yara():
             if analyst_lower != current_user.username.lower():
                 return jsonify({'success': False, 'message': 'Only the rule owner or an admin can edit this rule'}), 403
         if os.path.isfile(filepath_approved):
-            if not is_admin and row and getattr(row, 'status', None) == 'approved':
-                with open(filepath_pending, 'w', encoding='utf-8') as f:
-                    f.write(content_str)
-                try:
-                    os.remove(filepath_approved)
-                except OSError:
-                    pass
-                if row:
-                    row.quality_points = compute_yara_quality_points(content_str)
-                    row.status = 'pending'
-                if content_changed:
-                    _log_ioc_history('YARA', safe, 'edited', current_user.username, {'reason': reason[:4000]})
-                _commit_with_retry()
-                audit_log('YARA_UPDATE', f'file={safe} analyst={current_user.username} status=pending (re-approval required)')
-                return jsonify({'success': True, 'message': f'Updated {safe}. Rule moved to pending for admin approval.', 'moved_to_pending': True})
-            with open(filepath_approved, 'w', encoding='utf-8') as f:
+            # Any content change to an approved rule → pending (analyst or admin); only admins approve.
+            if not content_changed:
+                return jsonify({'success': True, 'message': f'No changes to apply for {safe}'})
+            with open(filepath_pending, 'w', encoding='utf-8') as f:
                 f.write(content_str)
+            try:
+                os.remove(filepath_approved)
+            except OSError:
+                pass
+            if row:
+                row.quality_points = compute_yara_quality_points(content_str)
+                row.status = 'pending'
+                row.content_sha256 = new_h
+            _log_ioc_history('YARA', safe, 'edited', current_user.username, {'reason': reason[:4000]})
+            _commit_with_retry()
+            audit_log('YARA_UPDATE', f'file={safe} analyst={current_user.username} status=pending (re-approval required)')
+            return jsonify({
+                'success': True,
+                'message': f'Updated {safe}. Rule moved to pending for admin approval.',
+                'moved_to_pending': True,
+            })
         elif os.path.isfile(filepath_pending):
             with open(filepath_pending, 'w', encoding='utf-8') as f:
                 f.write(content_str)
@@ -426,6 +511,7 @@ def update_yara():
         quality_pts = compute_yara_quality_points(content_str)
         if row:
             row.quality_points = quality_pts
+            row.content_sha256 = new_h
         if content_changed:
             _log_ioc_history('YARA', safe, 'edited', current_user.username, {'reason': reason[:4000]})
         _commit_with_retry()
@@ -521,6 +607,8 @@ def list_my_pending():
             if os.path.isfile(filepath):
                 files.append({
                     'filename': r.filename,
+                    'original_filename': r.original_filename or None,
+                    'display_name': (r.original_filename or r.filename),
                     'upload_date': r.uploaded_at.strftime('%Y-%m-%d %H:%M') if r.uploaded_at else None,
                     'comment': r.comment,
                     'ticket_id': r.ticket_id,
@@ -543,6 +631,8 @@ def list_yara_pending():
             if os.path.isfile(filepath):
                 files.append({
                     'filename': r.filename,
+                    'original_filename': r.original_filename or None,
+                    'display_name': (r.original_filename or r.filename),
                     'upload_date': r.uploaded_at.strftime('%Y-%m-%d %H:%M') if r.uploaded_at else None,
                     'user': r.analyst,
                     'ticket_id': r.ticket_id,
@@ -609,6 +699,8 @@ def approve_yara():
         except OSError:
             pass
         rule.status = 'approved'
+        if not getattr(rule, 'content_sha256', None):
+            rule.content_sha256 = yara_content_sha256(content)
         _commit_with_retry()
         audit_log('YARA_APPROVE', f'file={rule.filename}')
         # Refresh Champs score for the rule owner (analyst) so they get full YARA points
@@ -621,43 +713,93 @@ def approve_yara():
                 except Exception as e:
                     logging.warning('YARA approve: refresh_champ_score for analyst %s failed: %s', analyst_username, e)
 
-        # FireEye automation: push to appliances in background
+        # Outbound YARA automation: generic/NX appliances (Automations) + Trellix EX (Integrations)
         fireeye_pending = False
         _get_setting = _from_app('_get_setting')[0]
-        if _get_setting('automation_fireeye_enabled', 'false').lower() == 'true':
-            try:
-                raw = _get_setting('automation_fireeye_appliances', '[]') or '[]'
-                appliances = json.loads(raw) if isinstance(raw, str) else raw
-                if isinstance(appliances, list) and appliances:
-                    from utils.fireeye_push import push_yara_to_appliances, set_fireeye_status
-                    app_obj = current_app._get_current_object()
-                    verify_ssl = _get_setting('automation_fireeye_ignore_ssl', 'false').lower() != 'true'
-                    set_fireeye_status(rule.filename, 'pending', '')
+        try:
+            from utils.trellix_ex import trellix_ex_enabled as _trellix_ex_on
+            from utils.yara_push_targets import merged_yara_automation_appliances
 
-                    def _fireeye_upload():
-                        with app_obj.app_context():
-                            try:
-                                result = push_yara_to_appliances(
-                                    content, rule.filename, appliances, audit_log, verify_ssl=verify_ssl
+            fe_on = _get_setting('automation_fireeye_enabled', 'false').lower() == 'true'
+            tx_on = _trellix_ex_on(_get_setting)
+            appliances = []
+            if fe_on:
+                appliances = merged_yara_automation_appliances(_get_setting)
+                if not isinstance(appliances, list):
+                    appliances = []
+            has_fe_targets = fe_on and len(appliances) > 0
+            if has_fe_targets or tx_on:
+                from utils.yara_http_push import push_yara_to_appliances, set_fireeye_status
+
+                app_obj = current_app._get_current_object()
+                verify_fe = _get_setting('automation_fireeye_ignore_ssl', 'false').lower() != 'true'
+                set_fireeye_status(rule.filename, 'pending', '')
+
+                def _yara_outbound_upload():
+                    with app_obj.app_context():
+                        try:
+                            combined_results = []
+                            overall = True
+                            if has_fe_targets:
+                                result_fe = push_yara_to_appliances(
+                                    content, rule.filename, appliances, audit_log, verify_ssl=verify_fe
                                 )
-                                if result['overall_success']:
-                                    set_fireeye_status(rule.filename, 'success', 'All appliances updated.')
-                                else:
-                                    msgs = '; '.join(
-                                        r.get('name', '') + ': ' + (r.get('message') or '')
-                                        for r in result.get('results', [])
-                                    )
-                                    set_fireeye_status(rule.filename, 'error', msgs or 'Push failed')
-                            except Exception as e:
-                                logging.exception('FireEye push failed for %s', rule.filename)
-                                set_fireeye_status(rule.filename, 'error', str(e))
-                                audit_log('yara_push_fail', f'file={rule.filename} error={e}')
+                                combined_results.extend(result_fe.get('results', []))
+                                overall = overall and bool(result_fe.get('overall_success'))
+                            if tx_on:
+                                from utils.trellix_ex import push_yara_trellix_ex
 
-                    t = threading.Thread(target=_fireeye_upload, daemon=True)
-                    t.start()
-                    fireeye_pending = True
-            except Exception as e:
-                logging.warning('FireEye automation setup failed: %s', e)
+                                verify_tx = (_get_setting('trellix_ex_verify_ssl', 'true') or 'true').lower() in (
+                                    'true',
+                                    '1',
+                                    'yes',
+                                )
+                                result_tx = push_yara_trellix_ex(
+                                    content, rule.filename, _get_setting, audit_log, verify_ssl=verify_tx
+                                )
+                                combined_results.extend(result_tx.get('results', []))
+                                overall = overall and bool(result_tx.get('overall_success'))
+                            result = {'overall_success': overall, 'results': combined_results}
+                            try:
+                                from utils.integration_telemetry import record_yara_automation_results
+
+                                record_yara_automation_results(
+                                    result, kind='push', context={'filename': rule.filename}
+                                )
+                            except Exception:
+                                logging.debug('record_yara_automation_results failed', exc_info=True)
+                            if result['overall_success']:
+                                set_fireeye_status(rule.filename, 'success', 'All automation targets updated.')
+                            else:
+                                msgs = '; '.join(
+                                    r.get('name', '') + ': ' + (r.get('message') or '')
+                                    for r in result.get('results', [])
+                                )
+                                set_fireeye_status(rule.filename, 'error', msgs or 'Push failed')
+                        except Exception as e:
+                            logging.exception('YARA outbound push failed for %s', rule.filename)
+                            try:
+                                from utils.integration_telemetry import record_yara_automation_results
+
+                                record_yara_automation_results(
+                                    {
+                                        'overall_success': False,
+                                        'results': [
+                                            {'name': '—', 'url': '', 'success': False, 'message': str(e)}
+                                        ],
+                                    },
+                                    kind='push',
+                                    context={'filename': rule.filename},
+                                )
+                            except Exception:
+                                pass
+                            set_fireeye_status(rule.filename, 'error', str(e))
+                            audit_log('yara_push_fail', f'file={rule.filename} error={e}')
+
+                threading.Thread(target=_yara_outbound_upload, daemon=True).start()
+                fireeye_pending = True
+        except Exception as e:
+            logging.warning('YARA outbound automation setup failed: %s', e)
 
         return jsonify({
             'success': True,
@@ -679,7 +821,7 @@ def fireeye_status():
     safe, _ = _yara_safe_path(filename)
     if safe is None:
         return jsonify({'success': False, 'message': 'invalid filename'}), 400
-    from utils.fireeye_push import get_fireeye_status
+    from utils.yara_http_push import get_fireeye_status
     info = get_fireeye_status(safe, clear_after_read=True)
     return jsonify({'success': True, 'data': info})
 

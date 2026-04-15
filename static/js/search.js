@@ -38,22 +38,151 @@
     const resultsTableBody = document.getElementById('resultsTableBody');
     const resultCount = document.getElementById('resultCount');
 
+    /** Decode ``searchBrowseSelect`` value: ``c|us`` = country, ``a|domain`` = aggregate browse. */
+    function parseBrowseSelect(raw) {
+        var out = { country: '', aggregate: '' };
+        if (!raw || typeof raw !== 'string') return out;
+        if (raw.indexOf('c|') === 0) {
+            out.country = raw.slice(2).trim().toLowerCase();
+            return out;
+        }
+        if (raw.indexOf('a|') === 0) {
+            out.aggregate = raw.slice(2).trim().toLowerCase();
+            return out;
+        }
+        return out;
+    }
+
+    /**
+     * One ``<select>``: flat list of browse targets — countries (IP) and IOC-type aggregates —
+     * sorted by identifier count descending (e.g. domain (203), url (103), United States (76), …).
+     * Still exposed as ``loadSearchCountryCodes`` for the tab switcher.
+     */
+    function loadSearchBrowseSelect() {
+        var sel = document.getElementById('searchBrowseSelect');
+        if (!sel) return;
+        var prev = sel.value || '';
+        var tr = (global.translations && global.translations[global.currentLang || 'en']) || {};
+        var s = tr.search || {};
+        var noneLabel = s.browse_none || '\u2014 None \u2014';
+
+        var aggOrder = [
+            { key: 'domain', labelKey: 'agg_domain' },
+            { key: 'email', labelKey: 'agg_email' },
+            { key: 'url', labelKey: 'agg_url' },
+            { key: 'yara', labelKey: 'agg_yara' },
+            { key: 'campaign', labelKey: 'agg_campaign' },
+            { key: 'hash_md5', labelKey: 'agg_md5' },
+            { key: 'hash_sha1', labelKey: 'agg_sha1' },
+            { key: 'hash_sha256', labelKey: 'agg_sha256' },
+            { key: 'hash_sha512', labelKey: 'agg_sha512' },
+            { key: 'hash_other', labelKey: 'agg_other' }
+        ];
+
+        Promise.all([
+            fetch('/api/ip-country-codes').then(function (r) { return r.json(); }).catch(function () { return {}; }),
+            fetch('/api/search/browse-filters').then(function (r) { return r.json(); }).catch(function () { return {}; })
+        ]).then(function (pair) {
+            var cdata = pair[0];
+            var bdata = pair[1];
+            while (sel.firstChild) {
+                sel.removeChild(sel.firstChild);
+            }
+            var anyOpt = document.createElement('option');
+            anyOpt.value = '';
+            anyOpt.setAttribute('data-i18n', 'search.browse_none');
+            anyOpt.textContent = noneLabel;
+            sel.appendChild(anyOpt);
+
+            var regionNames = null;
+            try {
+                var lang = document.documentElement.getAttribute('lang') || (global.currentLang || 'en');
+                regionNames = new Intl.DisplayNames([lang, 'en'], { type: 'region' });
+            } catch (e2) { /* ignore */ }
+
+            var items = [];
+
+            if (cdata && cdata.success && Array.isArray(cdata.countries)) {
+                cdata.countries.forEach(function (row) {
+                    var code = (row.code || '').toLowerCase();
+                    if (!code || code.length !== 2) return;
+                    var cnt = parseInt(row.count, 10);
+                    if (!isFinite(cnt) || cnt <= 0) return;
+                    var upper = code.toUpperCase();
+                    var lbl = upper;
+                    if (regionNames) {
+                        try {
+                            lbl = regionNames.of(upper);
+                        } catch (e3) {
+                            lbl = upper;
+                        }
+                    }
+                    lbl += ' (' + cnt + ')';
+                    items.push({ value: 'c|' + code, text: lbl, count: cnt });
+                });
+            }
+
+            var agg = (bdata && bdata.success && bdata.aggregates) ? bdata.aggregates : null;
+            if (agg && typeof agg === 'object') {
+                aggOrder.forEach(function (row) {
+                    var n = parseInt(agg[row.key], 10);
+                    if (!isFinite(n) || n <= 0) return;
+                    var name = (s[row.labelKey] != null && s[row.labelKey] !== '') ? s[row.labelKey] : row.key;
+                    items.push({ value: 'a|' + row.key, text: name + ' (' + n + ')', count: n });
+                });
+            }
+
+            items.sort(function (a, b) {
+                if (b.count !== a.count) return b.count - a.count;
+                return a.text.localeCompare(b.text, undefined, { sensitivity: 'base' });
+            });
+
+            items.forEach(function (it) {
+                var opt = document.createElement('option');
+                opt.value = it.value;
+                opt.textContent = it.text;
+                sel.appendChild(opt);
+            });
+
+            if (prev) {
+                for (var i = 0; i < sel.options.length; i++) {
+                    if (sel.options[i].value === prev) {
+                        sel.selectedIndex = i;
+                        break;
+                    }
+                }
+            }
+        }).catch(function () { /* keep first option */ });
+    }
+
     function performSearch() {
         const query = searchInput.value.trim();
         const filter = document.getElementById('searchFilter').value || 'all';
-        if (!query) {
-            const translations = global.translations || {};
-            const currentLang = global.currentLang || 'en';
-            showToast(translations[currentLang].search.placeholder, 'error');
-            return;
+        var browseRaw = '';
+        var browseEl = document.getElementById('searchBrowseSelect');
+        if (browseEl) browseRaw = browseEl.value || '';
+        var br = parseBrowseSelect(browseRaw);
+        var countryCode = (br.country || '').trim().toLowerCase();
+        var browseAgg = (br.aggregate || '').trim().toLowerCase();
+        // Empty search with "All Groups" + "All Columns" should list everything (paginated).
+
+        let url = `/api/search?q=${encodeURIComponent(query)}&filter=${encodeURIComponent(filter)}`;
+        if (countryCode) {
+            url += '&country_code=' + encodeURIComponent(countryCode);
+        }
+        if (browseAgg) {
+            url += '&browse_aggregate=' + encodeURIComponent(browseAgg);
+        }
+        if (!query && (countryCode || browseAgg)) {
+            url += '&per_page=1000';
         }
 
-        fetch(`/api/search?q=${encodeURIComponent(query)}&filter=${encodeURIComponent(filter)}`)
+        fetch(url)
             .then(response => response.json())
             .then(result => {
                 if (result.success) {
                     if (result.results && result.results.length > 0) {
-                        displaySearchResults(result.results);
+                        displaySearchResults(result.results, result.total);
                     } else {
                         showNoResults();
                     }
@@ -155,10 +284,11 @@
     document.getElementById('searchNextPage')?.addEventListener('click', () => { _searchPage++; _renderSearchPage(); });
     document.getElementById('searchPageSize')?.addEventListener('change', () => { _searchPage = 1; _renderSearchPage(); });
 
-    function displaySearchResults(results) {
+    function displaySearchResults(results, totalFromApi) {
         searchResults.classList.remove('hidden');
         searchNoResults.classList.add('hidden');
-        resultCount.textContent = results.length;
+        const n = (totalFromApi != null && totalFromApi !== '') ? Number(totalFromApi) : results.length;
+        resultCount.textContent = Number.isFinite(n) ? n : results.length;
         _searchAllResults = results;
         _searchPage = 1;
         _renderSearchPage();
@@ -540,6 +670,28 @@
                     if (typeof loadStats === 'function') loadStats();
                     if (typeof loadLiveFeed === 'function') loadLiveFeed();
                 } else {
+                    if (result && Array.isArray(result.invalid_tags) && result.invalid_tags.length && result.suggest_allowed && typeof window.appConfirm === 'function') {
+                        try {
+                            const list = result.invalid_tags.slice(0, 10).join(', ') + (result.invalid_tags.length > 10 ? '…' : '');
+                            const ok = await window.appConfirm({
+                                title: (typeof t === 'function' && t('tags.suggest_title')) ? t('tags.suggest_title') : 'Suggest new tag(s)?',
+                                message: ((typeof t === 'function' && t('tags.suggest_message')) ? t('tags.suggest_message') : 'These tags are not allowed yet:') + '\n\n' + list,
+                                okText: (typeof t === 'function' && t('tags.suggest_ok')) ? t('tags.suggest_ok') : 'Suggest',
+                                cancelText: (typeof t === 'function' && t('tags.suggest_cancel')) ? t('tags.suggest_cancel') : 'Cancel'
+                            });
+                            if (ok) {
+                                const r2 = await fetch('/api/tags/suggest', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ tags: result.invalid_tags })
+                                });
+                                const d2 = await r2.json().catch(() => ({}));
+                                if (d2 && d2.success) showToast((typeof t === 'function' && t('tags.suggested')) ? t('tags.suggested') : 'Suggestion submitted to admin for approval.', 'success');
+                                else showToast((d2 && d2.message) ? d2.message : 'Failed to suggest tags', 'error');
+                                return;
+                            }
+                        } catch (e) { /* ignore */ }
+                    }
                     showToast(result.message, 'error');
                 }
             } catch (error) {
@@ -750,6 +902,8 @@
     }
 
     global.performSearch = performSearch;
+    global.loadSearchCountryCodes = loadSearchBrowseSelect;
+    global.loadSearchBrowseSelect = loadSearchBrowseSelect;
     global.openEditModal = openEditModal;
     global.openDeleteIocModal = openDeleteIocModal;
     global.revokeIOC = revokeIOC;

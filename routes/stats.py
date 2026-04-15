@@ -28,6 +28,71 @@ def _from_app(*names):
     return tuple(getattr(_app, n) for n in names)
 
 
+def _process_newly_expired_iocs(max_items: int = 200) -> None:
+    """
+    Detect IOCs that crossed expiration_date <= now and schedule outbound removal push.
+    Deduped by ioc_history event_type='expired' per (type,value).
+    """
+    try:
+        (_commit_with_retry, _log_ioc_history, _get_setting, _schedule_ioc_push_batch) = _from_app(
+            '_commit_with_retry', '_log_ioc_history', '_get_setting', '_schedule_ioc_push_batch'
+        )
+        now = _utcnow()
+        # Find expired rows (non-YARA) not yet marked as expired in history
+        subq = db.session.query(IocHistory.id).filter(
+            IocHistory.event_type == 'expired',
+            IocHistory.ioc_type == IOC.type,
+            func.lower(IocHistory.ioc_value) == func.lower(IOC.value),
+        ).exists()
+        rows = (
+            IOC.query.filter(
+                IOC.type != 'YARA',
+                IOC.expiration_date.isnot(None),
+                IOC.expiration_date <= now,
+                ~subq,
+            )
+            .order_by(IOC.expiration_date.desc())
+            .limit(max_items)
+            .all()
+        )
+        if not rows:
+            return
+
+        contexts = []
+        from flask import current_app
+        from utils.outbound_ioc import schedule_outbound_ioc_event
+        for r in rows:
+            try:
+                # Mark in history first so we don't double-schedule across rapid calls.
+                exp_iso = r.expiration_date.isoformat() if r.expiration_date else ''
+                _log_ioc_history(r.type, r.value, 'expired', 'system', {'expiration_date': exp_iso})
+                schedule_outbound_ioc_event(
+                    current_app._get_current_object(),
+                    action='remove',
+                    remove_reason='expired',
+                    ioc_type=r.type,
+                    value=r.value,
+                    analyst=(r.analyst or 'system'),
+                    ticket_id=r.ticket_id,
+                    comment=r.comment,
+                    expiration_date=r.expiration_date,
+                    campaign_id=r.campaign_id,
+                    tags_json=r.tags,
+                    submission_method='expire',
+                    user_id=r.user_id,
+                    created_at=r.created_at,
+                )
+            except Exception:
+                continue
+        _commit_with_retry()
+        # push is already scheduled per IOC above (best-effort); nothing else to do
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # /api/allowlist-view (read-only for any logged-in user; Feed Pulse popup)
 # ---------------------------------------------------------------------------
@@ -55,6 +120,9 @@ def allowlist_view():
 @stats_bp.route('/api/stats/counts', methods=['GET'])
 def get_stats_counts():
     """Lightweight: only active IOC counts per type + YARA count. Used to show Live Statistics numbers immediately."""
+    # Opportunistic expiry processing: schedule outbound removal push for newly expired IOCs.
+    # Kept lightweight (no network calls here; push runs in background thread).
+    _process_newly_expired_iocs(max_items=200)
     stats = {'IP': 0, 'Domain': 0, 'Hash': 0, 'Email': 0, 'URL': 0}
     now = datetime.now()
     active_filter = db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
@@ -203,7 +271,7 @@ def api_sanity_exclude():
 @stats_bp.route('/api/integration-connections', methods=['GET'])
 @login_required
 def api_integration_connections():
-    """Last feed or TAXII pull per IP+path; last IOC API ingest, YARA upload, DXL/TIE push."""
+    """Feed Pulse → Connections: feed/TAXII pulls, API ingest, DXL, and aggregated IOC/YARA push targets (last attempt per URL)."""
     try:
         from utils.integration_telemetry import get_connections_snapshot
         data = get_connections_snapshot()
@@ -226,7 +294,9 @@ def api_feed_pulse():
     if ioc_type != 'all' and ioc_type not in IOC_FILES:
         return jsonify({'success': False, 'message': 'Invalid type'}), 400
 
-    now = datetime.now()
+    # Use UTC-naive timestamps consistently across DB writes (models._utcnow) and window filters.
+    # This avoids timezone-dependent cutoffs that can hide exclusions within the selected window.
+    now = _utcnow()
     cutoff = now - timedelta(hours=hours)
 
     type_filter = IOC.type != 'YARA'

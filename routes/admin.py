@@ -17,6 +17,7 @@ from utils.auth import hash_password
 from utils.decorators import admin_required, admin_required_page
 from utils.allowlist import clear_allowlist_cache
 from routes.auth import _save_avatar, AVATARS_DIR, ALLOWED_AVATAR_EXT
+from utils.tags import parse_allowed_tags_setting, normalize_tags_from_input
 
 
 # --- Admin API blueprint ---
@@ -42,6 +43,247 @@ def _from_app(*names):
     """Lazy import from app to avoid circular import."""
     import app as _app
     return tuple(getattr(_app, n) for n in names)
+
+
+# ---------------------------------------------------------------------------
+# Tags governance (Allowed tags + suggestions queue)
+# Stored in system_settings:
+# - allowed_tags (JSON list)
+# - tags_restricted_enabled (true/false)
+# - tags_allow_suggest (true/false)
+# - tag_suggestions (JSON list of {id, tag, suggested_by, suggested_at})
+# ---------------------------------------------------------------------------
+
+
+def _load_tag_suggestions(_get_setting) -> list[dict]:
+    import json
+    raw = (_get_setting('tag_suggestions', '[]') or '[]').strip()
+    try:
+        data = json.loads(raw) if raw else []
+    except Exception:
+        data = []
+    return data if isinstance(data, list) else []
+
+
+def _save_tag_suggestions(_set_setting, items: list[dict]) -> None:
+    import json
+    _set_setting('tag_suggestions', json.dumps(items or [], ensure_ascii=False))
+
+
+@bp.route('/inbox', methods=['GET'])
+@admin_required
+def admin_inbox():
+    """Admin inbox snapshot: pending YARA approvals + pending tag suggestions."""
+    _api_ok, _api_error, _get_setting = _from_app('_api_ok', '_api_error', '_get_setting')
+    try:
+        from models import YaraRule
+        from sqlalchemy import func
+        # YARA pending
+        yara_pending_count = YaraRule.query.filter_by(status='pending').count()
+        yara_pending_rows = (
+            YaraRule.query.filter_by(status='pending')
+            .order_by(YaraRule.uploaded_at.desc())
+            .limit(20)
+            .all()
+        )
+        yara_pending = [{
+            'filename': r.filename,
+            'original_filename': getattr(r, 'original_filename', None) or None,
+            'display_name': (getattr(r, 'original_filename', None) or r.filename),
+            'analyst': r.analyst or '',
+            'uploaded_at': r.uploaded_at.isoformat() if r.uploaded_at else '',
+            'ticket_id': r.ticket_id or '',
+            'comment': (r.comment or '')[:200],
+        } for r in yara_pending_rows]
+
+        # Tags suggestions
+        suggestions = _load_tag_suggestions(_get_setting)
+        suggestions_sorted = sorted(suggestions, key=lambda x: (x.get('suggested_at') or ''), reverse=True)
+        tag_suggestions_count = len(suggestions_sorted)
+        tag_suggestions = suggestions_sorted[:20]
+
+        total = int(yara_pending_count) + int(tag_suggestions_count)
+        return _api_ok(data={
+            'total_pending': total,
+            'yara_pending_count': yara_pending_count,
+            'yara_pending': yara_pending,
+            'tag_suggestions_count': tag_suggestions_count,
+            'tag_suggestions': tag_suggestions,
+        })
+    except Exception as e:
+        logging.exception('admin_inbox failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/ioc-push/retry', methods=['POST'])
+@admin_required
+def admin_ioc_push_retry():
+    """
+    Retry failed IOC push targets for the last recorded event.
+    Body: { kind: "create" | "expire" | "manual_remove" }
+    """
+    _api_ok, _api_error, _get_setting = _from_app('_api_ok', '_api_error', '_get_setting')
+    try:
+        data = request.get_json(silent=True) or {}
+        kind = (data.get('kind') or 'create').strip().lower()
+        if kind not in ('create', 'expire', 'manual_remove'):
+            return jsonify({'success': False, 'message': 'Invalid kind'}), 400
+        from app import audit_log
+        from utils.ioc_push_retry import (
+            InvalidStoredContextError,
+            NoMatchingTargetsError,
+            NoRecordedContextError,
+            retry_last_failed_ioc_push,
+        )
+
+        try:
+            payload, msg = retry_last_failed_ioc_push(kind=kind, get_setting=_get_setting, audit_log_fn=audit_log)
+            # Keep same response shape as before
+            return _api_ok(data=payload, message=msg)
+        except NoRecordedContextError as e:
+            return jsonify({'success': False, 'message': str(e)}), 404
+        except NoMatchingTargetsError as e:
+            return jsonify({'success': False, 'message': str(e)}), 404
+        except InvalidStoredContextError as e:
+            return jsonify({'success': False, 'message': str(e)}), 500
+    except Exception as e:
+        logging.exception('admin_ioc_push_retry failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/yara-automation/retry', methods=['POST'])
+@admin_required
+def admin_yara_automation_retry():
+    """
+    Retry failed YARA automation targets from the last recorded attempt.
+    Body: { kind: "push" | "delete" } — push = POST after approve; delete = remote delete after rule removal.
+    """
+    _api_ok, _api_error, _get_setting = _from_app('_api_ok', '_api_error', '_get_setting')
+    try:
+        data = request.get_json(silent=True) or {}
+        kind = (data.get('kind') or 'push').strip().lower()
+        if kind not in ('push', 'delete'):
+            return jsonify({'success': False, 'message': 'Invalid kind'}), 400
+        from app import audit_log
+        import app as _app_mod
+        data_yara = _app_mod.app.config.get('DATA_YARA') or ''
+        from utils.yara_automation_retry import (
+            InvalidStoredContextError,
+            NoMatchingTargetsError,
+            NoRecordedContextError,
+            retry_last_failed_yara_automation,
+        )
+
+        try:
+            payload, msg = retry_last_failed_yara_automation(
+                kind=kind,
+                get_setting=_get_setting,
+                data_yara_dir=data_yara,
+                audit_log_fn=audit_log,
+            )
+            return _api_ok(data=payload, message=msg)
+        except NoRecordedContextError as e:
+            return jsonify({'success': False, 'message': str(e)}), 404
+        except NoMatchingTargetsError as e:
+            return jsonify({'success': False, 'message': str(e)}), 404
+        except InvalidStoredContextError as e:
+            return jsonify({'success': False, 'message': str(e)}), 500
+    except Exception as e:
+        logging.exception('admin_yara_automation_retry failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/tags', methods=['GET'])
+@admin_required
+def admin_tags_get():
+    """Get current tags governance configuration (allowed tags + flags)."""
+    _api_ok, _get_setting = _from_app('_api_ok', '_get_setting')
+    allowed = parse_allowed_tags_setting(_get_setting('allowed_tags', '[]'))
+    restricted = (_get_setting('tags_restricted_enabled', 'false') or 'false').lower() == 'true'
+    allow_suggest = (_get_setting('tags_allow_suggest', 'true') or 'true').lower() == 'true'
+    return _api_ok(data={
+        'allowed_tags': allowed,
+        'tags_restricted_enabled': restricted,
+        'tags_allow_suggest': allow_suggest,
+    })
+
+
+@bp.route('/tags/suggestions', methods=['GET'])
+@admin_required
+def admin_tags_suggestions_list():
+    """List pending tag suggestions (for approval workflow)."""
+    _api_ok, _get_setting = _from_app('_api_ok', '_get_setting')
+    items = _load_tag_suggestions(_get_setting)
+    # newest first
+    items = sorted(items, key=lambda x: (x.get('suggested_at') or ''), reverse=True)
+    return _api_ok(data={'suggestions': items[:500]})
+
+
+@bp.route('/tags/suggestions/approve', methods=['POST'])
+@admin_required
+def admin_tags_suggestions_approve():
+    """Approve one or more suggested tags: add to allowed_tags and remove from queue."""
+    _api_ok, _api_error, _get_setting, _set_setting, audit_log = _from_app('_api_ok', '_api_error', '_get_setting', '_set_setting', 'audit_log')
+    import json
+    try:
+        data = request.get_json() or {}
+        ids = data.get('ids') or []
+        if isinstance(ids, str):
+            ids = [ids]
+        if not isinstance(ids, list) or not ids:
+            return jsonify({'success': False, 'message': 'Missing ids'}), 400
+        ids = [str(x).strip() for x in ids if str(x).strip()]
+        if not ids:
+            return jsonify({'success': False, 'message': 'Missing ids'}), 400
+
+        allowed = parse_allowed_tags_setting(_get_setting('allowed_tags', '[]'))
+        allowed_set = set(allowed)
+        suggestions = _load_tag_suggestions(_get_setting)
+        keep = []
+        approved = []
+        for item in suggestions:
+            if str(item.get('id') or '').strip() in ids:
+                tag = (item.get('tag') or '').strip()
+                if tag:
+                    tag_norm = normalize_tags_from_input([tag])[0] if normalize_tags_from_input([tag]) else ''
+                    if tag_norm and tag_norm not in allowed_set:
+                        allowed.append(tag_norm)
+                        allowed_set.add(tag_norm)
+                    approved.append(tag_norm or tag)
+            else:
+                keep.append(item)
+        _set_setting('allowed_tags', json.dumps(allowed, ensure_ascii=False))
+        _save_tag_suggestions(_set_setting, keep)
+        audit_log('admin_tags_approve', f'by={current_user.username} count={len(approved)}')
+        return _api_ok(data={'approved': approved, 'allowed_tags': allowed}, message='Approved')
+    except Exception as e:
+        logging.exception('admin_tags_suggestions_approve failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/tags/suggestions/reject', methods=['POST'])
+@admin_required
+def admin_tags_suggestions_reject():
+    """Reject one or more suggested tags: remove from queue."""
+    _api_ok, _api_error, _get_setting, _set_setting, audit_log = _from_app('_api_ok', '_api_error', '_get_setting', '_set_setting', 'audit_log')
+    try:
+        data = request.get_json() or {}
+        ids = data.get('ids') or []
+        if isinstance(ids, str):
+            ids = [ids]
+        if not isinstance(ids, list) or not ids:
+            return jsonify({'success': False, 'message': 'Missing ids'}), 400
+        ids = {str(x).strip() for x in ids if str(x).strip()}
+        if not ids:
+            return jsonify({'success': False, 'message': 'Missing ids'}), 400
+        suggestions = _load_tag_suggestions(_get_setting)
+        keep = [item for item in suggestions if str(item.get('id') or '').strip() not in ids]
+        _save_tag_suggestions(_set_setting, keep)
+        audit_log('admin_tags_reject', f'by={current_user.username} count={len(ids)}')
+        return _api_ok(message='Rejected')
+    except Exception as e:
+        logging.exception('admin_tags_suggestions_reject failed')
+        return _api_error(str(e), 500)
 
 
 # --- Certificate ---
@@ -161,8 +403,28 @@ _SETTINGS_DEFAULTS = {
     'automation_fireeye_enabled': 'false',
     'automation_fireeye_appliances': '[]',
     'automation_fireeye_ignore_ssl': 'false',
+    'automation_trellix_nx_enabled': 'false',
+    'automation_trellix_nx_targets': '[]',
+    # Trellix Email Security (EX): multiple targets (JSON); legacy flat keys still read when this is empty
+    'trellix_ex_targets': '[]',
+    'trellix_ex_enabled': 'false',
+    'trellix_ex_base_url': '',
+    'trellix_ex_login_path': '/ex/login',
+    'trellix_ex_upload_path': '/ex/yara_rules_ng/upload_yara',
+    'trellix_ex_username': '',
+    'trellix_ex_password': '',
+    'trellix_ex_manual_cookie': '',
+    'trellix_ex_verify_ssl': 'true',
+    'trellix_ex_f_type': 'common',
+    'trellix_ex_content_type': 'all',
     'sanity_check_mode': 'block_non_admin',
     'search_comment_rtl_by_script': 'true',  # In search results: if comment has more Hebrew/Arabic than other text, show RTL
+    # Tags governance (admin-controlled taxonomy)
+    # - allowed_tags: JSON array of tags (lowercase recommended)
+    # - tags_restricted_enabled: when true, API rejects tags not in allowed_tags
+    'allowed_tags': '[]',
+    'tags_restricted_enabled': 'false',
+    'tags_allow_suggest': 'true',
     'feeds_public_enabled': 'true',
     'feed_cache_enabled': 'true',
     'feed_cache_ttl_seconds': '300',
@@ -181,6 +443,23 @@ _SETTINGS_DEFAULTS = {
     'esa_deployment_mode': 'standalone',
     'esa_group_name': '',
     'esa_host_name': '',
+    # Vendor IOC outbound (Integrations)
+    'cortex_xdr_enabled': 'false',
+    'cortex_xdr_base_url': '',
+    'cortex_xdr_api_key_id': '',
+    'cortex_xdr_api_key': '',
+    'cortex_xdr_verify_ssl': 'true',
+    'cortex_xdr_hash_blocklist_enabled': 'true',
+    'google_secops_enabled': 'false',
+    'google_secops_base_url': '',
+    'google_secops_chronicle_api_base': '',
+    'google_secops_project_number': '',
+    'google_secops_location': '',
+    'google_secops_instance_id': '',
+    'google_secops_customer_id': '',
+    'google_secops_data_table_id': '',
+    'google_secops_credentials_json': '',
+    'google_secops_verify_ssl': 'true',
 }
 
 
@@ -242,7 +521,7 @@ def _normalize_ioc_push_targets_for_save(val) -> str:
 def _normalize_esa_mappings(val) -> str:
     """Validate esa_mappings: JSON array of {dictionary_name, ioc_type} with ioc_type in Email|Domain|IP|URL."""
     import json
-    from utils.esa_dictionary import ESA_IOC_TYPES, canonical_esa_ioc_type
+    from utils.cisco_esa import ESA_IOC_TYPES, canonical_esa_ioc_type
 
     allowed = frozenset(ESA_IOC_TYPES)
     if val is None:
@@ -266,9 +545,107 @@ def _normalize_esa_mappings(val) -> str:
     return json.dumps(out, ensure_ascii=False)
 
 
+def _trellix_ex_targets_json_for_form(get_setting_fn) -> str:
+    """JSON array for Integrations UI; migrates legacy flat EX keys into one row when JSON is empty."""
+    import json
+
+    raw = (get_setting_fn('trellix_ex_targets', '') or '').strip()
+    rows: list[dict] = []
+    if raw and raw != '[]':
+        try:
+            rows = json.loads(raw)
+        except Exception:
+            rows = []
+    if not isinstance(rows, list):
+        rows = []
+    rows = [r for r in rows if isinstance(r, dict)]
+    if not rows:
+        base = (get_setting_fn('trellix_ex_base_url', '') or '').strip()
+        if base:
+            rows = [{
+                'name': 'Trellix EX',
+                'base_url': base,
+                'login_path': (get_setting_fn('trellix_ex_login_path', '') or '/ex/login').strip(),
+                'upload_path': (get_setting_fn('trellix_ex_upload_path', '') or '/ex/yara_rules_ng/upload_yara').strip(),
+                'username': (get_setting_fn('trellix_ex_username', '') or '').strip(),
+                'password': (get_setting_fn('trellix_ex_password', '') or ''),
+                'manual_cookie': (get_setting_fn('trellix_ex_manual_cookie', '') or '').strip(),
+                'verify_ssl': (get_setting_fn('trellix_ex_verify_ssl', 'true') or 'true').lower() in ('true', '1', 'yes'),
+                'f_type': (get_setting_fn('trellix_ex_f_type', 'common') or 'common').strip(),
+                'content_type': (get_setting_fn('trellix_ex_content_type', 'all') or 'all').strip(),
+            }]
+    return json.dumps(rows, ensure_ascii=False)
+
+
+def _normalize_trellix_ex_targets_for_save(val, _get_setting) -> str:
+    import json
+
+    MAX_TARGETS = 32
+    MAX_URL = 2048
+
+    def _old_list() -> list:
+        try:
+            o = json.loads(_get_setting('trellix_ex_targets', '[]') or '[]')
+            return o if isinstance(o, list) else []
+        except Exception:
+            return []
+
+    old = [x for x in _old_list() if isinstance(x, dict)]
+    legacy_pw = (_get_setting('trellix_ex_password', '') or '').strip()
+
+    if val is None:
+        return '[]'
+    if isinstance(val, str):
+        try:
+            val = json.loads(val.strip() or '[]')
+        except Exception as e:
+            raise ValueError('trellix_ex_targets: invalid JSON') from e
+    if not isinstance(val, list):
+        raise ValueError('trellix_ex_targets must be a list')
+    if len(val) > MAX_TARGETS:
+        raise ValueError(f'trellix_ex_targets: at most {MAX_TARGETS} targets allowed')
+    out: list[dict] = []
+    for i, item in enumerate(val):
+        if not isinstance(item, dict):
+            continue
+        base = str(item.get('base_url') or '').strip()[:MAX_URL]
+        if not base:
+            continue
+        name = str(item.get('name') or '').strip()[:256] or 'Trellix EX'
+        lp = str(item.get('login_path') or '').strip()[:512]
+        up = str(item.get('upload_path') or '').strip()[:512]
+        user = str(item.get('username') or '').strip()[:512]
+        pwd = str(item.get('password') or '')
+        if not pwd.strip() and i < len(old):
+            pwd = str(old[i].get('password') or '')
+        if not pwd.strip() and i == 0 and legacy_pw:
+            pwd = legacy_pw
+        mc = str(item.get('manual_cookie') or '').strip()[:8000]
+        vs = item.get('verify_ssl', True)
+        if isinstance(vs, str):
+            verify_ssl = vs.strip().lower() in ('true', '1', 'yes')
+        else:
+            verify_ssl = bool(vs)
+        ft = str(item.get('f_type') or '').strip()[:64] or 'common'
+        ct = str(item.get('content_type') or '').strip()[:64] or 'all'
+        out.append({
+            'name': name,
+            'base_url': base.rstrip('/'),
+            'login_path': lp,
+            'upload_path': up,
+            'username': user,
+            'password': pwd,
+            'manual_cookie': mc,
+            'verify_ssl': verify_ssl,
+            'f_type': ft,
+            'content_type': ct,
+        })
+    return json.dumps(out, ensure_ascii=False)
+
+
 def _esa_mapping_rows_for_ui(raw_mappings: str) -> list[dict]:
     """One UI row per mapping; empty starter row if none."""
-    from utils.esa_dictionary import parse_mappings
+    from utils.cisco_esa import parse_mappings
 
     rows = parse_mappings(raw_mappings or '[]')
     ui = [{'dictionary_name': r['dictionary_name'], 'ioc_type': r['ioc_type']} for r in rows]
@@ -351,21 +728,61 @@ def save_settings():
         syslog_keys = ('syslog_udp_enabled', 'syslog_udp_host', 'syslog_udp_port')
         ldap_keys = ('auth_mode', 'ldap_enabled', 'ldap_url', 'ldap_base_dn', 'ldap_bind_dn', 'ldap_bind_password', 'ldap_servers', 'ldap_user_filter')
         dxl_keys = ('dxl_enabled', 'dxl_config_path')
-        automation_keys = ('automation_fireeye_enabled', 'automation_fireeye_appliances', 'automation_fireeye_ignore_ssl')
+        automation_keys = (
+            'automation_fireeye_enabled',
+            'automation_fireeye_appliances',
+            'automation_fireeye_ignore_ssl',
+            'automation_trellix_nx_enabled',
+            'automation_trellix_nx_targets',
+            'trellix_ex_targets',
+        )
+        trellix_ex_keys = ('trellix_ex_enabled',)
         sanity_keys = ('sanity_check_mode',)
         feed_keys = ('feeds_public_enabled', 'feed_cache_enabled', 'feed_cache_ttl_seconds')
         search_keys = ('search_comment_rtl_by_script',)
+        tags_keys = ('allowed_tags', 'tags_restricted_enabled', 'tags_allow_suggest')
         ioc_push_keys = ('ioc_push_enabled', 'ioc_push_ignore_ssl', 'ioc_push_targets')
         esa_keys = (
             'esa_enabled', 'esa_base_url', 'esa_username', 'esa_passphrase', 'esa_verify_ssl',
             'esa_skip_misp_sync', 'esa_cleanup_on_expire', 'esa_mappings',
             'esa_deployment_mode', 'esa_group_name', 'esa_host_name',
         )
+        vendor_ioc_keys = (
+            'cortex_xdr_enabled',
+            'cortex_xdr_base_url',
+            'cortex_xdr_api_key_id',
+            'cortex_xdr_verify_ssl',
+            'cortex_xdr_hash_blocklist_enabled',
+            'google_secops_enabled',
+            'google_secops_base_url',
+            'google_secops_chronicle_api_base',
+            'google_secops_project_number',
+            'google_secops_location',
+            'google_secops_instance_id',
+            'google_secops_customer_id',
+            'google_secops_data_table_id',
+            'google_secops_credentials_json',
+            'google_secops_verify_ssl',
+        )
         sections = []
-        for key in ldap_keys + misp_keys + syslog_keys + dxl_keys + automation_keys + sanity_keys + feed_keys + search_keys + ioc_push_keys + esa_keys:
+        for key in (
+            ldap_keys + misp_keys + syslog_keys + dxl_keys + automation_keys + trellix_ex_keys
+            + sanity_keys + feed_keys + search_keys + tags_keys + ioc_push_keys + esa_keys + vendor_ioc_keys
+        ):
             if key in data:
                 val = data[key]
-                if key == 'automation_fireeye_appliances':
+                if key == 'cortex_xdr_api_key':
+                    if isinstance(val, str) and val.strip():
+                        _set_setting('cortex_xdr_api_key', val.strip())
+                        if 'Vendor IOC' not in sections:
+                            sections.append('Vendor IOC')
+                    continue
+                if key == 'trellix_ex_targets':
+                    try:
+                        _set_setting(key, _normalize_trellix_ex_targets_for_save(val, _get_setting))
+                    except ValueError as vex:
+                        return jsonify({'success': False, 'message': str(vex)}), 400
+                elif key in ('automation_fireeye_appliances', 'automation_trellix_nx_targets'):
                     import json
                     _set_setting(key, json.dumps(val) if isinstance(val, (list, dict)) else str(val).strip())
                 elif key == 'ldap_servers':
@@ -387,18 +804,56 @@ def save_settings():
                 elif key == 'esa_mappings':
                     _set_setting(key, _normalize_esa_mappings(val))
                 elif key == 'esa_deployment_mode':
-                    from utils.esa_dictionary import ESA_DEPLOYMENT_MODES
+                    from utils.cisco_esa import ESA_DEPLOYMENT_MODES
                     m = str(val).strip().lower()
                     if m not in ESA_DEPLOYMENT_MODES:
                         m = 'standalone'
                     _set_setting(key, m)
                 elif key in ('esa_group_name', 'esa_host_name'):
                     _set_setting(key, str(val).strip())
+                elif key in trellix_ex_keys:
+                    if key == 'trellix_ex_enabled':
+                        _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
+                    else:
+                        _set_setting(key, str(val).strip())
+                elif key in vendor_ioc_keys:
+                    if key in (
+                        'cortex_xdr_enabled',
+                        'cortex_xdr_verify_ssl',
+                        'cortex_xdr_hash_blocklist_enabled',
+                        'google_secops_enabled',
+                        'google_secops_verify_ssl',
+                    ):
+                        _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
+                    elif key == 'google_secops_credentials_json':
+                        _set_setting(key, str(val) if val is not None else '')
+                    else:
+                        _set_setting(key, str(val).strip())
                 elif key in esa_keys:
                     if key in ('esa_verify_ssl', 'esa_skip_misp_sync', 'esa_cleanup_on_expire'):
                         _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
                     else:
                         _set_setting(key, str(val).strip())
+                elif key == 'allowed_tags':
+                    # Accept list/dict/string; store JSON list normalized to lowercase (comma-separated allowed too)
+                    import json
+                    from utils.tags import normalize_tags_from_input
+                    if isinstance(val, (list, tuple)):
+                        allowed = normalize_tags_from_input(list(val))
+                    elif isinstance(val, str):
+                        v = val.strip()
+                        if v.startswith('['):
+                            try:
+                                allowed = normalize_tags_from_input(json.loads(v))
+                            except Exception:
+                                allowed = normalize_tags_from_input(v)
+                        else:
+                            allowed = normalize_tags_from_input(v.replace('\n', ','))
+                    else:
+                        allowed = []
+                    _set_setting(key, json.dumps(allowed, ensure_ascii=False))
+                elif key in ('tags_restricted_enabled', 'tags_allow_suggest'):
+                    _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
                 else:
                     _set_setting(key, str(val).strip())
                 if key in ldap_keys and 'LDAP' not in sections:
@@ -411,12 +866,18 @@ def save_settings():
                     sections.append('DXL')
                 elif key in automation_keys and 'YARA push' not in sections:
                     sections.append('YARA push')
+                elif (key in trellix_ex_keys or key == 'trellix_ex_targets') and 'Trellix EX' not in sections:
+                    sections.append('Trellix EX')
+                elif key in vendor_ioc_keys and 'Vendor IOC' not in sections:
+                    sections.append('Vendor IOC')
                 elif key in sanity_keys and 'Sanity' not in sections:
                     sections.append('Sanity')
                 elif key in feed_keys and 'Feeds' not in sections:
                     sections.append('Feeds')
                 elif key in search_keys and 'Search' not in sections:
                     sections.append('Search')
+                elif key in tags_keys and 'Tags' not in sections:
+                    sections.append('Tags')
                 elif key in ioc_push_keys and 'IOC push' not in sections:
                     sections.append('IOC push')
                 elif key in esa_keys and 'ESA' not in sections:
@@ -464,7 +925,7 @@ def automation_test():
                 'results': [],
                 'message': 'Add at least one target (name, base URL, path) before testing.',
             })
-        from utils.fireeye_push import test_yara_push_connections
+        from utils.yara_http_push import test_yara_push_connections
         ignore_ssl = data.get('ignore_ssl')
         if ignore_ssl is None:
             _get_setting, = _from_app('_get_setting')
@@ -533,12 +994,96 @@ def esa_test():
     """Verify ESA login (Base64 credentials) and GET config/dictionaries with jwttoken header."""
     audit_log, _api_error = _from_app('audit_log', '_api_error')
     try:
-        from utils.esa_dictionary import esa_test_connection, esa_settings_dict
+        from utils.cisco_esa import esa_test_connection, esa_settings_dict
         result = esa_test_connection(esa_settings_dict())
         audit_log('admin_esa_test', f'by={current_user.username} ok={result.get("success")}')
         return jsonify({'success': True, **result})
     except Exception as e:
         logging.exception('api_admin_esa_test failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/cortex-xdr/test', methods=['POST'])
+@admin_required
+def cortex_xdr_test():
+    """POST Cortex XDR public_api probe using saved Integrations settings."""
+    audit_log, _api_error = _from_app('audit_log', '_api_error')
+    try:
+        from utils.cortex_xdr import cortex_xdr_settings_dict, cortex_xdr_test_connection
+
+        data = request.get_json(silent=True) or {}
+        ignore_ssl = data.get('ignore_ssl')
+        settings = cortex_xdr_settings_dict()
+        if ignore_ssl is not None:
+            verify_ssl = not (str(ignore_ssl).lower() in ('true', '1', 'yes'))
+        else:
+            verify_ssl = (settings.get('cortex_xdr_verify_ssl', 'true') or 'true').lower() in ('true', '1', 'yes')
+
+        result = cortex_xdr_test_connection(settings, verify_ssl=verify_ssl)
+        audit_log('admin_cortex_xdr_test', f'by={current_user.username} ok={result.get("success")}')
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        logging.exception('api_admin_cortex_xdr_test failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/google-secops/test', methods=['POST'])
+@admin_required
+def google_secops_test():
+    """OAuth token + optional GET to saved Google SecOps base URL."""
+    audit_log, _api_error = _from_app('audit_log', '_api_error')
+    try:
+        from utils.google_secops import google_secops_settings_dict, google_secops_test_connection
+
+        data = request.get_json(silent=True) or {}
+        ignore_ssl = data.get('ignore_ssl')
+        settings = google_secops_settings_dict()
+        if ignore_ssl is not None:
+            verify_ssl = not (str(ignore_ssl).lower() in ('true', '1', 'yes'))
+        else:
+            verify_ssl = (settings.get('google_secops_verify_ssl', 'true') or 'true').lower() in ('true', '1', 'yes')
+
+        result = google_secops_test_connection(settings, verify_ssl=verify_ssl)
+        audit_log('admin_google_secops_test', f'by={current_user.username} ok={result.get("success")}')
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        logging.exception('api_admin_google_secops_test failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/trellix-ex/test', methods=['POST'])
+@admin_required
+def trellix_ex_test():
+    """POST minimal YARA to Trellix EX (login + multipart upload) using saved Integrations settings."""
+    audit_log, _api_error = _from_app('audit_log', '_api_error')
+    try:
+        _get_setting, = _from_app('_get_setting')
+        from utils.trellix_ex import test_trellix_ex_connection, trellix_ex_enabled
+
+        if not trellix_ex_enabled(_get_setting):
+            return jsonify({
+                'success': True,
+                'overall_success': False,
+                'results': [],
+                'message': 'Trellix EX is disabled. Enable it, save, then test.',
+            })
+
+        data = request.get_json(silent=True) or {}
+        ignore_ssl = data.get('ignore_ssl')
+        if ignore_ssl is not None and str(ignore_ssl).lower() in ('true', '1', 'yes'):
+            verify_ssl = False
+        else:
+            # Per-target verify_ssl from trellix_ex_targets JSON (or legacy normalized row).
+            verify_ssl = None
+
+        result = test_trellix_ex_connection(_get_setting, verify_ssl=verify_ssl)
+        audit_log(
+            'admin_trellix_ex_test',
+            f'by={current_user.username} ok={result.get("overall_success")}',
+        )
+        return jsonify(result)
+    except Exception as e:
+        logging.exception('api_admin_trellix_ex_test failed')
         return _api_error(str(e), 500)
 
 
@@ -1152,6 +1697,19 @@ def _build_admin_settings_form_context():
         'automation_fireeye_enabled': _get_setting('automation_fireeye_enabled', 'false'),
         'automation_fireeye_appliances': _get_setting('automation_fireeye_appliances', '[]'),
         'automation_fireeye_ignore_ssl': _get_setting('automation_fireeye_ignore_ssl', 'false'),
+        'automation_trellix_nx_enabled': _get_setting('automation_trellix_nx_enabled', 'false'),
+        'automation_trellix_nx_targets': _get_setting('automation_trellix_nx_targets', '[]'),
+        'trellix_ex_enabled': _get_setting('trellix_ex_enabled', 'false'),
+        'trellix_ex_targets': _trellix_ex_targets_json_for_form(_get_setting),
+        'trellix_ex_base_url': _get_setting('trellix_ex_base_url', ''),
+        'trellix_ex_login_path': _get_setting('trellix_ex_login_path', '/ex/login'),
+        'trellix_ex_upload_path': _get_setting('trellix_ex_upload_path', '/ex/yara_rules_ng/upload_yara'),
+        'trellix_ex_username': _get_setting('trellix_ex_username', ''),
+        'trellix_ex_password': _get_setting('trellix_ex_password', ''),
+        'trellix_ex_manual_cookie': _get_setting('trellix_ex_manual_cookie', ''),
+        'trellix_ex_verify_ssl': _get_setting('trellix_ex_verify_ssl', 'true'),
+        'trellix_ex_f_type': _get_setting('trellix_ex_f_type', 'common'),
+        'trellix_ex_content_type': _get_setting('trellix_ex_content_type', 'all'),
         'ioc_push_enabled': _get_setting('ioc_push_enabled', 'false'),
         'ioc_push_ignore_ssl': _get_setting('ioc_push_ignore_ssl', 'false'),
         'ioc_push_targets': _get_setting('ioc_push_targets', '[]'),
@@ -1168,13 +1726,29 @@ def _build_admin_settings_form_context():
         'esa_deployment_mode': _get_setting('esa_deployment_mode', 'standalone'),
         'esa_group_name': _get_setting('esa_group_name', ''),
         'esa_host_name': _get_setting('esa_host_name', ''),
+        'cortex_xdr_enabled': _get_setting('cortex_xdr_enabled', 'false'),
+        'cortex_xdr_base_url': _get_setting('cortex_xdr_base_url', ''),
+        'cortex_xdr_api_key_id': _get_setting('cortex_xdr_api_key_id', ''),
+        'cortex_xdr_api_key': _get_setting('cortex_xdr_api_key', ''),
+        'cortex_xdr_verify_ssl': _get_setting('cortex_xdr_verify_ssl', 'true'),
+        'cortex_xdr_hash_blocklist_enabled': _get_setting('cortex_xdr_hash_blocklist_enabled', 'true'),
+        'google_secops_enabled': _get_setting('google_secops_enabled', 'false'),
+        'google_secops_base_url': _get_setting('google_secops_base_url', ''),
+        'google_secops_chronicle_api_base': _get_setting('google_secops_chronicle_api_base', ''),
+        'google_secops_project_number': _get_setting('google_secops_project_number', ''),
+        'google_secops_location': _get_setting('google_secops_location', ''),
+        'google_secops_instance_id': _get_setting('google_secops_instance_id', ''),
+        'google_secops_customer_id': _get_setting('google_secops_customer_id', ''),
+        'google_secops_data_table_id': _get_setting('google_secops_data_table_id', ''),
+        'google_secops_credentials_json': _get_setting('google_secops_credentials_json', ''),
+        'google_secops_verify_ssl': _get_setting('google_secops_verify_ssl', 'true'),
     }
 
 
 @pages_bp.route('/settings')
 @admin_required_page
 def admin_settings():
-    """Admin settings: feeds, TAXII, cache, and search display options."""
+    """Admin settings: feeds, TAXII, cache, search, tags, LDAP, MISP, Syslog."""
     try:
         return render_template('admin/settings.html', settings=_build_admin_settings_form_context())
     except Exception:
@@ -1186,11 +1760,23 @@ def admin_settings():
 @pages_bp.route('/integrations')
 @admin_required_page
 def admin_integrations():
-    """Admin integrations: LDAP, MISP, Syslog, DXL, YARA push, IOC push."""
+    """Built-in vendor integrations: Trellix EX/NX, Cisco ESA (OpenDXL under Automations)."""
     try:
         return render_template('admin/integrations.html', settings=_build_admin_settings_form_context())
     except Exception:
         logging.exception('admin_integrations page failed')
+        from flask import abort
+        abort(500)
+
+
+@pages_bp.route('/automations')
+@admin_required_page
+def admin_automations():
+    """Outbound automations: IOC push, YARA push, OpenDXL (DXL fabric)."""
+    try:
+        return render_template('admin/automations.html', settings=_build_admin_settings_form_context())
+    except Exception:
+        logging.exception('admin_automations page failed')
         from flask import abort
         abort(500)
 

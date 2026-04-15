@@ -171,6 +171,8 @@ class YaraRule(db.Model):
     __tablename__ = 'yara_rules'
     id = db.Column(db.Integer, primary_key=True)
     filename = db.Column(db.String(255), unique=True, nullable=False)
+    # Client-side basename as uploaded (documentation); storage name is `filename` (sanitized).
+    original_filename = db.Column(db.String(512), nullable=True)
     analyst = db.Column(db.String(255), nullable=False)
     ticket_id = db.Column(db.String(255), nullable=True)
     comment = db.Column(db.Text, nullable=True)
@@ -178,7 +180,13 @@ class YaraRule(db.Model):
     campaign_id = db.Column(db.Integer, db.ForeignKey('campaigns.id'), nullable=True)
     quality_points = db.Column(db.Integer, nullable=True)  # Champs: 10-50 by rule quality
     status = db.Column(db.String(32), nullable=False, default='approved')  # pending | approved | rejected
-    __table_args__ = (Index('ix_yara_rules_uploaded_at', 'uploaded_at'), Index('ix_yara_rules_uploaded_at_status', 'uploaded_at', 'status'),)
+    # SHA-256 of UTF-8 rule body; used to block duplicate uploads under different filenames
+    content_sha256 = db.Column(db.String(64), nullable=True)
+    __table_args__ = (
+        Index('ix_yara_rules_uploaded_at', 'uploaded_at'),
+        Index('ix_yara_rules_uploaded_at_status', 'uploaded_at', 'status'),
+        Index('ix_yara_rules_content_sha256', 'content_sha256'),
+    )
 
 
 # --- Champs Analysis 5.0 (Operational Hall of Fame) ---

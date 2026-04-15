@@ -1,0 +1,174 @@
+// ============================================================================
+// TABLES - Data tables, Search results
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Global Table Styles
+// ----------------------------------------------------------------------------
+table {
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+table th, table td {
+    border: 1px solid var(--border-light);
+}
+
+[data-theme="light"] table th,
+[data-theme="light"] table td {
+    border-color: var(--border-light);
+}
+
+// ----------------------------------------------------------------------------
+// Table Row Hover
+// ----------------------------------------------------------------------------
+tbody tr {
+    transition: background-color var(--transition-fast);
+}
+
+tbody tr:hover {
+    background-color: var(--hover-bg);
+}
+
+// ----------------------------------------------------------------------------
+// Data Table (opt-in enhanced styling)
+// ----------------------------------------------------------------------------
+.data-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    
+    th {
+        background: var(--bg-tertiary);
+        font-weight: 600;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        padding: var(--space-3) var(--space-4);
+        text-align: left;
+        border: 1px solid var(--border-light);
+    }
+    
+    td {
+        padding: var(--space-2) var(--space-4);
+        border: 1px solid var(--border-light);
+        color: var(--text-primary);
+    }
+    
+    tbody tr:hover {
+        background: var(--hover-bg);
+    }
+}
+
+[data-theme="light"] .data-table {
+    th, td {
+        border-color: var(--border-light);
+    }
+    
+    th {
+        background: rgba(0, 0, 0, 0.02);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Search Results Table
+// ----------------------------------------------------------------------------
+#searchResults {
+    .overflow-x-auto {
+        position: relative;
+    }
+    
+    table {
+        table-layout: fixed;
+        min-width: 1100px;
+        width: 100%;
+    }
+    
+    th, td {
+        padding: var(--space-2) var(--space-3);
+        font-size: 0.8125rem;
+        vertical-align: middle;
+        border: 1px solid var(--border-light);
+    }
+    
+    th {
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        background: var(--bg-tertiary);
+        white-space: nowrap;
+    }
+    
+    // Column widths
+    th:nth-child(1), td:nth-child(1) { width: 45px; }   // Checkbox
+    th:nth-child(2), td:nth-child(2) { width: 260px; }  // IOC
+    th:nth-child(3), td:nth-child(3) { width: 90px; }   // Type
+    th:nth-child(4), td:nth-child(4) { width: 85px; }   // Analyst
+    th:nth-child(5), td:nth-child(5) { width: 95px; }   // Ticket
+    th:nth-child(6), td:nth-child(6) { width: 130px; }  // Campaign
+    th:nth-child(7), td:nth-child(7) { width: 90px; }   // Created
+    th:nth-child(8), td:nth-child(8) { width: 90px; }   // Expires
+    th:nth-child(9), td:nth-child(9) { width: 120px; }  // Tags
+    th:nth-child(10), td:nth-child(10) { width: 220px; } // Actions
+    
+    // Sticky Actions column
+    th:last-child, td:last-child {
+        position: sticky;
+        right: 0;
+        z-index: 2;
+        white-space: nowrap;
+    }
+    
+    th:last-child {
+        background: var(--bg-tertiary);
+    }
+    
+    td:last-child {
+        background: var(--bg-secondary);
+    }
+    
+    tr:hover td:last-child {
+        background: var(--bg-tertiary);
+    }
+    
+    // Shadow edge for sticky column
+    th:last-child::before,
+    td:last-child::before {
+        content: '';
+        position: absolute;
+        left: -6px;
+        top: 0;
+        bottom: 0;
+        width: 6px;
+        pointer-events: none;
+        background: linear-gradient(to right, transparent, rgba(0, 0, 0, 0.15));
+    }
+    
+    // IOC column word break
+    td:nth-child(2) {
+        word-break: break-all;
+    }
+}
+
+// Light mode search results
+[data-theme="light"] #searchResults {
+    th:last-child {
+        background: var(--bg-tertiary);
+    }
+    
+    td:last-child {
+        background: var(--bg-secondary);
+    }
+    
+    tr:hover td:last-child {
+        background: var(--bg-tertiary);
+    }
+    
+    th:last-child::before,
+    td:last-child::before {
+        background: linear-gradient(to right, transparent, rgba(0, 0, 0, 0.06));
+    }
+}

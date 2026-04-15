@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from flask_login import LoginManager, current_user
 from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import func, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from constants import DEFAULT_IOC_LIMIT, DEFAULT_PAGE_SIZE, IOC_FILES, VERSION
@@ -1174,12 +1174,23 @@ def migrate_legacy_data():
                     try:
                         existing = YaraRule.query.filter_by(filename=filename_yar).first()
                         if not existing:
+                            from utils.yara_utils import yara_content_sha256
+                            body_hash = None
+                            _path_try = os.path.join(DATA_YARA, filename_yar)
+                            if os.path.isfile(_path_try):
+                                try:
+                                    with open(_path_try, 'r', encoding='utf-8', errors='replace') as _yf:
+                                        body_hash = yara_content_sha256(_yf.read())
+                                except OSError:
+                                    body_hash = None
                             db.session.add(YaraRule(
                                 filename=filename_yar,
+                                original_filename=filename_yar,
                                 analyst=analyst,
                                 ticket_id=ticket_id,
                                 comment=comment,
-                                uploaded_at=uploaded
+                                uploaded_at=uploaded,
+                                content_sha256=body_hash,
                             ))
                     except IntegrityError:
                         pass
@@ -1402,6 +1413,88 @@ def _ensure_yara_status_column():
     except Exception as e:
         db.session.rollback()
         print(f"[Migration] yara_rules status check/add: {e}")
+
+
+def _ensure_yara_content_sha256_column():
+    """Add content_sha256 for duplicate detection (same rule body, different filename)."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(yara_rules)"))
+        rows = result.fetchall()
+        has_h = any((row[1] == 'content_sha256' for row in rows))
+        if not has_h:
+            db.session.execute(text("ALTER TABLE yara_rules ADD COLUMN content_sha256 VARCHAR(64)"))
+            _commit_with_retry()
+        try:
+            db.session.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_yara_rules_content_sha256 ON yara_rules(content_sha256)"
+            ))
+            _commit_with_retry()
+        except Exception:
+            db.session.rollback()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] yara_rules content_sha256 check/add: {e}")
+
+
+def _backfill_yara_content_sha256():
+    """Populate content_sha256 from on-disk rule files for existing rows."""
+    from utils.yara_utils import yara_content_sha256
+    try:
+        data_yara = app.config.get('DATA_YARA') or ''
+        data_pending = app.config.get('DATA_YARA_PENDING') or ''
+        rows = YaraRule.query.filter(
+            or_(YaraRule.content_sha256.is_(None), YaraRule.content_sha256 == '')
+        ).all()
+        n = 0
+        for row in rows:
+            digest = None
+            for base in (data_yara, data_pending):
+                path = os.path.join(base, row.filename)
+                if os.path.isfile(path):
+                    with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                        digest = yara_content_sha256(f.read())
+                    break
+            if digest:
+                row.content_sha256 = digest
+                n += 1
+        if n:
+            _commit_with_retry()
+            print(f"[Migration] yara_rules content_sha256 backfilled {n} row(s)")
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] yara_rules content_sha256 backfill: {e}")
+
+
+def _ensure_yara_original_filename_column():
+    """Add original_filename (client basename as uploaded) for display/documentation."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(yara_rules)"))
+        rows = result.fetchall()
+        has_o = any((row[1] == 'original_filename' for row in rows))
+        if not has_o:
+            db.session.execute(text("ALTER TABLE yara_rules ADD COLUMN original_filename VARCHAR(512)"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] yara_rules original_filename check/add: {e}")
+
+
+def _backfill_yara_original_filename():
+    """Set original_filename from storage filename when missing (legacy rows)."""
+    try:
+        rows = YaraRule.query.filter(
+            or_(YaraRule.original_filename.is_(None), YaraRule.original_filename == '')
+        ).all()
+        n = 0
+        for row in rows:
+            row.original_filename = row.filename
+            n += 1
+        if n:
+            _commit_with_retry()
+            print(f"[Migration] yara_rules original_filename backfilled {n} row(s)")
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] yara_rules original_filename backfill: {e}")
 
 
 def _ensure_ioc_submission_method_column():
@@ -1687,6 +1780,10 @@ def _init_db():
         _ensure_yara_campaign_id_column()
         _ensure_yara_quality_points_column()
         _ensure_yara_status_column()
+        _ensure_yara_content_sha256_column()
+        _backfill_yara_content_sha256()
+        _ensure_yara_original_filename_column()
+        _backfill_yara_original_filename()
         _ensure_ioc_tags_column()
         _ensure_ioc_submission_method_column()
         _ensure_ioc_rare_find_columns()

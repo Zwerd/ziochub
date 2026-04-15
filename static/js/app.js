@@ -151,6 +151,93 @@ async function loadAuthState() {
     updateAuthUI();
 }
 
+// ---------------------------------------------------------------------------
+// Admin Inbox (bell) - pending actions snapshot
+// ---------------------------------------------------------------------------
+let _adminInboxPoll = null;
+async function loadAdminInboxBadge() {
+    try {
+        if (!authState || !authState.authenticated || !authState.is_admin) return;
+        const res = await fetch('/api/admin/inbox', { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+        const data = await res.json().catch(() => ({}));
+        if (!data || !data.success) return;
+        const total = (data.total_pending != null) ? Number(data.total_pending) : 0;
+        const btn = document.getElementById('adminInboxBtn');
+        const badge = document.getElementById('adminInboxBadge');
+        if (btn) btn.classList.remove('hidden');
+        if (badge) {
+            if (total > 0) {
+                badge.textContent = String(total);
+                badge.classList.remove('hidden');
+            } else {
+                badge.textContent = '';
+                badge.classList.add('hidden');
+            }
+        }
+        window._adminInboxLatest = data;
+    } catch (e) {
+        /* ignore */
+    }
+}
+
+function _renderAdminInboxModal(data) {
+    const modal = document.getElementById('adminInboxModal');
+    const content = document.getElementById('adminInboxContent');
+    if (!modal || !content) return;
+    const d = (data && data.success) ? data : (window._adminInboxLatest || {});
+    const yara = (d.yara_pending || []);
+    const tags = (d.tag_suggestions || []);
+    const yaraCount = d.yara_pending_count != null ? d.yara_pending_count : yara.length;
+    const tagCount = d.tag_suggestions_count != null ? d.tag_suggestions_count : tags.length;
+    function esc(s) { return (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    const yaraHtml = `
+        <div class="bg-tertiary rounded-xl border border-white/10 p-4">
+            <div class="flex items-center justify-between gap-2 mb-2">
+                <h4 class="font-semibold text-primary">YARA pending approvals</h4>
+                <a href="/admin" class="text-cyan-300 hover:underline text-sm">Go to Admin</a>
+            </div>
+            <div class="text-secondary text-sm mb-2">Pending: <span class="text-primary font-bold">${esc(yaraCount)}</span></div>
+            ${yara.length ? `<ul class="space-y-2 text-sm">` + yara.map(r => `
+                <li class="border border-white/10 rounded-lg p-3">
+                    <div class="font-mono text-amber-200 break-all">${esc(r.display_name != null && r.display_name !== '' ? r.display_name : r.filename)}</div>
+                    <div class="text-secondary mt-1">By <span class="text-primary">${esc(r.analyst || '—')}</span> • ${esc((r.uploaded_at||'').slice(0,19).replace('T',' '))}</div>
+                    ${r.ticket_id ? `<div class="text-secondary">Ticket: <span class="text-primary font-mono">${esc(r.ticket_id)}</span></div>` : ``}
+                    ${r.comment ? `<div class="text-secondary mt-1">${esc(r.comment)}</div>` : ``}
+                </li>
+            `).join('') + `</ul>` : `<div class="text-secondary text-sm">No pending YARA.</div>`}
+        </div>`;
+    const tagsHtml = `
+        <div class="bg-tertiary rounded-xl border border-white/10 p-4">
+            <div class="flex items-center justify-between gap-2 mb-2">
+                <h4 class="font-semibold text-primary">Tag suggestions</h4>
+                <a href="/admin/settings" class="text-cyan-300 hover:underline text-sm">Settings → Tags</a>
+            </div>
+            <div class="text-secondary text-sm mb-2">Pending: <span class="text-primary font-bold">${esc(tagCount)}</span></div>
+            ${tags.length ? `<ul class="space-y-2 text-sm">` + tags.map(r => `
+                <li class="border border-white/10 rounded-lg p-3">
+                    <div class="font-mono text-cyan-200">${esc(r.tag)}</div>
+                    <div class="text-secondary mt-1">By <span class="text-primary">${esc(r.suggested_by || '—')}</span> • ${esc((r.suggested_at||'').slice(0,19).replace('T',' '))}</div>
+                </li>
+            `).join('') + `</ul>` : `<div class="text-secondary text-sm">No pending tag suggestions.</div>`}
+        </div>`;
+    content.innerHTML = yaraHtml + tagsHtml;
+    modal.classList.remove('hidden');
+}
+
+function initAdminInboxUI() {
+    const btn = document.getElementById('adminInboxBtn');
+    const modal = document.getElementById('adminInboxModal');
+    const close = document.getElementById('adminInboxClose');
+    if (btn) {
+        btn.addEventListener('click', async function() {
+            await loadAdminInboxBadge();
+            _renderAdminInboxModal(window._adminInboxLatest || {});
+        });
+    }
+    if (close && modal) close.addEventListener('click', () => modal.classList.add('hidden'));
+    if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); });
+}
+
 function updateAuthUI() {
     const loginEl = document.getElementById('authLogin');
     const profileEl = document.getElementById('authProfile');
@@ -178,6 +265,11 @@ function updateAuthUI() {
             if (authState.is_admin) adminEl.classList.remove('hidden');
             else adminEl.classList.add('hidden');
         }
+        const inboxBtn = document.getElementById('adminInboxBtn');
+        if (inboxBtn) {
+            if (authState.is_admin) inboxBtn.classList.remove('hidden');
+            else inboxBtn.classList.add('hidden');
+        }
         const feedPulseAllowlistBtn = document.getElementById('feedPulseAllowlistBtn');
         if (feedPulseAllowlistBtn) feedPulseAllowlistBtn.classList.remove('hidden');
         const playbookAdminActions = document.getElementById('playbookAdminActions');
@@ -192,6 +284,8 @@ function updateAuthUI() {
         if (profileEl) profileEl.classList.add('hidden');
         logoutEl.classList.add('hidden');
         if (adminEl) adminEl.classList.add('hidden');
+        const inboxBtn = document.getElementById('adminInboxBtn');
+        if (inboxBtn) inboxBtn.classList.add('hidden');
         const yaraPendingSection = document.getElementById('yaraPendingSection');
         if (yaraPendingSection) yaraPendingSection.classList.add('hidden');
         const feedPulseAllowlistBtn = document.getElementById('feedPulseAllowlistBtn');
@@ -375,6 +469,14 @@ async function switchTab(tabId, skipHash) {
             showToast('Failed to load tab resources', 'error');
             return;
         }
+    }
+
+    if (tabId === 'search') {
+        try {
+            if (typeof window.loadSearchCountryCodes === 'function') {
+                window.loadSearchCountryCodes();
+            }
+        } catch (e) { /* ignore */ }
     }
 
     if (tabId === 'live-stats') {
@@ -696,6 +798,12 @@ async function initApp() {
     setLanguage(currentLang);
     setTheme(currentTheme);
     switchTab(_getTabFromHash() || 'live-stats');
+    initAdminInboxUI();
+    try {
+        if (_adminInboxPoll) clearInterval(_adminInboxPoll);
+        _adminInboxPoll = setInterval(loadAdminInboxBadge, 60000);
+        loadAdminInboxBadge();
+    } catch (e) { /* ignore */ }
     lazyLoad(_scriptUrls.campaigns).then(function () {
         if (typeof populateCampaignDropdowns === 'function') populateCampaignDropdowns();
     }).catch(function (e) {

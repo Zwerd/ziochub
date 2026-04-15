@@ -3919,3 +3919,1440 @@ textarea:focus-visible {
 #searchResults td:nth-child(2) {
     word-break: break-all;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   CHAMPS ANALYSIS - VIDEO GAME DASHBOARD EFFECTS
+   High-end gaming UI: animations, particles, neon glows, real-time updates
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Sci-Fi Background Grid + Scanline ── */
+.champs-tab {
+    position: relative;
+    overflow: hidden;
+}
+.champs-tab::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: 
+        linear-gradient(90deg, transparent 98%, rgba(0, 212, 255, 0.03) 100%),
+        linear-gradient(0deg, transparent 98%, rgba(0, 212, 255, 0.03) 100%);
+    background-size: 60px 60px;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.5;
+}
+.champs-tab::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, 
+        transparent 0%, 
+        rgba(0, 212, 255, 0.1) 20%, 
+        rgba(0, 212, 255, 0.6) 50%, 
+        rgba(0, 212, 255, 0.1) 80%, 
+        transparent 100%);
+    animation: champs-scanline 6s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.7;
+}
+@keyframes champs-scanline {
+    0% { transform: translateY(-10px); opacity: 0; }
+    5% { opacity: 0.7; }
+    95% { opacity: 0.7; }
+    100% { transform: translateY(calc(100vh + 10px)); opacity: 0; }
+}
+
+/* Ensure content is above background effects */
+.champs-tab > * {
+    position: relative;
+    z-index: 2;
+}
+
+/* ── 2. Leaderboard Row Entry Animation ── */
+.champs-ladder-row {
+    opacity: 0;
+    transform: translateX(-30px);
+    animation: champs-row-enter 0.5s ease-out forwards;
+}
+.champs-ladder-row:nth-child(1) { animation-delay: 0.05s; }
+.champs-ladder-row:nth-child(2) { animation-delay: 0.1s; }
+.champs-ladder-row:nth-child(3) { animation-delay: 0.15s; }
+.champs-ladder-row:nth-child(4) { animation-delay: 0.2s; }
+.champs-ladder-row:nth-child(5) { animation-delay: 0.25s; }
+.champs-ladder-row:nth-child(6) { animation-delay: 0.3s; }
+.champs-ladder-row:nth-child(7) { animation-delay: 0.35s; }
+.champs-ladder-row:nth-child(8) { animation-delay: 0.4s; }
+.champs-ladder-row:nth-child(9) { animation-delay: 0.45s; }
+.champs-ladder-row:nth-child(10) { animation-delay: 0.5s; }
+.champs-ladder-row:nth-child(n+11) { animation-delay: 0.55s; }
+
+@keyframes champs-row-enter {
+    0% { opacity: 0; transform: translateX(-30px); }
+    100% { opacity: 1; transform: translateX(0); }
+}
+
+/* ── 3. Trophy Unlock Animation ── */
+.champs-trophy-item {
+    opacity: 0;
+    transform: scale(0.3) rotateY(180deg);
+    animation: champs-trophy-unlock 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+.champs-trophy-item:nth-child(1) { animation-delay: 0.1s; }
+.champs-trophy-item:nth-child(2) { animation-delay: 0.2s; }
+.champs-trophy-item:nth-child(3) { animation-delay: 0.3s; }
+.champs-trophy-item:nth-child(4) { animation-delay: 0.4s; }
+.champs-trophy-item:nth-child(5) { animation-delay: 0.5s; }
+.champs-trophy-item:nth-child(6) { animation-delay: 0.6s; }
+.champs-trophy-item:nth-child(7) { animation-delay: 0.7s; }
+.champs-trophy-item:nth-child(8) { animation-delay: 0.8s; }
+.champs-trophy-item:nth-child(n+9) { animation-delay: 0.9s; }
+
+@keyframes champs-trophy-unlock {
+    0% { opacity: 0; transform: scale(0.3) rotateY(180deg); }
+    50% { transform: scale(1.15) rotateY(0deg); }
+    75% { transform: scale(0.95) rotateY(0deg); }
+    100% { opacity: 1; transform: scale(1) rotateY(0deg); }
+}
+
+/* ── 4. Enhanced Neon Glow Cards ── */
+.champs-spotlight-card {
+    position: relative;
+    animation: champs-card-breathe 4s ease-in-out infinite;
+}
+@keyframes champs-card-breathe {
+    0%, 100% { 
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2), 
+                    0 0 0 1px rgba(255, 255, 255, 0.05), 
+                    0 0 30px rgba(0, 212, 255, 0.08),
+                    inset 0 0 60px rgba(0, 212, 255, 0.02); 
+    }
+    50% { 
+        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2), 
+                    0 0 0 1px rgba(255, 255, 255, 0.08), 
+                    0 0 50px rgba(0, 212, 255, 0.15),
+                    inset 0 0 80px rgba(0, 212, 255, 0.04); 
+    }
+}
+
+/* ── 5. Holographic Shimmer on Hover ── */
+.champs-spotlight-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(
+        105deg,
+        transparent 0%,
+        transparent 40%,
+        rgba(255, 255, 255, 0.03) 42%,
+        rgba(255, 255, 255, 0.08) 45%,
+        rgba(0, 212, 255, 0.1) 48%,
+        rgba(0, 255, 65, 0.08) 52%,
+        rgba(255, 255, 255, 0.08) 55%,
+        rgba(255, 255, 255, 0.03) 58%,
+        transparent 60%,
+        transparent 100%
+    );
+    transform: translateX(-150%);
+    pointer-events: none;
+    z-index: 10;
+    opacity: 0;
+}
+.champs-spotlight-card:hover::before {
+    animation: champs-shimmer-once 0.8s ease forwards;
+}
+@keyframes champs-shimmer-once {
+    0% { transform: translateX(-150%); opacity: 1; }
+    100% { transform: translateX(150%); opacity: 0; }
+}
+
+/* ── 6. Rank Change Animation (for real-time updates) ── */
+.champs-ladder-row.champs-rank-changed-up {
+    animation: champs-rank-up-flash 1.5s ease-out forwards;
+}
+.champs-ladder-row.champs-rank-changed-down {
+    animation: champs-rank-down-flash 1s ease-out forwards;
+}
+@keyframes champs-rank-up-flash {
+    0% { 
+        background: rgba(0, 255, 65, 0.4); 
+        box-shadow: 0 0 30px rgba(0, 255, 65, 0.5), inset 0 0 20px rgba(0, 255, 65, 0.2);
+        transform: scale(1.02);
+    }
+    30% { 
+        background: rgba(0, 255, 65, 0.25); 
+        box-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
+        transform: scale(1.01);
+    }
+    100% { 
+        background: transparent; 
+        box-shadow: none;
+        transform: scale(1);
+    }
+}
+@keyframes champs-rank-down-flash {
+    0% { 
+        background: rgba(239, 68, 68, 0.3); 
+        box-shadow: 0 0 20px rgba(239, 68, 68, 0.4);
+    }
+    100% { 
+        background: transparent; 
+        box-shadow: none;
+    }
+}
+
+/* Row position swap animation */
+.champs-ladder-row.champs-moving-up {
+    animation: champs-move-up 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+.champs-ladder-row.champs-moving-down {
+    animation: champs-move-down 0.6s ease-out forwards;
+}
+@keyframes champs-move-up {
+    0% { transform: translateY(60px); opacity: 0.5; }
+    100% { transform: translateY(0); opacity: 1; }
+}
+@keyframes champs-move-down {
+    0% { transform: translateY(-60px); opacity: 0.5; }
+    100% { transform: translateY(0); opacity: 1; }
+}
+
+/* ── 7. Enhanced LIVE Badge with Rotating Gradient ── */
+.champs-ticker-live {
+    position: relative;
+    overflow: hidden;
+    z-index: 1;
+}
+.champs-ticker-live::before {
+    content: '';
+    position: absolute;
+    inset: -50%;
+    background: conic-gradient(
+        from 0deg,
+        transparent 0deg,
+        rgba(0, 212, 255, 0.4) 60deg,
+        transparent 120deg,
+        transparent 180deg,
+        rgba(0, 255, 65, 0.3) 240deg,
+        transparent 300deg,
+        transparent 360deg
+    );
+    animation: champs-live-rotate 3s linear infinite;
+    z-index: -1;
+}
+.champs-ticker-live::after {
+    content: '';
+    position: absolute;
+    inset: 2px;
+    background: rgba(0, 40, 60, 0.95);
+    z-index: -1;
+}
+@keyframes champs-live-rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* ── 8. XP Bar Level-Up Flash ── */
+.champs-xp-fill.champs-xp-levelup {
+    animation: champs-xp-flash 0.8s ease-out;
+}
+@keyframes champs-xp-flash {
+    0% { filter: brightness(1); }
+    25% { filter: brightness(2.5); box-shadow: 0 0 40px rgba(0, 255, 65, 1); }
+    50% { filter: brightness(1.5); box-shadow: 0 0 25px rgba(0, 255, 65, 0.7); }
+    100% { filter: brightness(1); box-shadow: 0 0 8px rgba(0, 212, 255, 0.4); }
+}
+
+/* ── 9. Score Odometer Animation Class ── */
+.champs-score-animating {
+    animation: champs-score-tick 0.08s steps(1) infinite;
+}
+@keyframes champs-score-tick {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.85; }
+}
+
+/* ── 10. RANK UP Overlay ── */
+.champs-rankup-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+.champs-rankup-overlay.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+.champs-rankup-content {
+    text-align: center;
+    transform: scale(0.5);
+    opacity: 0;
+    transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease;
+}
+.champs-rankup-overlay.active .champs-rankup-content {
+    transform: scale(1);
+    opacity: 1;
+}
+.champs-rankup-text {
+    display: block;
+    font-size: 1.5rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.3em;
+    color: #fbbf24;
+    text-shadow: 0 0 30px rgba(251, 191, 36, 0.8), 0 0 60px rgba(251, 191, 36, 0.5);
+    margin-bottom: 0.5rem;
+    animation: champs-rankup-pulse 0.5s ease-in-out infinite alternate;
+}
+.champs-rankup-rank {
+    display: block;
+    font-size: 6rem;
+    font-weight: 900;
+    font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+    background: linear-gradient(180deg, #fef3c7 0%, #fbbf24 30%, #f59e0b 70%, #d97706 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    filter: drop-shadow(0 0 40px rgba(251, 191, 36, 0.8)) drop-shadow(0 0 80px rgba(251, 191, 36, 0.4));
+    animation: champs-rankup-bounce 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes champs-rankup-pulse {
+    0% { text-shadow: 0 0 30px rgba(251, 191, 36, 0.8), 0 0 60px rgba(251, 191, 36, 0.5); }
+    100% { text-shadow: 0 0 50px rgba(251, 191, 36, 1), 0 0 100px rgba(251, 191, 36, 0.7); }
+}
+@keyframes champs-rankup-bounce {
+    0% { transform: scale(0.3) translateY(50px); opacity: 0; }
+    50% { transform: scale(1.1) translateY(-10px); }
+    70% { transform: scale(0.95) translateY(5px); }
+    100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+
+/* ── 11. Confetti Canvas Container ── */
+#champsConfettiCanvas {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 9998;
+}
+
+/* ── 12. Particles Canvas ── */
+#champsParticlesCanvas {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 1;
+    opacity: 0.6;
+}
+
+/* ── 13. Activity Pulse Indicator ── */
+.champs-activity-pulse {
+    width: 10px;
+    height: 10px;
+    background: #00ff41;
+    border-radius: 50%;
+    position: relative;
+    animation: champs-pulse-ring 1.5s ease-out infinite;
+}
+.champs-activity-pulse::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border: 2px solid rgba(0, 255, 65, 0.5);
+    border-radius: 50%;
+    animation: champs-pulse-ring-outer 1.5s ease-out infinite;
+}
+@keyframes champs-pulse-ring {
+    0% { box-shadow: 0 0 0 0 rgba(0, 255, 65, 0.7); transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { box-shadow: 0 0 0 12px rgba(0, 255, 65, 0); transform: scale(1); }
+}
+@keyframes champs-pulse-ring-outer {
+    0% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(1.8); opacity: 0; }
+}
+
+/* ── 14. Stat Card Hover Enhancement ── */
+.champs-stat-card {
+    position: relative;
+    overflow: hidden;
+}
+.champs-stat-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, transparent 40%, rgba(255, 255, 255, 0.05) 50%, transparent 60%);
+    transform: translateX(-100%);
+    transition: transform 0s;
+}
+.champs-stat-card:hover::before {
+    transform: translateX(100%);
+    transition: transform 0.5s ease;
+}
+.champs-stat-card:hover {
+    transform: translateY(-3px) scale(1.02);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3), 0 0 20px rgba(0, 212, 255, 0.15);
+}
+
+/* ── 15. Ladder Row Enhanced Hover ── */
+.champs-ladder-row:hover {
+    transform: translateX(4px) scale(1.01);
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 20px rgba(0, 212, 255, 0.1), inset 0 0 30px rgba(0, 212, 255, 0.03);
+}
+
+/* ── 16. Overtake Toast Special Styling ── */
+.toast-overtake {
+    background: linear-gradient(135deg, rgba(0, 40, 30, 0.95) 0%, rgba(0, 60, 40, 0.95) 100%) !important;
+    border: 1px solid rgba(0, 255, 65, 0.5) !important;
+    box-shadow: 0 0 30px rgba(0, 255, 65, 0.3), inset 0 0 20px rgba(0, 255, 65, 0.05) !important;
+    animation: champs-toast-overtake 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes champs-toast-overtake {
+    0% { transform: translateX(100%) scale(0.8); opacity: 0; }
+    50% { transform: translateX(-10px) scale(1.05); }
+    100% { transform: translateX(0) scale(1); opacity: 1; }
+}
+
+/* ── 17. Spotlight Entry Animation ── */
+.champs-spotlight-content {
+    animation: champs-spotlight-enter 0.6s ease-out;
+}
+@keyframes champs-spotlight-enter {
+    0% { opacity: 0; transform: translateY(20px) scale(0.98); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── 18. Avatar Ring Pulse for Top 3 ── */
+.champs-rank-1 .champs-spotlight-avatar,
+.champs-rank-2 .champs-spotlight-avatar,
+.champs-rank-3 .champs-spotlight-avatar {
+    animation: champs-avatar-ring-pulse 3s ease-in-out infinite;
+}
+@keyframes champs-avatar-ring-pulse {
+    0%, 100% { box-shadow: 0 0 20px rgba(0, 212, 255, 0.3), 0 0 40px rgba(0, 212, 255, 0.1); }
+    50% { box-shadow: 0 0 30px rgba(0, 212, 255, 0.5), 0 0 60px rgba(0, 212, 255, 0.2); }
+}
+
+/* ── 19. Glow effect for row that just ranked up ── */
+.champs-ladder-row.champs-just-overtook {
+    background: linear-gradient(135deg, rgba(0, 255, 65, 0.15) 0%, rgba(0, 212, 255, 0.1) 100%);
+    border-color: rgba(0, 255, 65, 0.4);
+    box-shadow: 0 0 25px rgba(0, 255, 65, 0.25), inset 0 0 15px rgba(0, 255, 65, 0.05);
+    animation: champs-overtook-glow 3s ease-out forwards;
+}
+@keyframes champs-overtook-glow {
+    0% { 
+        background: linear-gradient(135deg, rgba(0, 255, 65, 0.25) 0%, rgba(0, 212, 255, 0.15) 100%);
+        box-shadow: 0 0 35px rgba(0, 255, 65, 0.4), inset 0 0 20px rgba(0, 255, 65, 0.1);
+    }
+    100% { 
+        background: transparent;
+        box-shadow: none;
+        border-color: transparent;
+    }
+}
+
+/* ── 20. Light Theme Adjustments for Game Effects ── */
+[data-theme="light"] .champs-tab::before {
+    background: 
+        linear-gradient(90deg, transparent 98%, rgba(0, 102, 204, 0.04) 100%),
+        linear-gradient(0deg, transparent 98%, rgba(0, 102, 204, 0.04) 100%);
+    opacity: 0.3;
+}
+[data-theme="light"] .champs-tab::after {
+    background: linear-gradient(90deg, 
+        transparent 0%, 
+        rgba(0, 102, 204, 0.1) 20%, 
+        rgba(0, 102, 204, 0.4) 50%, 
+        rgba(0, 102, 204, 0.1) 80%, 
+        transparent 100%);
+    opacity: 0.5;
+}
+[data-theme="light"] .champs-spotlight-card {
+    animation: none;
+}
+[data-theme="light"] .champs-spotlight-card::before {
+    background: linear-gradient(105deg, transparent 40%, rgba(0, 0, 0, 0.02) 50%, transparent 60%);
+}
+[data-theme="light"] .champs-ladder-row.champs-rank-changed-up {
+    animation-name: champs-rank-up-flash-light;
+}
+@keyframes champs-rank-up-flash-light {
+    0% { background: rgba(5, 150, 105, 0.25); box-shadow: 0 0 20px rgba(5, 150, 105, 0.3); }
+    100% { background: transparent; box-shadow: none; }
+}
+[data-theme="light"] .champs-ticker-live::before {
+    background: conic-gradient(
+        from 0deg,
+        transparent 0deg,
+        rgba(0, 102, 204, 0.2) 60deg,
+        transparent 120deg,
+        transparent 180deg,
+        rgba(5, 150, 105, 0.15) 240deg,
+        transparent 300deg,
+        transparent 360deg
+    );
+}
+[data-theme="light"] .champs-ticker-live::after {
+    background: rgba(240, 249, 255, 0.95);
+}
+[data-theme="light"] .champs-activity-pulse {
+    background: #059669;
+}
+[data-theme="light"] .champs-activity-pulse::before {
+    border-color: rgba(5, 150, 105, 0.4);
+}
+[data-theme="light"] .champs-ladder-row.champs-just-overtook {
+    background: linear-gradient(135deg, rgba(5, 150, 105, 0.12) 0%, rgba(0, 102, 204, 0.08) 100%);
+    border-color: rgba(5, 150, 105, 0.3);
+}
+[data-theme="light"] .champs-rankup-overlay {
+    background: rgba(255, 255, 255, 0.9);
+}
+[data-theme="light"] .champs-rankup-text {
+    color: #b45309;
+    text-shadow: 0 0 20px rgba(180, 83, 9, 0.5);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   CHAMPS ANALYSIS - ULTRA EFFECTS (Level 2 Enhancements)
+   Even more eye-catching gaming visuals
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── 22. Rotating Glowing Avatar Ring for Top 3 ── */
+.champs-ladder-row.champs-rank-1 .champs-medal-circle,
+.champs-ladder-row.champs-rank-2 .champs-medal-circle,
+.champs-ladder-row.champs-rank-3 .champs-medal-circle {
+    position: relative;
+}
+.champs-ladder-row.champs-rank-1 .champs-medal-circle::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    background: conic-gradient(
+        from 0deg,
+        #fbbf24,
+        #f59e0b,
+        #fbbf24,
+        #fef3c7,
+        #fbbf24,
+        #f59e0b,
+        #fbbf24
+    );
+    animation: champs-avatar-ring-rotate 3s linear infinite;
+    z-index: -1;
+    filter: blur(3px);
+}
+.champs-ladder-row.champs-rank-2 .champs-medal-circle::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    background: conic-gradient(
+        from 0deg,
+        #94a3b8,
+        #cbd5e1,
+        #94a3b8,
+        #e2e8f0,
+        #94a3b8,
+        #cbd5e1,
+        #94a3b8
+    );
+    animation: champs-avatar-ring-rotate 4s linear infinite;
+    z-index: -1;
+    filter: blur(2px);
+}
+.champs-ladder-row.champs-rank-3 .champs-medal-circle::before {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    background: conic-gradient(
+        from 0deg,
+        #d97706,
+        #f59e0b,
+        #d97706,
+        #fbbf24,
+        #d97706,
+        #f59e0b,
+        #d97706
+    );
+    animation: champs-avatar-ring-rotate 3.5s linear infinite;
+    z-index: -1;
+    filter: blur(2px);
+}
+@keyframes champs-avatar-ring-rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* ── 23. Animated Glowing Rank Numbers ── */
+.champs-ladder-row.champs-rank-1 .champs-rank-slot,
+.champs-ladder-row.champs-rank-2 .champs-rank-slot,
+.champs-ladder-row.champs-rank-3 .champs-rank-slot {
+    animation: champs-rank-number-pulse 2s ease-in-out infinite;
+}
+@keyframes champs-rank-number-pulse {
+    0%, 100% { 
+        filter: drop-shadow(0 0 8px currentColor);
+        transform: scale(1);
+    }
+    50% { 
+        filter: drop-shadow(0 0 20px currentColor) drop-shadow(0 0 40px currentColor);
+        transform: scale(1.05);
+    }
+}
+
+/* ── 24. Neon Border Pulse on Cards ── */
+.champs-spotlight-card {
+    position: relative;
+}
+.champs-spotlight-card::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: inherit;
+    padding: 2px;
+    background: linear-gradient(
+        45deg,
+        rgba(0, 212, 255, 0.5),
+        rgba(0, 255, 65, 0.3),
+        rgba(139, 92, 246, 0.4),
+        rgba(0, 212, 255, 0.5)
+    );
+    background-size: 300% 300%;
+    animation: champs-neon-border-flow 4s ease infinite;
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+    z-index: -1;
+    opacity: 0.6;
+}
+@keyframes champs-neon-border-flow {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+/* ── 25. Crown Animation for #1 ── */
+.champs-ladder-row.champs-rank-1 {
+    position: relative;
+    margin-top: 16px;
+}
+.champs-ladder-row.champs-rank-1 .champs-rank-slot::after {
+    content: '👑';
+    position: absolute;
+    top: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 1.2rem;
+    animation: champs-crown-float 2s ease-in-out infinite;
+    z-index: 20;
+    filter: drop-shadow(0 0 10px rgba(251, 191, 36, 0.8));
+    pointer-events: none;
+}
+@keyframes champs-crown-float {
+    0%, 100% { transform: translateX(-50%) translateY(0) rotate(-5deg); }
+    25% { transform: translateX(-50%) translateY(-4px) rotate(0deg); }
+    50% { transform: translateX(-50%) translateY(-2px) rotate(5deg); }
+    75% { transform: translateX(-50%) translateY(-4px) rotate(0deg); }
+}
+
+/* ── 26. Fire Effect for Streak ── */
+.champs-fire-effect {
+    position: relative;
+    display: inline-block;
+}
+.champs-fire-effect::before,
+.champs-fire-effect::after {
+    content: '🔥';
+    position: absolute;
+    font-size: 1rem;
+    animation: champs-fire-flicker 0.5s ease-in-out infinite alternate;
+    opacity: 0.8;
+}
+.champs-fire-effect::before {
+    left: -18px;
+    top: -2px;
+    animation-delay: 0s;
+}
+.champs-fire-effect::after {
+    right: -18px;
+    top: -2px;
+    animation-delay: 0.25s;
+}
+@keyframes champs-fire-flicker {
+    0% { transform: translateY(0) scale(1); opacity: 0.6; }
+    100% { transform: translateY(-3px) scale(1.1); opacity: 1; }
+}
+
+/* ── 27. Electric Borders (Lightning Effect) - Using box-shadow animation instead ── */
+.champs-ladder-row.champs-rank-1:hover,
+.champs-ladder-row.champs-ladder-selected.champs-rank-1 {
+    background: linear-gradient(135deg, rgba(251, 191, 36, 0.18) 0%, rgba(251, 191, 36, 0.08) 100%) !important;
+    border-color: rgba(251, 191, 36, 0.6) !important;
+    opacity: 1 !important;
+    transform: translateX(4px) scale(1.01) !important;
+    box-shadow: 
+        0 0 15px rgba(251, 191, 36, 0.6),
+        0 0 30px rgba(251, 191, 36, 0.3),
+        inset 0 0 10px rgba(251, 191, 36, 0.1);
+}
+
+/* ── 28. 3D Card Tilt Effect ── DISABLED BY USER REQUEST */
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   CHAMPS ANALYSIS - REAL-TIME LIFE ANIMATIONS
+   Making the dashboard feel alive with activity indicators
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── RT-1. Active Analyst Indicator (Green Pulsing Dot) ── */
+.champs-active-indicator {
+    width: 8px;
+    height: 8px;
+    background: #00ff41;
+    border-radius: 50%;
+    display: inline-block;
+    margin-left: 6px;
+    vertical-align: middle;
+    animation: champs-active-pulse 1.5s ease-in-out infinite;
+    box-shadow: 0 0 8px #00ff41;
+}
+@keyframes champs-active-pulse {
+    0%, 100% { 
+        transform: scale(1); 
+        opacity: 1;
+        box-shadow: 0 0 8px #00ff41;
+    }
+    50% { 
+        transform: scale(1.3); 
+        opacity: 0.7;
+        box-shadow: 0 0 15px #00ff41, 0 0 25px #00ff41;
+    }
+}
+
+/* ── RT-2. Live IOC Counter ── */
+.champs-live-counter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    background: linear-gradient(135deg, rgba(0, 212, 255, 0.1) 0%, rgba(0, 255, 65, 0.08) 100%);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    border-radius: 16px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #00d4ff;
+}
+.champs-live-counter-value {
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 0.9rem;
+    color: #00ff41;
+    text-shadow: 0 0 8px rgba(0, 255, 65, 0.4);
+    transition: transform 0.3s ease, text-shadow 0.3s ease;
+}
+.champs-live-counter-value.champs-counter-bump {
+    transform: scale(1.2);
+    text-shadow: 0 0 15px rgba(0, 255, 65, 1), 0 0 25px rgba(0, 255, 65, 0.5);
+}
+.champs-live-counter-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.7;
+}
+
+/* ── RT-3. Last Activity Timestamp ── */
+.champs-last-activity {
+    font-size: 0.65rem;
+    color: rgba(255, 255, 255, 0.5);
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 12px;
+}
+.champs-last-activity::before {
+    content: '';
+    width: 5px;
+    height: 5px;
+    background: #00ff41;
+    border-radius: 50%;
+    animation: champs-activity-blink 2s ease-in-out infinite;
+    flex-shrink: 0;
+}
+@keyframes champs-activity-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* ── RT-4. Ticker Flash on New Message ── */
+.champs-ticker.champs-ticker-new-message {
+    animation: champs-ticker-flash 0.5s ease-out;
+}
+@keyframes champs-ticker-flash {
+    0% { 
+        box-shadow: inset 0 0 30px rgba(0, 255, 65, 0.5), 0 0 20px rgba(0, 255, 65, 0.3);
+        border-color: rgba(0, 255, 65, 0.6);
+    }
+    100% { 
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+        border-color: rgba(255, 255, 255, 0.1);
+    }
+}
+
+/* ── RT-5. Mexican Wave Effect ── */
+.champs-ladder-row.champs-wave {
+    animation: champs-mexican-wave 0.6s ease-out;
+}
+@keyframes champs-mexican-wave {
+    0% { 
+        background: inherit;
+        box-shadow: none;
+    }
+    50% { 
+        background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.2), rgba(0, 255, 65, 0.15), transparent);
+        box-shadow: 0 0 20px rgba(0, 212, 255, 0.3);
+    }
+    100% { 
+        background: inherit;
+        box-shadow: none;
+    }
+}
+
+/* ── RT-6. Hot Right Now Badge ── */
+.champs-hot-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    background: linear-gradient(135deg, rgba(249, 115, 22, 0.3) 0%, rgba(239, 68, 68, 0.2) 100%);
+    border: 1px solid rgba(249, 115, 22, 0.5);
+    border-radius: 10px;
+    font-size: 0.65rem;
+    font-weight: 800;
+    color: #fb923c;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    animation: champs-hot-pulse 1s ease-in-out infinite;
+    margin-left: 6px;
+}
+.champs-hot-badge::before {
+    content: '🔥';
+    font-size: 0.7rem;
+}
+@keyframes champs-hot-pulse {
+    0%, 100% { 
+        box-shadow: 0 0 5px rgba(249, 115, 22, 0.3);
+        transform: scale(1);
+    }
+    50% { 
+        box-shadow: 0 0 15px rgba(249, 115, 22, 0.6);
+        transform: scale(1.05);
+    }
+}
+
+/* ── RT-7. Progress Ring for Team Goal ── */
+.champs-progress-ring {
+    position: relative;
+    width: 60px;
+    height: 60px;
+}
+.champs-progress-ring svg {
+    transform: rotate(-90deg);
+    width: 100%;
+    height: 100%;
+}
+.champs-progress-ring-bg {
+    fill: none;
+    stroke: rgba(255, 255, 255, 0.1);
+    stroke-width: 6;
+}
+.champs-progress-ring-fill {
+    fill: none;
+    stroke: url(#champs-ring-gradient);
+    stroke-width: 6;
+    stroke-linecap: round;
+    stroke-dasharray: 157;
+    stroke-dashoffset: 157;
+    transition: stroke-dashoffset 1s ease-out;
+    filter: drop-shadow(0 0 6px rgba(0, 212, 255, 0.5));
+}
+.champs-progress-ring-text {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.9rem;
+    font-weight: 800;
+    color: #00ff41;
+    text-shadow: 0 0 10px rgba(0, 255, 65, 0.5);
+}
+
+/* ── RT-8. Leaderboard Shake ── */
+.champs-ladder.champs-shake {
+    animation: champs-leaderboard-shake 0.5s ease-out;
+}
+@keyframes champs-leaderboard-shake {
+    0%, 100% { transform: translateX(0); }
+    10% { transform: translateX(-3px) rotate(-0.5deg); }
+    20% { transform: translateX(3px) rotate(0.5deg); }
+    30% { transform: translateX(-3px) rotate(-0.3deg); }
+    40% { transform: translateX(3px) rotate(0.3deg); }
+    50% { transform: translateX(-2px) rotate(-0.2deg); }
+    60% { transform: translateX(2px) rotate(0.2deg); }
+    70% { transform: translateX(-1px); }
+    80% { transform: translateX(1px); }
+    90% { transform: translateX(0); }
+}
+
+/* ── RT-9. Score Particles Container ── */
+.champs-score-particles {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+}
+.champs-score-particle {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    animation: champs-particle-fly 1s ease-out forwards;
+}
+@keyframes champs-particle-fly {
+    0% { 
+        transform: translateY(0) scale(1);
+        opacity: 1;
+    }
+    100% { 
+        transform: translateY(-60px) translateX(var(--tx, 0)) scale(0);
+        opacity: 0;
+    }
+}
+
+/* ── RT-10. Milestone Celebration ── */
+.champs-milestone-celebration {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    padding: 30px 50px;
+    background: linear-gradient(135deg, rgba(0, 40, 60, 0.98) 0%, rgba(0, 60, 80, 0.98) 100%);
+    border: 2px solid rgba(0, 212, 255, 0.6);
+    border-radius: 20px;
+    text-align: center;
+    z-index: 10002;
+    animation: champs-milestone-appear 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: 0 0 60px rgba(0, 212, 255, 0.4), inset 0 0 40px rgba(0, 212, 255, 0.1);
+}
+@keyframes champs-milestone-appear {
+    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+    100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+.champs-milestone-icon {
+    font-size: 4rem;
+    margin-bottom: 10px;
+    animation: champs-milestone-bounce 0.6s ease-out;
+}
+@keyframes champs-milestone-bounce {
+    0% { transform: scale(0); }
+    50% { transform: scale(1.3); }
+    100% { transform: scale(1); }
+}
+.champs-milestone-title {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: #00d4ff;
+    text-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+    margin-bottom: 5px;
+}
+.champs-milestone-value {
+    font-size: 3rem;
+    font-weight: 900;
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    background: linear-gradient(180deg, #a5f3fc, #00d4ff, #00ff41);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    filter: drop-shadow(0 0 20px rgba(0, 212, 255, 0.5));
+}
+
+/* ── RT-11. Activity Heatmap Glow ── */
+.champs-tab.champs-activity-low { --activity-glow: rgba(0, 212, 255, 0.02); }
+.champs-tab.champs-activity-medium { --activity-glow: rgba(0, 212, 255, 0.05); }
+.champs-tab.champs-activity-high { --activity-glow: rgba(0, 255, 65, 0.08); }
+.champs-tab.champs-activity-extreme { --activity-glow: rgba(251, 191, 36, 0.1); }
+
+.champs-tab[class*="champs-activity-"]::before {
+    box-shadow: inset 0 0 100px var(--activity-glow, transparent);
+    transition: box-shadow 2s ease;
+}
+
+/* ── RT-12. Typing Indicator ── */
+.champs-typing-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    background: rgba(0, 212, 255, 0.1);
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    border-radius: 15px;
+    font-size: 0.8rem;
+    color: rgba(255, 255, 255, 0.7);
+    animation: champs-typing-fade 2s ease-in-out infinite;
+}
+.champs-typing-dots {
+    display: flex;
+    gap: 3px;
+}
+.champs-typing-dot {
+    width: 5px;
+    height: 5px;
+    background: #00d4ff;
+    border-radius: 50%;
+    animation: champs-typing-bounce 1.4s ease-in-out infinite;
+}
+.champs-typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.champs-typing-dot:nth-child(3) { animation-delay: 0.4s; }
+@keyframes champs-typing-bounce {
+    0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+    30% { transform: translateY(-5px); opacity: 1; }
+}
+@keyframes champs-typing-fade {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+/* ── RT-13. Sound Notification Visual (for when sound plays) ── */
+.champs-sound-wave {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.8);
+    border: 1px solid rgba(0, 212, 255, 0.3);
+    border-radius: 20px;
+    z-index: 9999;
+    animation: champs-sound-appear 0.3s ease-out;
+}
+.champs-sound-bar {
+    width: 3px;
+    height: 15px;
+    background: #00d4ff;
+    border-radius: 2px;
+    animation: champs-sound-bar-animate 0.5s ease-in-out infinite;
+}
+.champs-sound-bar:nth-child(1) { animation-delay: 0s; height: 10px; }
+.champs-sound-bar:nth-child(2) { animation-delay: 0.1s; height: 15px; }
+.champs-sound-bar:nth-child(3) { animation-delay: 0.2s; height: 8px; }
+.champs-sound-bar:nth-child(4) { animation-delay: 0.3s; height: 12px; }
+@keyframes champs-sound-bar-animate {
+    0%, 100% { transform: scaleY(1); }
+    50% { transform: scaleY(0.5); }
+}
+@keyframes champs-sound-appear {
+    0% { transform: translateX(100px); opacity: 0; }
+    100% { transform: translateX(0); opacity: 1; }
+}
+
+/* ── RT-14. New Entry Highlight ── */
+.champs-ladder-row.champs-new-entry {
+    animation: champs-new-entry 2s ease-out;
+}
+@keyframes champs-new-entry {
+    0% {
+        background: rgba(0, 255, 65, 0.3);
+        box-shadow: 0 0 30px rgba(0, 255, 65, 0.5), inset 0 0 20px rgba(0, 255, 65, 0.2);
+    }
+    100% {
+        background: transparent;
+        box-shadow: none;
+    }
+}
+
+/* ── Refresh Button Spin ── */
+#champsRefreshBtn svg {
+    transition: transform 0.2s ease;
+}
+#champsRefreshBtn:hover svg {
+    transform: rotate(45deg);
+}
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* ── RT-15. Live Badge in Header ── */
+.champs-live-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    border-radius: 8px;
+    font-size: 0.6rem;
+    font-weight: 800;
+    color: #ef4444;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    vertical-align: middle;
+}
+.champs-live-badge::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    background: #ef4444;
+    border-radius: 50%;
+    animation: champs-live-dot 1s ease-in-out infinite;
+}
+@keyframes champs-live-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+/* ── Light Theme Adjustments ── */
+[data-theme="light"] .champs-active-indicator {
+    background: #059669;
+    box-shadow: 0 0 8px #059669;
+}
+[data-theme="light"] .champs-live-counter {
+    background: linear-gradient(135deg, rgba(0, 102, 204, 0.08) 0%, rgba(5, 150, 105, 0.06) 100%);
+    border-color: rgba(0, 102, 204, 0.15);
+    color: #0284c7;
+}
+[data-theme="light"] .champs-live-counter-value {
+    color: #059669;
+    text-shadow: none;
+}
+[data-theme="light"] .champs-last-activity {
+    background: rgba(0, 0, 0, 0.05);
+    color: rgba(0, 0, 0, 0.5);
+}
+[data-theme="light"] .champs-last-activity::before {
+    background: #059669;
+}
+[data-theme="light"] .champs-live-badge {
+    background: rgba(220, 38, 38, 0.1);
+    border-color: rgba(220, 38, 38, 0.2);
+    color: #dc2626;
+}
+[data-theme="light"] .champs-live-badge::before {
+    background: #dc2626;
+}
+[data-theme="light"] .champs-hot-badge {
+    background: linear-gradient(135deg, rgba(234, 88, 12, 0.15) 0%, rgba(220, 38, 38, 0.1) 100%);
+    border-color: rgba(234, 88, 12, 0.3);
+    color: #ea580c;
+}
+[data-theme="light"] .champs-typing-indicator {
+    background: rgba(0, 102, 204, 0.08);
+    border-color: rgba(0, 102, 204, 0.15);
+    color: rgba(0, 0, 0, 0.6);
+}
+[data-theme="light"] .champs-typing-dot {
+    background: #0284c7;
+}
+
+/* ── 29. Glitch Effect for Ticker ── */
+.champs-ticker-glitch {
+    position: relative;
+}
+.champs-ticker-glitch::before,
+.champs-ticker-glitch::after {
+    content: attr(data-text);
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.8;
+}
+.champs-ticker-glitch::before {
+    color: #00ffff;
+    animation: champs-glitch-1 0.3s infinite linear alternate-reverse;
+    clip-path: polygon(0 0, 100% 0, 100% 35%, 0 35%);
+}
+.champs-ticker-glitch::after {
+    color: #ff00ff;
+    animation: champs-glitch-2 0.3s infinite linear alternate-reverse;
+    clip-path: polygon(0 65%, 100% 65%, 100% 100%, 0 100%);
+}
+@keyframes champs-glitch-1 {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-2px); }
+}
+@keyframes champs-glitch-2 {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(2px); }
+}
+
+/* ── 30. Animated Gradient Background ── */
+.champs-tab {
+    background: linear-gradient(
+        -45deg,
+        rgba(0, 20, 40, 0.95),
+        rgba(0, 40, 60, 0.95),
+        rgba(10, 30, 50, 0.95),
+        rgba(0, 25, 45, 0.95)
+    );
+    background-size: 400% 400%;
+    animation: champs-bg-gradient 15s ease infinite;
+}
+@keyframes champs-bg-gradient {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+}
+
+/* ── 31. Enhanced Particles Glow ── */
+#champsParticlesCanvas {
+    filter: blur(0.5px);
+}
+
+/* ── 32. Pulse on New Activity ── */
+.champs-tab.champs-activity-flash::before {
+    animation: champs-activity-screen-pulse 0.5s ease-out;
+}
+@keyframes champs-activity-screen-pulse {
+    0% { 
+        box-shadow: inset 0 0 100px rgba(0, 255, 65, 0.3);
+        background: rgba(0, 255, 65, 0.05);
+    }
+    100% { 
+        box-shadow: inset 0 0 0 transparent;
+        background: transparent;
+    }
+}
+
+/* ── 33. Spotlight Beam Effect ── */
+.champs-spotlight-wrap {
+    position: relative;
+    overflow: hidden;
+}
+.champs-spotlight-wrap::before {
+    content: '';
+    position: absolute;
+    top: -100%;
+    left: 50%;
+    width: 200px;
+    height: 300%;
+    background: linear-gradient(
+        180deg,
+        transparent 0%,
+        rgba(0, 212, 255, 0.03) 30%,
+        rgba(0, 212, 255, 0.08) 50%,
+        rgba(0, 212, 255, 0.03) 70%,
+        transparent 100%
+    );
+    transform: translateX(-50%) rotate(15deg);
+    animation: champs-spotlight-beam 8s ease-in-out infinite;
+    pointer-events: none;
+    z-index: 0;
+}
+@keyframes champs-spotlight-beam {
+    0%, 100% { transform: translateX(-50%) rotate(15deg); opacity: 0.5; }
+    50% { transform: translateX(-50%) rotate(-15deg); opacity: 1; }
+}
+
+/* ── 34. Typewriter Effect Class ── */
+.champs-typewriter {
+    overflow: hidden;
+    white-space: nowrap;
+    animation: champs-typewriter-reveal 1s steps(20, end);
+}
+@keyframes champs-typewriter-reveal {
+    from { width: 0; }
+    to { width: 100%; }
+}
+
+/* ── 35. Trophy Shine Effect ── DISABLED BY USER REQUEST */
+
+/* ── 36. Stat Card Counter Glow ── */
+.champs-stat-card .font-mono {
+    text-shadow: 0 0 10px currentColor, 0 0 20px currentColor;
+    animation: champs-stat-glow 2s ease-in-out infinite;
+}
+@keyframes champs-stat-glow {
+    0%, 100% { text-shadow: 0 0 10px currentColor, 0 0 20px currentColor; }
+    50% { text-shadow: 0 0 15px currentColor, 0 0 30px currentColor, 0 0 40px currentColor; }
+}
+
+/* ── 37. Leaderboard Header Glow ── */
+.champs-ladder-header {
+    position: relative;
+    overflow: hidden;
+}
+.champs-ladder-header::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.5), rgba(0, 255, 65, 0.5), transparent);
+    animation: champs-header-glow-slide 3s ease-in-out infinite;
+}
+@keyframes champs-header-glow-slide {
+    0%, 100% { transform: translateX(-100%); }
+    50% { transform: translateX(100%); }
+}
+
+/* ── 38. Avatar Hover Pop ── */
+.champs-ladder-row:hover .champs-medal-circle,
+.champs-ladder-row:hover span[class*="rounded-full"] {
+    transform: scale(1.1);
+    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ── 39. Score Value Rainbow Effect on Hover ── */
+.champs-spotlight-points-value:hover {
+    background: linear-gradient(
+        90deg,
+        #ff0080,
+        #ff8c00,
+        #40e0d0,
+        #00ff41,
+        #00d4ff,
+        #8b5cf6,
+        #ff0080
+    );
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: champs-rainbow-flow 2s linear infinite;
+}
+@keyframes champs-rainbow-flow {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+}
+
+/* ── 40. Ticker Keyword Flash ── */
+.champs-ticker-kw {
+    animation: champs-keyword-flash 1.5s ease-in-out infinite;
+}
+@keyframes champs-keyword-flash {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; text-shadow: 0 0 15px currentColor, 0 0 30px currentColor; }
+}
+
+/* ── 41. Loading Skeleton Pulse ── */
+.champs-loading-skeleton {
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.05) 25%,
+        rgba(255, 255, 255, 0.1) 50%,
+        rgba(255, 255, 255, 0.05) 75%
+    );
+    background-size: 200% 100%;
+    animation: champs-skeleton-pulse 1.5s ease-in-out infinite;
+    border-radius: 8px;
+}
+@keyframes champs-skeleton-pulse {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* ── 42. HUD Progress Bar Shimmer ── */
+.champs-hud-bar {
+    position: relative;
+    overflow: hidden;
+}
+.champs-hud-bar::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 50%;
+    height: 100%;
+    background: linear-gradient(
+        90deg,
+        transparent,
+        rgba(255, 255, 255, 0.3),
+        transparent
+    );
+    animation: champs-hud-shimmer 2s ease-in-out infinite;
+}
+@keyframes champs-hud-shimmer {
+    0% { left: -100%; }
+    100% { left: 200%; }
+}
+
+/* ── 43. Light Theme Adjustments for Ultra Effects ── */
+[data-theme="light"] .champs-tab {
+    background: linear-gradient(
+        -45deg,
+        rgba(240, 249, 255, 0.98),
+        rgba(224, 242, 254, 0.98),
+        rgba(236, 254, 255, 0.98),
+        rgba(240, 249, 255, 0.98)
+    );
+    background-size: 400% 400%;
+}
+[data-theme="light"] .champs-spotlight-card::after {
+    background: linear-gradient(
+        45deg,
+        rgba(0, 102, 204, 0.3),
+        rgba(5, 150, 105, 0.2),
+        rgba(139, 92, 246, 0.25),
+        rgba(0, 102, 204, 0.3)
+    );
+    opacity: 0.4;
+}
+[data-theme="light"] .champs-ladder-row.champs-rank-1 .champs-rank-slot::after {
+    filter: drop-shadow(0 0 5px rgba(180, 83, 9, 0.5));
+}
+[data-theme="light"] .champs-stat-card .font-mono {
+    text-shadow: 0 0 5px currentColor;
+}
+[data-theme="light"] .champs-ladder-header::after {
+    background: linear-gradient(90deg, transparent, rgba(0, 102, 204, 0.3), rgba(5, 150, 105, 0.3), transparent);
+}
+
+/* ── 44. Reduced Motion Support (Updated) ── */
+@media (prefers-reduced-motion: reduce) {
+    .champs-tab::after { animation: none; opacity: 0; }
+    .champs-tab { animation: none; }
+    .champs-ladder-row { animation: none; opacity: 1; transform: none; }
+    .champs-ladder-row .champs-rank-slot::after { animation: none; }
+    .champs-trophy-item { animation: none; opacity: 1; transform: none; }
+    .champs-spotlight-card { animation: none; }
+    .champs-spotlight-card::before,
+    .champs-spotlight-card::after { display: none; }
+    .champs-ticker-live::before { animation: none; }
+    .champs-stat-card::before { display: none; }
+    .champs-stat-card:hover { transform: none; }
+    .champs-stat-card .font-mono { animation: none; }
+    .champs-ladder-row:hover { transform: none; }
+    .champs-ladder-row.champs-rank-changed-up,
+    .champs-ladder-row.champs-rank-changed-down,
+    .champs-ladder-row.champs-moving-up,
+    .champs-ladder-row.champs-moving-down { animation: none; }
+    .champs-rankup-overlay, .champs-rankup-content { transition: none; }
+    .champs-spotlight-content { animation: none; }
+    .champs-spotlight-wrap::before { animation: none; display: none; }
+    .champs-medal-circle::before { animation: none; }
+    .champs-ladder-header::after { animation: none; }
+    .champs-hud-bar::before { animation: none; }
+    .champs-hud-bar::after { animation: none; }
+    .champs-ticker-kw { animation: none; }
+    .champs-spotlight-points-value:hover { animation: none; }
+    #champsParticlesCanvas { display: none; }
+}

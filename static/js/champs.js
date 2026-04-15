@@ -1,5 +1,6 @@
 /**
  * Champs Analysis tab logic (Step 10.3 - extracted from index.html).
+ * Enhanced with video game dashboard effects: animations, particles, real-time updates.
  * Depends on globals: escapeHtml, escapeAttr, showToast, t, authState, Chart, loadStats, loadLiveFeed.
  * Exposes: loadChampsAnalysis, startChampsTickerPolling, champsSpotlightChart.
  */
@@ -7,11 +8,18 @@
     'use strict';
 
     let champsLeaderboardData = [];
+    let champsPreviousLeaderboard = [];
     let champsSpotlightChart = null;
     let champsTickerMessages = [];
     let champsTickerPollInterval = null;
+    let champsLeaderboardPollInterval = null;
+    let champsPresencePollInterval = null;
     let champsMispVisible = false;
     let champsMispData = null;
+    let champsParticlesCanvas = null;
+    let champsParticlesCtx = null;
+    let champsParticlesAnimationId = null;
+    let champsParticles = [];
 
     const champsBadgeDescriptions = {
         on_fire: '5-day submission streak', warm_streak: '3-4 day streak', night_owl: 'Activity between 22:00-04:00',
@@ -61,15 +69,1013 @@
         consistent: 'Consistent', ever_present: 'Ever Present'
     };
 
-    async function loadChampsAnalysis() {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Enhanced Score Odometer Animation with Sound-like Visual
+    // ═══════════════════════════════════════════════════════════════════════════
+    function animateScore(element, targetValue, duration) {
+        if (!element) return;
+        duration = duration || 1500;
+        const startValue = 0;
+        const startTime = performance.now();
+        element.classList.add('champs-score-animating');
+        
+        // Add glow effect during animation
+        element.style.textShadow = '0 0 20px currentColor, 0 0 40px currentColor';
+        
+        function update(currentTime) {
+            const elapsed = currentTime - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            
+            // Easing with bounce at end
+            let easeOut;
+            if (progress < 0.9) {
+                easeOut = 1 - Math.pow(1 - (progress / 0.9), 3);
+            } else {
+                const bounceProgress = (progress - 0.9) / 0.1;
+                easeOut = 1 + Math.sin(bounceProgress * Math.PI) * 0.02;
+            }
+            
+            const currentValue = Math.floor(startValue + (targetValue - startValue) * Math.min(easeOut, 1));
+            element.textContent = currentValue.toLocaleString();
+            
+            // Pulsing glow during count
+            const glowIntensity = 20 + Math.sin(elapsed * 0.02) * 10;
+            element.style.textShadow = `0 0 ${glowIntensity}px currentColor, 0 0 ${glowIntensity * 2}px currentColor`;
+            
+            if (progress < 1) {
+                requestAnimationFrame(update);
+            } else {
+                element.textContent = targetValue.toLocaleString();
+                element.classList.remove('champs-score-animating');
+                // Final flash
+                element.style.textShadow = '0 0 40px currentColor, 0 0 60px currentColor, 0 0 80px currentColor';
+                setTimeout(() => {
+                    element.style.textShadow = '';
+                }, 300);
+            }
+        }
+        requestAnimationFrame(update);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Animated Stat Cards Counter
+    // ═══════════════════════════════════════════════════════════════════════════
+    function animateStatCards() {
+        const statCards = document.querySelectorAll('.champs-stat-card .font-mono');
+        statCards.forEach((el, index) => {
+            const value = parseInt(el.textContent.replace(/,/g, ''), 10);
+            if (!isNaN(value) && value > 0) {
+                el.textContent = '0';
+                setTimeout(() => {
+                    animateSmallNumber(el, value, 800);
+                }, index * 150);
+            }
+        });
+    }
+
+    function animateSmallNumber(element, targetValue, duration) {
+        const startTime = performance.now();
+        function update(currentTime) {
+            const elapsed = currentTime - startTime;
+            const progress = Math.min(elapsed / duration, 1);
+            const easeOut = 1 - Math.pow(1 - progress, 2);
+            element.textContent = Math.floor(targetValue * easeOut);
+            if (progress < 1) requestAnimationFrame(update);
+            else element.textContent = targetValue;
+        }
+        requestAnimationFrame(update);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Confetti Explosion
+    // ═══════════════════════════════════════════════════════════════════════════
+    function triggerConfetti() {
+        let canvas = document.getElementById('champsConfettiCanvas');
+        if (!canvas) {
+            canvas = document.createElement('canvas');
+            canvas.id = 'champsConfettiCanvas';
+            document.body.appendChild(canvas);
+        }
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        const ctx = canvas.getContext('2d');
+        const confetti = [];
+        const colors = ['#00ff41', '#00d4ff', '#fbbf24', '#f59e0b', '#ec4899', '#8b5cf6', '#06b6d4'];
+        
+        for (let i = 0; i < 150; i++) {
+            confetti.push({
+                x: Math.random() * canvas.width,
+                y: -20 - Math.random() * 100,
+                w: 8 + Math.random() * 6,
+                h: 4 + Math.random() * 4,
+                color: colors[Math.floor(Math.random() * colors.length)],
+                vx: (Math.random() - 0.5) * 8,
+                vy: 3 + Math.random() * 5,
+                rotation: Math.random() * 360,
+                rotationSpeed: (Math.random() - 0.5) * 15
+            });
+        }
+        
+        let frame = 0;
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            let active = false;
+            confetti.forEach(c => {
+                if (c.y < canvas.height + 50) {
+                    active = true;
+                    c.x += c.vx;
+                    c.y += c.vy;
+                    c.vy += 0.15;
+                    c.vx *= 0.99;
+                    c.rotation += c.rotationSpeed;
+                    
+                    ctx.save();
+                    ctx.translate(c.x, c.y);
+                    ctx.rotate(c.rotation * Math.PI / 180);
+                    ctx.fillStyle = c.color;
+                    ctx.fillRect(-c.w / 2, -c.h / 2, c.w, c.h);
+                    ctx.restore();
+                }
+            });
+            frame++;
+            if (active && frame < 300) {
+                requestAnimationFrame(animate);
+            } else {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        }
+        animate();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - RANK UP Overlay
+    // ═══════════════════════════════════════════════════════════════════════════
+    function showRankUpEffect(newRank, isTop3) {
+        let overlay = document.querySelector('.champs-rankup-overlay');
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.className = 'champs-rankup-overlay';
+            document.body.appendChild(overlay);
+        }
+        overlay.innerHTML = `
+            <div class="champs-rankup-content">
+                <span class="champs-rankup-text">${isTop3 ? '🏆 TOP 3!' : 'RANK UP!'}</span>
+                <span class="champs-rankup-rank">#${newRank}</span>
+            </div>`;
+        
+        requestAnimationFrame(() => {
+            overlay.classList.add('active');
+            if (isTop3) triggerConfetti();
+        });
+        
+        setTimeout(() => {
+            overlay.classList.remove('active');
+            setTimeout(() => overlay.remove(), 500);
+        }, 2500);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Enhanced Floating Particles with Glow
+    // ═══════════════════════════════════════════════════════════════════════════
+    function initChampsParticles() {
+        const tabEl = document.getElementById('tab-champs');
+        if (!tabEl) return;
+        
+        if (document.getElementById('champsParticlesCanvas')) return;
+        
+        champsParticlesCanvas = document.createElement('canvas');
+        champsParticlesCanvas.id = 'champsParticlesCanvas';
+        tabEl.insertBefore(champsParticlesCanvas, tabEl.firstChild);
+        champsParticlesCtx = champsParticlesCanvas.getContext('2d');
+        
+        function resize() {
+            if (!champsParticlesCanvas) return;
+            champsParticlesCanvas.width = tabEl.offsetWidth;
+            champsParticlesCanvas.height = tabEl.offsetHeight;
+        }
+        resize();
+        window.addEventListener('resize', resize);
+        
+        champsParticles = [];
+        const colors = [
+            '0, 212, 255',    // cyan
+            '0, 255, 65',     // green
+            '251, 191, 36',   // gold
+            '139, 92, 246',   // purple
+            '236, 72, 153'    // pink
+        ];
+        
+        for (let i = 0; i < 60; i++) {
+            champsParticles.push({
+                x: Math.random() * champsParticlesCanvas.width,
+                y: Math.random() * champsParticlesCanvas.height,
+                size: 1 + Math.random() * 3,
+                speedY: -0.3 - Math.random() * 0.7,
+                speedX: (Math.random() - 0.5) * 0.5,
+                opacity: 0.3 + Math.random() * 0.5,
+                color: colors[Math.floor(Math.random() * colors.length)],
+                pulse: Math.random() * Math.PI * 2,
+                pulseSpeed: 0.02 + Math.random() * 0.03
+            });
+        }
+        
+        function animateParticles() {
+            if (!champsParticlesCtx || !champsParticlesCanvas) return;
+            const tabVisible = !document.getElementById('tab-champs')?.classList.contains('hidden');
+            if (!tabVisible) {
+                champsParticlesAnimationId = requestAnimationFrame(animateParticles);
+                return;
+            }
+            
+            champsParticlesCtx.clearRect(0, 0, champsParticlesCanvas.width, champsParticlesCanvas.height);
+            
+            champsParticles.forEach(p => {
+                p.y += p.speedY;
+                p.x += p.speedX;
+                p.pulse += p.pulseSpeed;
+                
+                const pulseFactor = 0.5 + Math.sin(p.pulse) * 0.5;
+                const currentOpacity = p.opacity * (0.6 + pulseFactor * 0.4);
+                const currentSize = p.size * (0.8 + pulseFactor * 0.4);
+                
+                if (p.y < -10) {
+                    p.y = champsParticlesCanvas.height + 10;
+                    p.x = Math.random() * champsParticlesCanvas.width;
+                }
+                if (p.x < -10) p.x = champsParticlesCanvas.width + 10;
+                if (p.x > champsParticlesCanvas.width + 10) p.x = -10;
+                
+                // Outer glow
+                const gradient = champsParticlesCtx.createRadialGradient(
+                    p.x, p.y, 0,
+                    p.x, p.y, currentSize * 4
+                );
+                gradient.addColorStop(0, `rgba(${p.color}, ${currentOpacity})`);
+                gradient.addColorStop(0.3, `rgba(${p.color}, ${currentOpacity * 0.5})`);
+                gradient.addColorStop(1, `rgba(${p.color}, 0)`);
+                
+                champsParticlesCtx.beginPath();
+                champsParticlesCtx.arc(p.x, p.y, currentSize * 4, 0, Math.PI * 2);
+                champsParticlesCtx.fillStyle = gradient;
+                champsParticlesCtx.fill();
+                
+                // Core
+                champsParticlesCtx.beginPath();
+                champsParticlesCtx.arc(p.x, p.y, currentSize, 0, Math.PI * 2);
+                champsParticlesCtx.fillStyle = `rgba(${p.color}, ${currentOpacity})`;
+                champsParticlesCtx.fill();
+                
+                // Bright center
+                champsParticlesCtx.beginPath();
+                champsParticlesCtx.arc(p.x, p.y, currentSize * 0.5, 0, Math.PI * 2);
+                champsParticlesCtx.fillStyle = `rgba(255, 255, 255, ${currentOpacity * 0.8})`;
+                champsParticlesCtx.fill();
+            });
+            
+            champsParticlesAnimationId = requestAnimationFrame(animateParticles);
+        }
+        animateParticles();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - 3D Card Tilt (DISABLED BY USER REQUEST)
+    // ═══════════════════════════════════════════════════════════════════════════
+    function init3DCardTilt() {
+        // Disabled - user preferred without this effect
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Screen Flash on Activity
+    // ═══════════════════════════════════════════════════════════════════════════
+    function triggerActivityFlash() {
+        const tabEl = document.getElementById('tab-champs');
+        if (!tabEl) return;
+        tabEl.classList.remove('champs-activity-flash');
+        void tabEl.offsetWidth;
+        tabEl.classList.add('champs-activity-flash');
+        setTimeout(() => tabEl.classList.remove('champs-activity-flash'), 500);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Glitch Text Effect
+    // ═══════════════════════════════════════════════════════════════════════════
+    function applyGlitchEffect(element) {
+        if (!element) return;
+        const text = element.textContent;
+        element.setAttribute('data-text', text);
+        element.classList.add('champs-ticker-glitch');
+        
+        setTimeout(() => {
+            element.classList.remove('champs-ticker-glitch');
+        }, 2000);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Fire Effect for Streak Users
+    // ═══════════════════════════════════════════════════════════════════════════
+    function applyFireEffectToStreaks() {
+        const rows = document.querySelectorAll('.champs-ladder-row');
+        rows.forEach((row, index) => {
+            const data = champsLeaderboardData[index];
+            if (data && data.streak_days >= 3) {
+                const nameEl = row.querySelector('.font-bold');
+                if (nameEl && !nameEl.classList.contains('champs-fire-effect')) {
+                    nameEl.classList.add('champs-fire-effect');
+                }
+            }
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Floating Combat Text (for score changes)
+    // ═══════════════════════════════════════════════════════════════════════════
+    function showFloatingText(text, x, y, color) {
+        const floater = document.createElement('div');
+        floater.className = 'champs-floating-text';
+        floater.textContent = text;
+        floater.style.cssText = `
+            position: fixed;
+            left: ${x}px;
+            top: ${y}px;
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: ${color || '#00ff41'};
+            text-shadow: 0 0 10px currentColor, 0 0 20px currentColor;
+            pointer-events: none;
+            z-index: 10000;
+            animation: champs-float-up 1.5s ease-out forwards;
+        `;
+        
+        // Add keyframes if not exists
+        if (!document.getElementById('champs-float-keyframes')) {
+            const style = document.createElement('style');
+            style.id = 'champs-float-keyframes';
+            style.textContent = `
+                @keyframes champs-float-up {
+                    0% { transform: translateY(0) scale(0.5); opacity: 0; }
+                    20% { transform: translateY(-10px) scale(1.2); opacity: 1; }
+                    100% { transform: translateY(-80px) scale(0.8); opacity: 0; }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        
+        document.body.appendChild(floater);
+        setTimeout(() => floater.remove(), 1500);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Achievement Popup
+    // ═══════════════════════════════════════════════════════════════════════════
+    function showAchievementPopup(title, description, icon) {
+        let popup = document.querySelector('.champs-achievement-popup');
+        if (!popup) {
+            popup = document.createElement('div');
+            popup.className = 'champs-achievement-popup';
+            popup.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: -400px;
+                width: 350px;
+                padding: 20px;
+                background: linear-gradient(135deg, rgba(0, 40, 60, 0.98) 0%, rgba(0, 60, 40, 0.98) 100%);
+                border: 2px solid rgba(251, 191, 36, 0.6);
+                border-radius: 12px;
+                box-shadow: 0 0 40px rgba(251, 191, 36, 0.4), inset 0 0 30px rgba(251, 191, 36, 0.1);
+                z-index: 10001;
+                transition: right 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+                font-family: var(--champs-ui-font);
+            `;
+            document.body.appendChild(popup);
+        }
+        
+        popup.innerHTML = `
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <span style="font-size: 3rem; filter: drop-shadow(0 0 10px rgba(251, 191, 36, 0.8));">${icon || '🏆'}</span>
+                <div>
+                    <div style="font-size: 0.75rem; color: #fbbf24; text-transform: uppercase; letter-spacing: 0.2em; margin-bottom: 4px;">Achievement Unlocked!</div>
+                    <div style="font-size: 1.25rem; font-weight: 800; color: #fff; text-shadow: 0 0 10px rgba(251, 191, 36, 0.5);">${title}</div>
+                    <div style="font-size: 0.875rem; color: rgba(255,255,255,0.7); margin-top: 4px;">${description}</div>
+                </div>
+            </div>
+        `;
+        
+        setTimeout(() => popup.style.right = '20px', 100);
+        setTimeout(() => popup.style.right = '-400px', 4000);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // REAL-TIME LIFE ANIMATIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    let lastTickerMessageCount = 0;
+    let lastLeaderboardHash = '';
+    let mexicanWaveInterval = null;
+    let activityLevel = 'low';
+    let recentActivityCount = 0;
+    let previousScores = {};  // Track scores for change detection
+
+    // RT-1: Active Analyst Indicator - Show green dot for analysts currently online
+    function updateActiveIndicators(leaderboardData) {
+        if (!leaderboardData) return;
+        
+        document.querySelectorAll('.champs-active-indicator').forEach(el => el.remove());
+        
+        leaderboardData.forEach((analyst, index) => {
+            // Check if user is currently online (has open session)
+            if (analyst.is_online) {
+                const row = document.querySelector(`.champs-ladder-row[data-index="${index}"]`);
+                if (row) {
+                    const nameEl = row.querySelector('.font-bold');
+                    if (nameEl && !nameEl.querySelector('.champs-active-indicator')) {
+                        const dot = document.createElement('span');
+                        dot.className = 'champs-active-indicator';
+                        dot.title = 'Online now';
+                        nameEl.appendChild(dot);
+                    }
+                }
+            }
+        });
+    }
+
+    // RT-2: Live IOC Counter - Shows total IOC count with animation on change
+    function createLiveCounter() {
+        const existingCounter = document.getElementById('champsLiveCounter');
+        if (existingCounter) return existingCounter;
+        
+        const statsEl = document.getElementById('champsHeroStats');
+        if (!statsEl) return null;
+        
+        const counter = document.createElement('div');
+        counter.id = 'champsLiveCounter';
+        counter.className = 'champs-live-counter';
+        counter.innerHTML = `
+            <span class="champs-live-counter-label">Total IOCs</span>
+            <span class="champs-live-counter-value" id="champsLiveCounterValue">0</span>
+        `;
+        statsEl.appendChild(counter);
+        return counter;
+    }
+
+    function updateLiveCounter(newValue) {
+        const valueEl = document.getElementById('champsLiveCounterValue');
+        if (!valueEl) return;
+        
+        const currentValue = parseInt(valueEl.textContent, 10) || 0;
+        if (newValue > currentValue && currentValue > 0) {
+            valueEl.classList.add('champs-counter-bump');
+            setTimeout(() => valueEl.classList.remove('champs-counter-bump'), 300);
+            
+            // Spawn particles
+            spawnScoreParticles(valueEl, Math.min(newValue - currentValue, 5));
+            
+            // Increment activity count for heatmap
+            recentActivityCount++;
+            updateActivityHeatmap();
+        }
+        valueEl.textContent = newValue;
+    }
+
+    // RT-3: Last Activity Timestamp
+    function createLastActivityDisplay() {
+        const existingDisplay = document.getElementById('champsLastActivity');
+        if (existingDisplay) return existingDisplay;
+        
+        const statsEl = document.getElementById('champsHeroStats');
+        if (!statsEl) return null;
+        
+        const display = document.createElement('div');
+        display.id = 'champsLastActivity';
+        display.className = 'champs-last-activity';
+        display.innerHTML = '<span>Last activity: just now</span>';
+        statsEl.appendChild(display);
+        return display;
+    }
+
+    function updateLastActivity(timestamp) {
+        const display = document.getElementById('champsLastActivity');
+        if (!display) return;
+        
+        const now = Date.now();
+        const diff = now - (timestamp || now);
+        const seconds = Math.floor(diff / 1000);
+        const minutes = Math.floor(seconds / 60);
+        
+        let text = 'just now';
+        if (minutes > 0) {
+            text = minutes === 1 ? '1 minute ago' : `${minutes} minutes ago`;
+        } else if (seconds > 10) {
+            text = `${seconds} seconds ago`;
+        }
+        
+        display.innerHTML = `<span>Last activity: ${text}</span>`;
+    }
+
+    // RT-4: Ticker Flash on New Message
+    function flashTicker() {
+        const ticker = document.getElementById('champsTicker');
+        if (!ticker) return;
+        
+        ticker.classList.remove('champs-ticker-new-message');
+        void ticker.offsetWidth;
+        ticker.classList.add('champs-ticker-new-message');
+    }
+
+    // RT-5: Mexican Wave Effect
+    function startMexicanWave() {
+        if (mexicanWaveInterval) clearInterval(mexicanWaveInterval);
+        
+        mexicanWaveInterval = setInterval(() => {
+            const tabEl = document.getElementById('tab-champs');
+            if (!tabEl || tabEl.classList.contains('hidden')) return;
+            
+            triggerMexicanWave();
+        }, 45000); // Every 45 seconds
+    }
+
+    function triggerMexicanWave() {
+        const rows = document.querySelectorAll('.champs-ladder-row');
+        rows.forEach((row, index) => {
+            setTimeout(() => {
+                row.classList.add('champs-wave');
+                setTimeout(() => row.classList.remove('champs-wave'), 600);
+            }, index * 80);
+        });
+    }
+
+    // RT-6: Hot Right Now Badge - Show "HOT" badge for analyst with positive trend
+    function updateHotBadges(leaderboardData) {
+        if (!leaderboardData) return;
+        
+        document.querySelectorAll('.champs-hot-badge').forEach(el => el.remove());
+        
+        // Find analysts with positive trend (rank improved)
+        leaderboardData.forEach((analyst, index) => {
+            // Skip top 3 (they already have medals)
+            if (analyst.rank <= 3) return;
+            
+            // Check for positive trend (like "+2" meaning rank improved by 2)
+            const trendStr = String(analyst.trend || '');
+            if (trendStr.startsWith('+')) {
+                const trendVal = parseInt(trendStr.replace(/[^0-9]/g, ''), 10) || 0;
+                if (trendVal >= 2) {  // Only show for significant improvement
+                    const row = document.querySelector(`.champs-ladder-row[data-index="${index}"]`);
+                    if (row) {
+                        const nameEl = row.querySelector('.font-bold');
+                        if (nameEl && !nameEl.querySelector('.champs-hot-badge')) {
+                            const badge = document.createElement('span');
+                            badge.className = 'champs-hot-badge';
+                            badge.textContent = 'HOT';
+                            nameEl.appendChild(badge);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // RT-7: Progress Ring for Team Goal
+    function createProgressRing(percent) {
+        const circumference = 2 * Math.PI * 25; // radius = 25
+        const offset = circumference - (percent / 100) * circumference;
+        
+        return `
+            <div class="champs-progress-ring">
+                <svg viewBox="0 0 60 60">
+                    <defs>
+                        <linearGradient id="champs-ring-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" style="stop-color:#00d4ff"/>
+                            <stop offset="100%" style="stop-color:#00ff41"/>
+                        </linearGradient>
+                    </defs>
+                    <circle class="champs-progress-ring-bg" cx="30" cy="30" r="25"/>
+                    <circle class="champs-progress-ring-fill" cx="30" cy="30" r="25" style="stroke-dashoffset: ${offset}"/>
+                </svg>
+                <div class="champs-progress-ring-text">${percent}%</div>
+            </div>
+        `;
+    }
+
+    // RT-8: Leaderboard Shake
+    function shakeLeaderboard() {
+        const ladder = document.getElementById('champsLadder');
+        if (!ladder) return;
+        
+        ladder.classList.add('champs-shake');
+        setTimeout(() => ladder.classList.remove('champs-shake'), 500);
+    }
+
+    // RT-9: Score Particles
+    function spawnScoreParticles(element, count) {
+        if (!element) return;
+        
+        const rect = element.getBoundingClientRect();
+        const colors = ['#00ff41', '#00d4ff', '#fbbf24', '#ec4899'];
+        
+        for (let i = 0; i < Math.min(count, 10); i++) {
+            const particle = document.createElement('div');
+            particle.className = 'champs-score-particle';
+            particle.style.cssText = `
+                left: ${rect.left + rect.width / 2 + (Math.random() - 0.5) * 30}px;
+                top: ${rect.top}px;
+                background: ${colors[Math.floor(Math.random() * colors.length)]};
+                --tx: ${(Math.random() - 0.5) * 60}px;
+            `;
+            document.body.appendChild(particle);
+            setTimeout(() => particle.remove(), 1000);
+        }
+    }
+
+    // RT-10: Milestone Celebration
+    function showMilestoneCelebration(value, type) {
+        const existing = document.querySelector('.champs-milestone-celebration');
+        if (existing) existing.remove();
+        
+        const icons = {
+            ioc: '📊',
+            yara: '📜',
+            streak: '🔥',
+            rank: '🏆'
+        };
+        
+        const celebration = document.createElement('div');
+        celebration.className = 'champs-milestone-celebration';
+        celebration.innerHTML = `
+            <div class="champs-milestone-icon">${icons[type] || '🎉'}</div>
+            <div class="champs-milestone-title">MILESTONE REACHED!</div>
+            <div class="champs-milestone-value">${value}</div>
+        `;
+        document.body.appendChild(celebration);
+        
+        triggerConfetti();
+        
+        setTimeout(() => {
+            celebration.style.animation = 'champs-milestone-appear 0.3s ease-in reverse forwards';
+            setTimeout(() => celebration.remove(), 300);
+        }, 3000);
+    }
+
+    // RT-11: Activity Heatmap
+    function updateActivityHeatmap() {
+        const tabEl = document.getElementById('tab-champs');
+        if (!tabEl) return;
+        
+        tabEl.classList.remove('champs-activity-low', 'champs-activity-medium', 'champs-activity-high', 'champs-activity-extreme');
+        
+        if (recentActivityCount >= 10) {
+            tabEl.classList.add('champs-activity-extreme');
+            activityLevel = 'extreme';
+        } else if (recentActivityCount >= 5) {
+            tabEl.classList.add('champs-activity-high');
+            activityLevel = 'high';
+        } else if (recentActivityCount >= 2) {
+            tabEl.classList.add('champs-activity-medium');
+            activityLevel = 'medium';
+        } else {
+            tabEl.classList.add('champs-activity-low');
+            activityLevel = 'low';
+        }
+        
+        // Decay activity count over time
+        setTimeout(() => {
+            recentActivityCount = Math.max(0, recentActivityCount - 1);
+        }, 10000);
+    }
+
+    // RT-12: Typing Indicator
+    function showTypingIndicator(analystName) {
+        const existing = document.querySelector('.champs-typing-indicator');
+        if (existing) existing.remove();
+        
+        const heroEl = document.querySelector('.champs-hero');
+        if (!heroEl) return;
+        
+        const indicator = document.createElement('div');
+        indicator.className = 'champs-typing-indicator';
+        indicator.innerHTML = `
+            <span>${analystName} is adding IOCs</span>
+            <div class="champs-typing-dots">
+                <span class="champs-typing-dot"></span>
+                <span class="champs-typing-dot"></span>
+                <span class="champs-typing-dot"></span>
+            </div>
+        `;
+        indicator.style.cssText = 'position: absolute; bottom: -30px; left: 20px;';
+        heroEl.appendChild(indicator);
+        
+        setTimeout(() => indicator.remove(), 5000);
+    }
+
+    // RT-13: Sound Wave Visual
+    function showSoundWave() {
+        const existing = document.querySelector('.champs-sound-wave');
+        if (existing) existing.remove();
+        
+        const wave = document.createElement('div');
+        wave.className = 'champs-sound-wave';
+        wave.innerHTML = `
+            <div class="champs-sound-bar"></div>
+            <div class="champs-sound-bar"></div>
+            <div class="champs-sound-bar"></div>
+            <div class="champs-sound-bar"></div>
+        `;
+        document.body.appendChild(wave);
+        
+        setTimeout(() => wave.remove(), 2000);
+    }
+
+    // RT-14: Mark New Entries
+    function markNewEntries(oldData, newData) {
+        if (!oldData || !newData) return;
+        
+        const oldIds = new Set(oldData.map(a => a.user_id || a.analyst));
+        
+        newData.forEach((analyst, index) => {
+            const id = analyst.user_id || analyst.analyst;
+            if (!oldIds.has(id)) {
+                const row = document.querySelector(`.champs-ladder-row[data-index="${index}"]`);
+                if (row) {
+                    row.classList.add('champs-new-entry');
+                    setTimeout(() => row.classList.remove('champs-new-entry'), 2000);
+                }
+            }
+        });
+    }
+
+    // RT-15: Live Badge
+    function createLiveBadge() {
+        const existingBadge = document.querySelector('.champs-live-badge');
+        if (existingBadge) return;
+        
+        const titleEl = document.querySelector('.champs-title');
+        if (!titleEl) return;
+        
+        const badge = document.createElement('span');
+        badge.className = 'champs-live-badge';
+        badge.textContent = 'LIVE';
+        titleEl.appendChild(badge);
+    }
+
+    // Initialize all real-time features
+    function initRealTimeFeatures() {
+        createLiveCounter();
+        createLastActivityDisplay();
+        createLiveBadge();
+        startMexicanWave();
+        updateActivityHeatmap();
+        
+        // Setup refresh button
+        const refreshBtn = document.getElementById('champsRefreshBtn');
+        if (refreshBtn && !refreshBtn.dataset.initialized) {
+            refreshBtn.dataset.initialized = 'true';
+            refreshBtn.addEventListener('click', () => {
+                // Spin animation
+                const icon = refreshBtn.querySelector('svg');
+                if (icon) {
+                    icon.style.animation = 'spin 0.5s linear';
+                    setTimeout(() => icon.style.animation = '', 500);
+                }
+                // Force refresh
+                loadChampsAnalysis(false, true);
+            });
+        }
+
+        // Presence heartbeat (keeps "online now" accurate)
+        if (!champsPresencePollInterval) {
+            const ping = async () => {
+                try {
+                    const tabEl = document.getElementById('tab-champs');
+                    if (!tabEl || tabEl.classList.contains('hidden')) return;
+                    if (document.hidden) return;
+                    await fetch('/api/champs/ping', { method: 'POST' });
+                } catch (e) { /* ignore */ }
+            };
+            ping();
+            champsPresencePollInterval = setInterval(ping, 25000);
+        }
+    }
+
+    // Handle real-time updates - detect changes between old and new leaderboard data
+    function handleRealtimeUpdate(oldData, newData, tickerMessages) {
+        if (!oldData || !newData || oldData.length === 0) return;
+        
+        let hasChanges = false;
+        
+        // Check for score changes
+        newData.forEach(analyst => {
+            const id = analyst.user_id || analyst.analyst;
+            const oldAnalyst = oldData.find(a => (a.user_id || a.analyst) === id);
+            
+            if (oldAnalyst) {
+                // Score increased
+                if (analyst.score > oldAnalyst.score) {
+                    hasChanges = true;
+                    console.log(`[Champs Live] ${analyst.display_name || analyst.analyst}: score ${oldAnalyst.score} → ${analyst.score}`);
+                }
+                
+                // IOC count increased
+                if (analyst.total_iocs > oldAnalyst.total_iocs) {
+                    hasChanges = true;
+                    
+                    // Check for milestones
+                    const milestones = [50, 100, 200, 500, 1000];
+                    milestones.forEach(m => {
+                        if (analyst.total_iocs >= m && oldAnalyst.total_iocs < m) {
+                            showMilestoneCelebration(`${m} IOCs!`, 'ioc');
+                        }
+                    });
+                }
+                
+                // Rank changed significantly
+                if (oldAnalyst.rank && analyst.rank && Math.abs(oldAnalyst.rank - analyst.rank) >= 2) {
+                    hasChanges = true;
+                    shakeLeaderboard();
+                }
+            }
+        });
+        
+        if (hasChanges) {
+            recentActivityCount++;
+            updateActivityHeatmap();
+            updateLastActivity(Date.now());
+            flashTicker();
+        }
+        
+        // Mark new entries
+        markNewEntries(oldData, newData);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Streak Meter
+    // ═══════════════════════════════════════════════════════════════════════════
+    function updateStreakMeter(streakDays) {
+        let meter = document.getElementById('champsStreakMeter');
+        if (!meter && streakDays >= 3) {
+            const tabEl = document.getElementById('tab-champs');
+            if (!tabEl) return;
+            
+            meter = document.createElement('div');
+            meter.id = 'champsStreakMeter';
+            meter.style.cssText = `
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                padding: 8px 16px;
+                background: linear-gradient(135deg, rgba(249, 115, 22, 0.2) 0%, rgba(234, 88, 12, 0.3) 100%);
+                border: 1px solid rgba(249, 115, 22, 0.5);
+                border-radius: 20px;
+                font-family: var(--champs-ui-font);
+                font-size: 0.875rem;
+                font-weight: 700;
+                color: #fb923c;
+                text-shadow: 0 0 10px rgba(249, 115, 22, 0.5);
+                z-index: 100;
+                animation: champs-streak-pulse 2s ease-in-out infinite;
+            `;
+            tabEl.appendChild(meter);
+            
+            if (!document.getElementById('champs-streak-keyframes')) {
+                const style = document.createElement('style');
+                style.id = 'champs-streak-keyframes';
+                style.textContent = `
+                    @keyframes champs-streak-pulse {
+                        0%, 100% { box-shadow: 0 0 10px rgba(249, 115, 22, 0.3); }
+                        50% { box-shadow: 0 0 25px rgba(249, 115, 22, 0.6); }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+        }
+        
+        if (meter && streakDays >= 3) {
+            meter.innerHTML = `🔥 ${streakDays} Day Streak!`;
+            meter.style.display = 'block';
+        } else if (meter) {
+            meter.style.display = 'none';
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Overtake Toast
+    // ═══════════════════════════════════════════════════════════════════════════
+    function showOvertakeToast(overtakerName, overtakenName, newRank) {
+        const message = `🎉 ${overtakerName} overtook ${overtakenName}! Now #${newRank}`;
+        if (typeof showToast === 'function') {
+            const toastEl = showToast(message, 'success');
+            if (toastEl && toastEl.classList) {
+                toastEl.classList.add('toast-overtake');
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VIDEO GAME EFFECTS - Real-time Leaderboard Updates with Animations
+    // ═══════════════════════════════════════════════════════════════════════════
+    function detectRankChanges(oldData, newData) {
+        const changes = [];
+        const oldMap = {};
+        oldData.forEach((a, i) => { oldMap[a.user_id || a.analyst] = { rank: a.rank, index: i }; });
+        
+        newData.forEach((a, newIndex) => {
+            const key = a.user_id || a.analyst;
+            const old = oldMap[key];
+            if (old) {
+                const rankDiff = old.rank - a.rank;
+                if (rankDiff > 0) {
+                    changes.push({ key, type: 'up', oldRank: old.rank, newRank: a.rank, diff: rankDiff, analyst: a });
+                } else if (rankDiff < 0) {
+                    changes.push({ key, type: 'down', oldRank: old.rank, newRank: a.rank, diff: Math.abs(rankDiff), analyst: a });
+                }
+            }
+        });
+        return changes;
+    }
+
+    function applyRankChangeAnimations(changes) {
+        const authState = global.authState || {};
+        const currentUserId = authState.user_id;
+        
+        changes.forEach(change => {
+            const rows = document.querySelectorAll('.champs-ladder-row');
+            rows.forEach(row => {
+                const index = parseInt(row.getAttribute('data-index'), 10);
+                const data = champsLeaderboardData[index];
+                if (!data) return;
+                
+                const key = data.user_id || data.analyst;
+                if (key === change.key) {
+                    row.classList.remove('champs-rank-changed-up', 'champs-rank-changed-down', 'champs-moving-up', 'champs-moving-down', 'champs-just-overtook');
+                    void row.offsetWidth;
+                    
+                    if (change.type === 'up') {
+                        row.classList.add('champs-rank-changed-up', 'champs-moving-up', 'champs-just-overtook');
+                        
+                        if (String(change.key) === String(currentUserId)) {
+                            const isTop3 = change.newRank <= 3;
+                            showRankUpEffect(change.newRank, isTop3);
+                            if (change.diff >= 1) {
+                                triggerConfetti();
+                            }
+                            // Show achievement popup for significant rank changes
+                            if (change.newRank === 1) {
+                                showAchievementPopup('Champion!', 'You reached the #1 spot!', '👑');
+                            } else if (isTop3) {
+                                showAchievementPopup('Podium Finish!', `You reached #${change.newRank}!`, '🏆');
+                            } else if (change.diff >= 3) {
+                                showAchievementPopup('Rapid Rise!', `You jumped ${change.diff} ranks!`, '🚀');
+                            }
+                            // Show floating text
+                            const rect = row.getBoundingClientRect();
+                            showFloatingText(`+${change.diff}`, rect.right - 50, rect.top, '#00ff41');
+                        }
+                    } else {
+                        row.classList.add('champs-rank-changed-down', 'champs-moving-down');
+                    }
+                    
+                    setTimeout(() => {
+                        row.classList.remove('champs-rank-changed-up', 'champs-rank-changed-down', 'champs-moving-up', 'champs-moving-down');
+                    }, 1500);
+                    setTimeout(() => {
+                        row.classList.remove('champs-just-overtook');
+                    }, 3000);
+                }
+            });
+        });
+        
+        changes.forEach(change => {
+            if (change.type === 'up' && change.diff >= 1) {
+                const overtakenAnalysts = champsPreviousLeaderboard.filter(a => {
+                    const aRank = a.rank;
+                    return aRank < change.oldRank && aRank >= change.newRank;
+                });
+                if (overtakenAnalysts.length > 0) {
+                    const overtakerName = change.analyst.display_name || change.analyst.username || change.analyst.analyst;
+                    const overtakenName = overtakenAnalysts[0].display_name || overtakenAnalysts[0].username || overtakenAnalysts[0].analyst;
+                    showOvertakeToast(overtakerName, overtakenName, change.newRank);
+                }
+            }
+        });
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MAIN LOAD FUNCTION
+    // ═══════════════════════════════════════════════════════════════════════════
+    async function loadChampsAnalysis(skipAnimations, fresh) {
         const listEl = document.getElementById('champsLadderList');
         if (!listEl) return;
+        
+        initChampsParticles();
+        initRealTimeFeatures();
+        
         try {
             listEl.querySelectorAll('.champs-ladder-row').forEach(b => b.classList.remove('champs-ladder-selected'));
-            const response = await fetch('/api/champs/leaderboard');
+            const url = fresh ? '/api/champs/leaderboard?fresh=1' : '/api/champs/leaderboard';
+            const response = await fetch(url);
             const result = await response.json();
             if (result.success && result.leaderboard && result.leaderboard.length > 0) {
+                const oldData = [...champsLeaderboardData];
                 champsLeaderboardData = result.leaderboard;
+                
                 listEl.innerHTML = result.leaderboard.map((a, i) => {
                     const rankClass = a.rank === 1 ? 'champs-rank-1' : a.rank === 2 ? 'champs-rank-2' : a.rank === 3 ? 'champs-rank-3' : '';
                     const trendUp = a.trend && (String(a.trend).startsWith('+') || String(a.trend).includes('▲'));
@@ -94,7 +1100,7 @@
                         ? `<span class="champs-medal-circle champs-medal-circle-${a.rank} champs-rank-slot flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center text-2xl border-2" title="Rank ${a.rank}">${medal}</span>`
                         : `<span class="champs-rank-slot champs-rank-num flex-shrink-0 w-12 h-12 flex items-center justify-center font-extrabold text-secondary text-lg">${a.rank}</span>`;
                     return `
-                        <button type="button" class="champs-ladder-row ${rankClass} w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-white/10 hover:bg-white/5 transition-all text-left" data-index="${i}" title="${a.score} pts${isInactive ? ' (inactive)' : ''}">
+                        <button type="button" class="champs-ladder-row ${rankClass} w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-white/10 hover:bg-white/5 transition-all text-left" data-index="${i}" data-user-id="${a.user_id || ''}" title="${a.score} pts${isInactive ? ' (inactive)' : ''}">
                             ${rankSlot}
                             <span class="flex-shrink-0 ${avatarSize} rounded-full overflow-hidden bg-slate-600/50 flex items-center justify-center ring-2 ring-white/5${avatarInactiveClass}">
                                 ${avatarHtml}
@@ -111,6 +1117,7 @@
                         </button>
                     `;
                 }).join('');
+                
                 listEl.querySelectorAll('.champs-ladder-row').forEach(btn => {
                     btn.addEventListener('click', () => {
                         listEl.querySelectorAll('.champs-ladder-row').forEach(b => b.classList.remove('champs-ladder-selected'));
@@ -118,6 +1125,29 @@
                         showChampsSpotlight(parseInt(btn.getAttribute('data-index'), 10));
                     });
                 });
+                
+                if (!skipAnimations && oldData.length > 0) {
+                    const changes = detectRankChanges(oldData, champsLeaderboardData);
+                    if (changes.length > 0) {
+                        applyRankChangeAnimations(changes);
+                        triggerActivityFlash();
+                    }
+                    // Handle real-time updates
+                    handleRealtimeUpdate(oldData, champsLeaderboardData, champsTickerMessages);
+                }
+                
+                // Apply fire effect to streak users
+                setTimeout(() => applyFireEffectToStreaks(), 600);
+                
+                // Update real-time indicators
+                updateActiveIndicators(champsLeaderboardData);
+                updateHotBadges(champsLeaderboardData);
+                
+                // Calculate total IOCs for live counter
+                const totalIOCs = champsLeaderboardData.reduce((sum, a) => sum + (a.total_iocs || 0), 0);
+                updateLiveCounter(totalIOCs);
+                
+                champsPreviousLeaderboard = [...champsLeaderboardData];
             } else {
                 const t = global.t || (k => k);
                 listEl.innerHTML = `<div class="text-secondary text-sm py-4 text-center">${t('champs.no_data') || 'No analyst data yet'}</div>`;
@@ -128,6 +1158,26 @@
         }
         loadChampsTeamHud();
         loadChampsTicker();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // REAL-TIME POLLING
+    // ═══════════════════════════════════════════════════════════════════════════
+    function startChampsLeaderboardPolling() {
+        if (champsLeaderboardPollInterval) clearInterval(champsLeaderboardPollInterval);
+        champsLeaderboardPollInterval = setInterval(() => {
+            const tabEl = document.getElementById('tab-champs');
+            if (!tabEl || tabEl.classList.contains('hidden')) return;
+            if (document.hidden) return;
+            loadChampsAnalysis(false, true);  // Pass fresh=true to bypass cache
+        }, 30000);
+    }
+
+    function stopChampsLeaderboardPolling() {
+        if (champsLeaderboardPollInterval) {
+            clearInterval(champsLeaderboardPollInterval);
+            champsLeaderboardPollInterval = null;
+        }
     }
 
     (function initChampsGoalModal() {
@@ -175,7 +1225,7 @@
                 if (j.success) {
                     modal.classList.add('hidden');
                     loadChampsTeamHud();
-                    loadChampsAnalysis();
+                    loadChampsAnalysis(true);
                     showToast(j.message || 'Goal set', 'success');
                 } else showToast(j.message || 'Failed', 'error');
             } catch (err) { showToast('Failed to set goal', 'error'); }
@@ -372,6 +1422,7 @@
 
     function startChampsTickerPolling() {
         loadChampsTicker();
+        startChampsLeaderboardPolling();
         if (champsTickerPollInterval) clearInterval(champsTickerPollInterval);
         champsTickerPollInterval = setInterval(() => {
             if (!document.getElementById('tab-champs') || document.getElementById('tab-champs').classList.contains('hidden')) return;
@@ -412,6 +1463,7 @@
             : `<h3 class="text-2xl font-extrabold accent-blue truncate">${name}</h3>`;
         const roleDescHtml = roleDesc ? `<p class="text-secondary font-medium mt-0.5">${escapeHtml(roleDesc)}</p>` : '';
         const spotlightInactiveClass = data.is_active === false ? ' grayscale opacity-70' : '';
+        const scoreValue = data.score != null ? data.score : 0;
         content.innerHTML = `
             <div class="champs-spotlight-card rounded-lg border border-white/10 bg-tertiary/80 p-4 flex-1 min-h-0 flex flex-col overflow-auto">
                 <div class="champs-spotlight-header flex items-stretch gap-4 mb-4 flex-shrink-0">
@@ -423,7 +1475,7 @@
                     </div>
                     <div class="champs-spotlight-points-hero flex-shrink-0 flex flex-col items-start justify-center">
                         <span class="champs-spotlight-points-label">Points</span>
-                        <span class="champs-spotlight-points-value">${data.score != null ? data.score : 0}</span>
+                        <span class="champs-spotlight-points-value" id="champsScoreBasic">0</span>
                     </div>
                 </div>
                 <div class="champs-stats-grid grid grid-cols-2 gap-3">
@@ -431,6 +1483,12 @@
                     <div class="champs-stat-card rounded-lg p-4 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-1">YARA</span><span class="font-mono text-lg font-bold text-amber-400">${data.yara_count || 0}</span></div>
                 </div>
             </div>`;
+        
+        setTimeout(() => {
+            const scoreEl = document.getElementById('champsScoreBasic');
+            if (scoreEl) animateScore(scoreEl, scoreValue);
+        }, 100);
+        
         renderChampsTrophyCabinet([]);
     }
 
@@ -468,6 +1526,7 @@
         const avatarHtml = a.avatar_url ? `<img src="${escapeAttr(a.avatar_url)}" alt="" class="w-full h-full object-cover" onerror="this.parentElement.innerHTML='<span class=\\'text-2xl\\'>👤</span>'">` : '<span class="text-2xl">👤</span>';
         const fullSpotlightInactiveClass = a.is_active === false ? ' grayscale opacity-70' : '';
         const analystChartName = (a.display_name || a.nickname || a.analyst || 'You').trim() || 'You';
+        const scoreValue = a.score != null ? a.score : 0;
         let chartHtml = '';
         champsMispData = (a.misp_per_day && a.misp_per_day.length > 0) ? a.misp_per_day : null;
         champsMispVisible = false;
@@ -502,13 +1561,13 @@
                             ${roleDescHtml}
                             <p class="text-secondary text-sm mt-2">Level <strong class="text-white">${a.level || 1}</strong> → <strong class="text-white">${(a.level || 1) + 1}</strong> <span class="opacity-90">(${a.xp_to_next || 0} XP to go)</span></p>
                             <div class="mt-2 h-3 bg-black/40 rounded-full overflow-hidden max-w-xs">
-                                <div class="champs-xp-fill h-full bg-gradient-to-r from-cyan-500 to-emerald-500 rounded-full transition-all duration-500" style="width: ${xpPct}%"></div>
+                                <div class="champs-xp-fill h-full bg-gradient-to-r from-cyan-500 to-emerald-500 rounded-full transition-all duration-500" style="width: 0%" id="champsXpBar"></div>
                             </div>
                         </div>
                     </div>
                     <div class="champs-spotlight-points-hero flex flex-col items-start justify-center">
                         <span class="champs-spotlight-points-label">Points</span>
-                        <span class="champs-spotlight-points-value">${a.score != null ? a.score : 0}</span>
+                        <span class="champs-spotlight-points-value" id="champsScoreFull">0</span>
                     </div>
                     <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">IOCs</span><span class="font-mono text-lg font-bold accent-green truncate block">${a.total_iocs || 0}</span></div>
                     <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">YARA</span><span class="font-mono text-lg font-bold text-amber-400 truncate block">${a.yara_count || 0}</span></div>
@@ -516,6 +1575,28 @@
                     <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">Streak</span><span class="font-mono text-lg font-bold truncate block">${a.streak_days || 0}d</span></div>
                 </div>
                 ${chartHtml}`;
+        
+        setTimeout(() => {
+            const scoreEl = document.getElementById('champsScoreFull');
+            if (scoreEl) animateScore(scoreEl, scoreValue);
+            
+            const xpBar = document.getElementById('champsXpBar');
+            if (xpBar) {
+                setTimeout(() => {
+                    xpBar.style.width = xpPct + '%';
+                    if (xpPct >= 95) {
+                        xpBar.classList.add('champs-xp-levelup');
+                    }
+                }, 200);
+            }
+            
+            // Initialize 3D tilt effect
+            init3DCardTilt();
+            
+            // Animate stat cards
+            setTimeout(() => animateStatCards(), 300);
+        }, 100);
+        
         if (chartHtml && a.activity_per_day && typeof Chart !== 'undefined') {
             setTimeout(() => {
                 const ctx = document.getElementById('champsSpotlightChart');
@@ -594,5 +1675,21 @@
 
     global.loadChampsAnalysis = loadChampsAnalysis;
     global.startChampsTickerPolling = startChampsTickerPolling;
+    global.stopChampsLeaderboardPolling = stopChampsLeaderboardPolling;
     global.champsSpotlightChart = champsSpotlightChart;
+    global.triggerConfetti = triggerConfetti;
+    global.showRankUpEffect = showRankUpEffect;
+    global.triggerActivityFlash = triggerActivityFlash;
+    global.applyGlitchEffect = applyGlitchEffect;
+    
+    // Real-time life animations
+    global.initRealTimeFeatures = initRealTimeFeatures;
+    global.showMilestoneCelebration = showMilestoneCelebration;
+    global.triggerMexicanWave = triggerMexicanWave;
+    global.shakeLeaderboard = shakeLeaderboard;
+    global.showTypingIndicator = showTypingIndicator;
+    global.createProgressRing = createProgressRing;
+    global.showFloatingText = showFloatingText;
+    global.showAchievementPopup = showAchievementPopup;
+    global.updateStreakMeter = updateStreakMeter;
 })(typeof window !== 'undefined' ? window : this);

@@ -213,6 +213,25 @@ def get_champs_config():
         'scoring': CHAMPS_SCORING,
     })
 
+@bp.route('/champs/ping', methods=['POST'])
+@login_required
+def champs_ping():
+    """Realtime presence heartbeat. Updates the latest open UserSession.login_at so 'online now' reflects actual browsers."""
+    _commit_with_retry, = _from_app('_commit_with_retry')
+    try:
+        if not current_user or not getattr(current_user, 'is_authenticated', False):
+            return jsonify({'success': False}), 401
+        open_session = UserSession.query.filter_by(
+            user_id=current_user.id, logout_at=None
+        ).order_by(UserSession.login_at.desc()).first()
+        if open_session:
+            open_session.login_at = datetime.utcnow()
+            _commit_with_retry()
+        return jsonify({'success': True})
+    except Exception:
+        db.session.rollback()
+        return jsonify({'success': False}), 500
+
 
 def _format_last_activity(val):
     """Format last_activity for display. Handles date, datetime, or str (SQLite may return DATE as string)."""
@@ -230,14 +249,17 @@ def get_champs_leaderboard():
     """Champs 5.0 Ladder: analysts with rank, avatar, display_name, score, trend, medal. Always from computed scores so all analysts appear."""
     method = _get_setting('champs_scoring_method', '1')
     cache_key = f'champs_leaderboard_{method}'
+    # Allow bypassing cache with ?fresh=1 for real-time updates
+    skip_cache = request.args.get('fresh') == '1'
     # With Gunicorn multi-worker, cache is per process; if another worker invalidated via file, skip cache here
     try:
         is_invalidated = _from_app('_is_champs_leaderboard_cache_invalidated')[0]
         if is_invalidated():
             delete_cached(cache_key)
+            skip_cache = True
     except Exception:
         pass
-    cached = get_cached(cache_key)
+    cached = get_cached(cache_key) if not skip_cache else None
     # Ensure today's rank snapshot exists so tomorrow's trend arrows work; invalidate cache if not
     try:
         today = date.today()
@@ -280,6 +302,16 @@ def get_champs_leaderboard():
             })
     users_by_id = {u.id: u for u in User.query.all()}
     profiles = {p.user_id: p for p in UserProfile.query.all()}
+    # Presence: only count as online if we saw a heartbeat recently.
+    # Prevents stale sessions (browser closed without /logout) from staying green forever.
+    online_window_seconds = 90
+    cutoff = datetime.utcnow() - timedelta(seconds=online_window_seconds)
+    online_user_ids = set(
+        s.user_id for s in UserSession.query.filter(
+            UserSession.logout_at.is_(None),
+            UserSession.login_at >= cutoff
+        ).all()
+    )
     leaderboard = []
     for r in rows:
         uid = r.get('user_id')
@@ -317,6 +349,7 @@ def get_champs_leaderboard():
             elif trend_dir == 'down':
                 trend = f'-{abs(trend_delta)}'
         is_active = getattr(user, 'is_active', True) if user else True
+        is_online = uid in online_user_ids if uid else False
         leaderboard.append({
             'rank': r['rank'],
             'analyst': r['analyst'],
@@ -332,6 +365,7 @@ def get_champs_leaderboard():
             'trend': trend,
             'streak_days': r.get('streak_days', 0),
             'is_active': is_active,
+            'is_online': is_online,
         })
     payload = {'success': True, 'leaderboard': leaderboard, 'count': len(leaderboard)}
     set_cached(cache_key, payload, ttl_seconds=CHAMPS_CACHE_TTL)

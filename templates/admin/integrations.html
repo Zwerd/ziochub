@@ -221,6 +221,11 @@
                 </select>
             </div>
             <div>
+                <label for="cortex_xdr_display_name" class="block text-sm font-semibold text-secondary mb-1">Display name (Feed Pulse)</label>
+                <input type="text" id="cortex_xdr_display_name" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="Cortex XDR" value="{{ settings.cortex_xdr_display_name or '' }}" autocomplete="off">
+                <p class="text-secondary text-xs mt-1">Shown in <strong class="text-primary">Feed Pulse → Connections → Push state</strong>. Leave empty for default label.</p>
+            </div>
+            <div>
                 <label for="cortex_xdr_base_url" class="block text-sm font-semibold text-secondary mb-1">API base URL</label>
                 <input type="text" id="cortex_xdr_base_url" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="https://api-xx.paloaltonetworks.com" value="{{ settings.cortex_xdr_base_url }}" autocomplete="off">
             </div>
@@ -274,6 +279,11 @@
                     <option value="false" {% if settings.google_secops_enabled == 'false' %}selected{% endif %}>No</option>
                     <option value="true" {% if settings.google_secops_enabled == 'true' %}selected{% endif %}>Yes</option>
                 </select>
+            </div>
+            <div>
+                <label for="google_secops_display_name" class="block text-sm font-semibold text-secondary mb-1">Display name (Feed Pulse)</label>
+                <input type="text" id="google_secops_display_name" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="Google SecOps" value="{{ settings.google_secops_display_name or '' }}" autocomplete="off">
+                <p class="text-secondary text-xs mt-1">Shown in <strong class="text-primary">Feed Pulse → Connections → Push state</strong>. Leave empty for default label.</p>
             </div>
             <div>
                 <label for="google_secops_chronicle_api_base" class="block text-sm font-semibold text-secondary mb-1">Chronicle REST API host (optional)</label>
@@ -372,6 +382,7 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             var keyEl = document.getElementById('cortex_xdr_api_key');
             var payload = {
                 cortex_xdr_enabled: document.getElementById('cortex_xdr_enabled').value,
+                cortex_xdr_display_name: document.getElementById('cortex_xdr_display_name').value.trim(),
                 cortex_xdr_base_url: document.getElementById('cortex_xdr_base_url').value.trim(),
                 cortex_xdr_api_key_id: document.getElementById('cortex_xdr_api_key_id').value.trim(),
                 cortex_xdr_verify_ssl: document.getElementById('cortex_xdr_verify_ssl').value,
@@ -445,6 +456,7 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             msgEl.classList.add('hidden');
             var payload = {
                 google_secops_enabled: document.getElementById('google_secops_enabled').value,
+                google_secops_display_name: document.getElementById('google_secops_display_name').value.trim(),
                 google_secops_chronicle_api_base: document.getElementById('google_secops_chronicle_api_base').value.trim(),
                 google_secops_project_number: document.getElementById('google_secops_project_number').value.trim(),
                 google_secops_location: document.getElementById('google_secops_location').value.trim(),

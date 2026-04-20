@@ -14,8 +14,8 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
-from flask import Flask, render_template, request, jsonify, redirect, url_for
-from flask_login import LoginManager, current_user
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session
+from flask_login import LoginManager, current_user, logout_user
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func, or_, text
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -199,6 +199,58 @@ def _enforce_password_change():
         if request.path.startswith('/api/'):
             return jsonify({'success': False, 'message': 'Password change required', 'require_password_change': True}), 403
         return redirect(url_for('auth.change_password'))
+
+
+@app.before_request
+def _enforce_inactivity_timeout():
+    """Auto-logoff after N minutes of inactivity (admin-configurable)."""
+    try:
+        if not current_user.is_authenticated:
+            return None
+
+        # Don't interfere with auth endpoints or static assets
+        if request.path.startswith('/static') or request.path.startswith('/login') or request.path.startswith('/logout'):
+            return None
+
+        raw = (_get_setting('session_inactivity_timeout_minutes', '15') or '15').strip()
+        try:
+            minutes = int(raw)
+        except ValueError:
+            minutes = 15
+
+        # 0 = never
+        if minutes <= 0:
+            session['last_activity_ts'] = int(time.time())
+            return None
+
+        now = int(time.time())
+        last = session.get('last_activity_ts')
+        timeout_s = int(minutes) * 60
+
+        if last is not None and (now - int(last)) > timeout_s:
+            # Best-effort: mark last open UserSession as logged out
+            try:
+                open_session = UserSession.query.filter_by(
+                    user_id=current_user.id, logout_at=None
+                ).order_by(UserSession.login_at.desc()).first()
+                if open_session:
+                    open_session.logout_at = _utcnow()
+                    _commit_with_retry()
+            except Exception:
+                db.session.rollback()
+
+            logout_user()
+            session.clear()
+
+            if request.path.startswith('/api/'):
+                return jsonify({'success': False, 'message': 'Session expired'}), 401
+            return redirect(url_for('auth.login', next=request.full_path))
+
+        session['last_activity_ts'] = now
+    except Exception:
+        # Never block on enforcement errors
+        return None
+    return None
 
 
 # --- Audit Logger: CEF format, local 48h rotation, optional UDP syslog ---
@@ -1547,6 +1599,23 @@ def _ensure_ioc_rare_find_columns():
         print(f"[Migration] iocs rare_find columns: {e}")
 
 
+def _ensure_feed_source_last_seen_status_columns():
+    """Add last_status_code and last_ok to feed_source_last_seen for Connections status view."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(feed_source_last_seen)"))
+        rows = result.fetchall()
+        names = {row[1] for row in rows}
+        if 'last_status_code' not in names:
+            db.session.execute(text("ALTER TABLE feed_source_last_seen ADD COLUMN last_status_code INTEGER"))
+            _commit_with_retry()
+        if 'last_ok' not in names:
+            db.session.execute(text("ALTER TABLE feed_source_last_seen ADD COLUMN last_ok BOOLEAN"))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] feed_source_last_seen status columns: {e}")
+
+
 def _ensure_admin_user():
     """Create default admin user if no users exist (offline-friendly)."""
     if User.query.limit(1).first() is not None:
@@ -1787,6 +1856,7 @@ def _init_db():
         _ensure_ioc_tags_column()
         _ensure_ioc_submission_method_column()
         _ensure_ioc_rare_find_columns()
+        _ensure_feed_source_last_seen_status_columns()
         _ensure_user_last_login_column()  # Must run before any User query (admin_user, etc.)
         _ensure_user_must_change_password_column()
         _ensure_admin_user()  # Must exist before user_id migration

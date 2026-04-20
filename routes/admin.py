@@ -373,6 +373,9 @@ def save_scoring_method():
 # --- Settings ---
 
 _SETTINGS_DEFAULTS = {
+    # Session / security
+    # Minutes of inactivity before auto-logoff. "0" means never.
+    'session_inactivity_timeout_minutes': '15',
     'auth_mode': 'local_only',
     'ldap_enabled': 'false',
     'ldap_url': '',
@@ -450,6 +453,7 @@ _SETTINGS_DEFAULTS = {
     'cortex_xdr_api_key': '',
     'cortex_xdr_verify_ssl': 'true',
     'cortex_xdr_hash_blocklist_enabled': 'true',
+    'cortex_xdr_display_name': '',
     'google_secops_enabled': 'false',
     'google_secops_base_url': '',
     'google_secops_chronicle_api_base': '',
@@ -460,6 +464,7 @@ _SETTINGS_DEFAULTS = {
     'google_secops_data_table_id': '',
     'google_secops_credentials_json': '',
     'google_secops_verify_ssl': 'true',
+    'google_secops_display_name': '',
 }
 
 
@@ -727,6 +732,7 @@ def save_settings():
             misp_keys = _MISP_SAVE_KEYS_FALLBACK
         syslog_keys = ('syslog_udp_enabled', 'syslog_udp_host', 'syslog_udp_port')
         ldap_keys = ('auth_mode', 'ldap_enabled', 'ldap_url', 'ldap_base_dn', 'ldap_bind_dn', 'ldap_bind_password', 'ldap_servers', 'ldap_user_filter')
+        session_keys = ('session_inactivity_timeout_minutes',)
         dxl_keys = ('dxl_enabled', 'dxl_config_path')
         automation_keys = (
             'automation_fireeye_enabled',
@@ -749,11 +755,14 @@ def save_settings():
         )
         vendor_ioc_keys = (
             'cortex_xdr_enabled',
+            'cortex_xdr_display_name',
             'cortex_xdr_base_url',
             'cortex_xdr_api_key_id',
+            'cortex_xdr_api_key',
             'cortex_xdr_verify_ssl',
             'cortex_xdr_hash_blocklist_enabled',
             'google_secops_enabled',
+            'google_secops_display_name',
             'google_secops_base_url',
             'google_secops_chronicle_api_base',
             'google_secops_project_number',
@@ -766,11 +775,25 @@ def save_settings():
         )
         sections = []
         for key in (
-            ldap_keys + misp_keys + syslog_keys + dxl_keys + automation_keys + trellix_ex_keys
+            session_keys + ldap_keys + misp_keys + syslog_keys + dxl_keys + automation_keys + trellix_ex_keys
             + sanity_keys + feed_keys + search_keys + tags_keys + ioc_push_keys + esa_keys + vendor_ioc_keys
         ):
             if key in data:
                 val = data[key]
+                if key == 'session_inactivity_timeout_minutes':
+                    try:
+                        n = int(str(val).strip())
+                    except ValueError:
+                        n = 15
+                    # 0 = never; clamp to sane range otherwise
+                    if n < 0:
+                        n = 0
+                    if n > 1440:
+                        n = 1440
+                    _set_setting(key, str(n))
+                    if 'Session' not in sections:
+                        sections.append('Session')
+                    continue
                 if key == 'cortex_xdr_api_key':
                     if isinstance(val, str) and val.strip():
                         _set_setting('cortex_xdr_api_key', val.strip())
@@ -858,6 +881,8 @@ def save_settings():
                     _set_setting(key, str(val).strip())
                 if key in ldap_keys and 'LDAP' not in sections:
                     sections.append('LDAP')
+                elif key in session_keys and 'Session' not in sections:
+                    sections.append('Session')
                 elif key in misp_keys and 'MISP' not in sections:
                     sections.append('MISP')
                 elif key in syslog_keys and 'Syslog' not in sections:
@@ -1677,6 +1702,7 @@ def _build_admin_settings_form_context():
         _ttl_raw = FEED_CACHE_TTL_DEFAULT
     _feed_ttl = str(normalize_feed_cache_ttl_seconds(_ttl_raw))
     return {
+        'session_inactivity_timeout_minutes': _get_setting('session_inactivity_timeout_minutes', '15'),
         'auth_mode': _get_setting('auth_mode', 'local_only'),
         'feeds_public_enabled': _get_setting('feeds_public_enabled', 'true'),
         'feed_cache_enabled': _get_setting('feed_cache_enabled', 'true'),
@@ -1727,12 +1753,14 @@ def _build_admin_settings_form_context():
         'esa_group_name': _get_setting('esa_group_name', ''),
         'esa_host_name': _get_setting('esa_host_name', ''),
         'cortex_xdr_enabled': _get_setting('cortex_xdr_enabled', 'false'),
+        'cortex_xdr_display_name': _get_setting('cortex_xdr_display_name', ''),
         'cortex_xdr_base_url': _get_setting('cortex_xdr_base_url', ''),
         'cortex_xdr_api_key_id': _get_setting('cortex_xdr_api_key_id', ''),
         'cortex_xdr_api_key': _get_setting('cortex_xdr_api_key', ''),
         'cortex_xdr_verify_ssl': _get_setting('cortex_xdr_verify_ssl', 'true'),
         'cortex_xdr_hash_blocklist_enabled': _get_setting('cortex_xdr_hash_blocklist_enabled', 'true'),
         'google_secops_enabled': _get_setting('google_secops_enabled', 'false'),
+        'google_secops_display_name': _get_setting('google_secops_display_name', ''),
         'google_secops_base_url': _get_setting('google_secops_base_url', ''),
         'google_secops_chronicle_api_base': _get_setting('google_secops_chronicle_api_base', ''),
         'google_secops_project_number': _get_setting('google_secops_project_number', ''),

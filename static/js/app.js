@@ -423,6 +423,17 @@ function _getTabFromHash() {
 }
 
 async function switchTab(tabId, skipHash) {
+    // Require login for sensitive pages
+    const requireAuthTabs = new Set(['search', 'bulk-unified', 'yara', 'champs', 'campaigns', 'playbook', 'reports']);
+    const isAuthed = document.body.getAttribute('data-authenticated') === '1';
+    if (requireAuthTabs.has(tabId) && !isAuthed) {
+        try { showToast('Login required', 'warning', 2500); } catch (e) { /* ignore */ }
+        // Preserve intended destination
+        const next = '/#' + tabId;
+        window.location.href = '/login?next=' + encodeURIComponent(next);
+        return;
+    }
+
     currentTab = tabId;
     if (!skipHash) {
         history.replaceState(null, '', '#' + tabId);

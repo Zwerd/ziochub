@@ -187,6 +187,12 @@ def _http_json_post(url: str, body: dict[str, Any], headers: dict[str, str], ver
                 return code, json.loads(txt) if txt.strip() else {}, ''
             except json.JSONDecodeError:
                 return code, None, txt[:500]
+    except urllib.error.URLError as e:
+        # Network-level failures: DNS, connect timeout, refused, TLS handshake, etc.
+        reason = getattr(e, 'reason', None)
+        if isinstance(reason, ssl.SSLError):
+            return 0, None, f'TLS error: {reason}'.strip()[:500]
+        return 0, None, f'Network error: {reason or e}'.strip()[:500]
     except urllib.error.HTTPError as e:
         err = ''
         try:
@@ -444,6 +450,18 @@ def cortex_xdr_push_ioc_from_context(ioc: dict[str, Any]) -> tuple[bool, str]:
 
     ``Email`` IOCs are skipped for TIM (no mapped type). Hash blocklist still applies only when type is Hash.
     """
+    ok, msg = _cortex_xdr_push_ioc_from_context_inner(ioc)
+    try:
+        from utils.integration_telemetry import record_vendor_push_attempt, record_vendor_push_if_applicable
+
+        record_vendor_push_attempt('cortex_xdr', data_kind='IOC', ok=ok, message=msg, count=1)
+        record_vendor_push_if_applicable('cortex_xdr', ok, msg)
+    except Exception:
+        pass
+    return ok, msg
+
+
+def _cortex_xdr_push_ioc_from_context_inner(ioc: dict[str, Any]) -> tuple[bool, str]:
     if not cortex_xdr_enabled():
         return True, 'disabled'
     if not isinstance(ioc, dict):
@@ -525,11 +543,19 @@ def cortex_xdr_test_connection(
     if verify_ssl is None:
         verify_ssl = (g.get('cortex_xdr_verify_ssl', 'true') or 'true').strip().lower() in ('true', '1', 'yes')
 
+    missing = []
     if not base:
-        steps.append({'step': 'config', 'status': 'fail', 'message': 'cortex_xdr_base_url is empty'})
-        return {'success': False, 'steps': steps}
-    if not key_id or not api_key:
-        steps.append({'step': 'config', 'status': 'fail', 'message': 'API key ID and API key secret are required'})
+        missing.append('base_url')
+    if not key_id:
+        missing.append('api_key_id')
+    if not api_key:
+        missing.append('api_key_secret')
+    if missing:
+        steps.append({
+            'step': 'config',
+            'status': 'fail',
+            'message': 'Missing required Cortex XDR settings: ' + ', '.join(missing),
+        })
         return {'success': False, 'steps': steps}
 
     url = _cortex_auth_settings_url(base)
@@ -538,14 +564,23 @@ def cortex_xdr_test_connection(
 
     code, data, raw = _http_json_post(url, payload, hdrs, verify_ssl)
 
+    # Give the operator immediate context (helps debug “wrong host”).
+    steps.append({
+        'step': 'request',
+        'status': 'ok',
+        'message': f'POST {url} (verify_tls={bool(verify_ssl)})',
+    })
+
     if 200 <= code < 300:
         steps.append({'step': 'cortex_api', 'status': 'ok', 'message': f'HTTP {code} on authentication-settings (signed auth)'})
         return {'success': True, 'steps': steps}
 
     if code == 401:
         msg = (
-            f'HTTP 401 — invalid API key ID/secret, or clock skew. '
-            f'Ensure the key is an Advanced API key and base URL is https://api-{{tenant}}.paloaltonetworks.com. {raw[:180]}'
+            f'HTTP 401 — authentication failed. Most common causes: wrong API key ID/secret, '
+            f'API key is not an Advanced key, or clock skew on the server running ZIoCHub. '
+            f'Base URL should look like https://api-<tenant>.paloaltonetworks.com. '
+            f'Response: {raw[:220]}'
         ).strip()
         steps.append({'step': 'cortex_api', 'status': 'fail', 'message': msg})
         return {'success': False, 'steps': steps}
@@ -556,6 +591,12 @@ def cortex_xdr_test_connection(
         ).strip()
         steps.append({'step': 'cortex_api', 'status': 'ok', 'message': msg})
         return {'success': True, 'steps': steps}
+
+    if code == 0:
+        # Network/TLS failure (see _http_json_post)
+        hint = 'If this is TLS-related, try "Ignore TLS for this test" temporarily to confirm connectivity.'
+        steps.append({'step': 'cortex_api', 'status': 'fail', 'message': f'Connection failed — {raw[:240]}. {hint}'.strip()})
+        return {'success': False, 'steps': steps}
 
     hint = ' (check base URL host)' if code == 404 else ''
     snippet = raw[:200] + ('…' if len(raw) > 200 else '')

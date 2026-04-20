@@ -140,6 +140,20 @@
         <p class="text-secondary text-sm mb-6">Auth configuration (LDAP/AD). You can add multiple LDAP servers; login will try them in order until one succeeds. When LDAP is unreachable and DEV_MODE=1, use <code class="px-1 py-0.5 rounded bg-white/10 text-xs">ldaptest</code> / <code class="px-1 py-0.5 rounded bg-white/10 text-xs">ldaptest</code> to test.</p>
 
         <form id="settingsForm" class="space-y-4">
+            <div class="p-4 rounded-lg border border-white/10 bg-black/20">
+                <h4 class="text-sm font-semibold text-primary mb-2">Session timeout</h4>
+                <p class="text-secondary text-xs mb-3">Auto-logoff after a period of inactivity. Set to <strong class="text-primary">Never</strong> to disable. Default is 15 minutes.</p>
+                <label for="session_inactivity_timeout_minutes" class="block text-sm font-semibold text-secondary mb-1">Inactivity timeout</label>
+                <select id="session_inactivity_timeout_minutes" name="session_inactivity_timeout_minutes" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="0" {% if settings.session_inactivity_timeout_minutes == '0' %}selected{% endif %}>Never</option>
+                    <option value="5" {% if settings.session_inactivity_timeout_minutes == '5' %}selected{% endif %}>5 minutes</option>
+                    <option value="10" {% if settings.session_inactivity_timeout_minutes == '10' %}selected{% endif %}>10 minutes</option>
+                    <option value="15" {% if settings.session_inactivity_timeout_minutes == '15' %}selected{% endif %}>15 minutes</option>
+                    <option value="30" {% if settings.session_inactivity_timeout_minutes == '30' %}selected{% endif %}>30 minutes</option>
+                    <option value="60" {% if settings.session_inactivity_timeout_minutes == '60' %}selected{% endif %}>60 minutes</option>
+                    <option value="120" {% if settings.session_inactivity_timeout_minutes == '120' %}selected{% endif %}>120 minutes</option>
+                </select>
+            </div>
             <div>
                 <label for="auth_mode" class="block text-sm font-semibold text-secondary mb-1">Auth Mode</label>
                 <select id="auth_mode" name="auth_mode" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
@@ -495,6 +509,7 @@ document.getElementById('settingsForm').addEventListener('submit', async functio
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+                session_inactivity_timeout_minutes: document.getElementById('session_inactivity_timeout_minutes').value,
                 auth_mode: document.getElementById('auth_mode').value,
                 ldap_enabled: document.getElementById('ldap_enabled').value,
                 ldap_servers: ldapServers,

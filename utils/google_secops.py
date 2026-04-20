@@ -138,6 +138,18 @@ def google_secops_push_ioc_from_context(ioc: dict[str, Any]) -> tuple[bool, str]
 
     ``ioc`` is from ``ioc_context_from_submission``. Rows are two columns: type slug, value.
     """
+    ok, msg = _google_secops_push_ioc_from_context_inner(ioc)
+    try:
+        from utils.integration_telemetry import record_vendor_push_attempt, record_vendor_push_if_applicable
+
+        record_vendor_push_attempt('google_secops', data_kind='IOC', ok=ok, message=msg, count=1)
+        record_vendor_push_if_applicable('google_secops', ok, msg)
+    except Exception:
+        pass
+    return ok, msg
+
+
+def _google_secops_push_ioc_from_context_inner(ioc: dict[str, Any]) -> tuple[bool, str]:
     if not google_secops_enabled():
         return True, 'disabled'
     if not isinstance(ioc, dict):

@@ -4239,11 +4239,12 @@ textarea:focus-visible {
 }
 
 /* ── 11. Confetti Canvas Container ── */
+/* Below global modals (ambition z-10060, badge/admin z-9999) — same z as ambition caused canvas to paint on top and block clicks in some browsers */
 #champsConfettiCanvas {
     position: fixed;
     inset: 0;
     pointer-events: none;
-    z-index: 9998;
+    z-index: 9970;
 }
 
 /* ── 12. Particles Canvas ── */

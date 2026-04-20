@@ -154,6 +154,9 @@ class FeedSourceLastSeen(db.Model):
     client_ip = db.Column(db.String(45), nullable=False)
     feed_path = db.Column(db.String(512), nullable=False)
     last_seen_at = db.Column(db.DateTime, nullable=False, default=_utcnow)
+    # Status of last pull attempt (Feed Pulse → Connections). `last_ok` is best-effort (HTTP 200).
+    last_status_code = db.Column(db.Integer, nullable=True)
+    last_ok = db.Column(db.Boolean, nullable=True)
     __table_args__ = (UniqueConstraint('client_ip', 'feed_path', name='u_feed_source_last_seen_ip_path'),)
 
 

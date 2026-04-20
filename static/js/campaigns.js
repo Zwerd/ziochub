@@ -107,29 +107,35 @@
                 return;
             }
             const campaigns = data.campaigns;
+            const emptyDescLabelEsc = escapeHtml((typeof t === 'function') ? t('campaign.no_description') : '—');
             listEl.innerHTML = campaigns.map(c => {
-                const safeName = escapeHtml(c.name || 'Unnamed');
+                const rawName = c.name || 'Unnamed';
+                const rawDesc = (c.description != null && String(c.description).trim() !== '') ? String(c.description) : '';
+                const safeName = escapeHtml(rawName);
+                const safeDesc = rawDesc ? escapeHtml(rawDesc) : '';
                 const attrName = (c.name || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
                 const attrDesc = (c.description || '').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r?\n/g, ' ');
                 const attrDir = (c.dir || 'ltr').replace(/"/g, '&quot;');
-                const titleAttr = c.description ? ` title="${attrDesc}"` : '';
+                const nameDir = typeof detectTextDir === 'function' ? detectTextDir(rawName) : (c.dir || 'ltr');
+                const descDir = rawDesc ? tooltipDirFromMajorityHebrew(rawDesc) : (c.dir || 'ltr');
                 const hasRef = !!c.has_reference_image;
+                const descBlock = rawDesc
+                    ? `<p class="campaign-list-desc mt-2 text-xs leading-relaxed text-secondary whitespace-pre-wrap break-words cursor-pointer campaign-select-area" data-cid="${c.id}" dir="${descDir}">${safeDesc}</p>`
+                    : `<p class="campaign-list-desc mt-2 text-xs leading-relaxed whitespace-pre-wrap break-words cursor-pointer campaign-select-area text-secondary/80" data-cid="${c.id}" dir="auto"><span class="italic">${emptyDescLabelEsc}</span></p>`;
                 return `
-                <li class="py-2 px-2 rounded campaign-list-item border border-transparent transition"
+                <li class="campaign-list-item rounded-xl border border-white/10 bg-black/20 hover:bg-black/30 py-3 px-3 shadow-sm transition-colors"
                     data-campaign-id="${c.id}">
-                    <div class="flex items-start justify-between gap-2">
-                        <div class="flex items-start gap-1 flex-1 min-w-0">
-                            <div class="flex-1 min-w-0 cursor-pointer campaign-select-area" data-cid="${c.id}">
-                                <span class="font-medium block truncate" dir="${attrDir}"${titleAttr}>${safeName}</span>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-1.5 flex-shrink-0">
+                    <div class="flex items-start justify-between gap-3">
+                        <div class="flex-1 min-w-0 cursor-pointer campaign-select-area font-semibold text-[15px] leading-snug text-primary break-words"
+                            data-cid="${c.id}" dir="${nameDir}">${safeName}</div>
+                        <div class="flex items-center gap-1.5 flex-shrink-0 pt-0.5">
                             <button type="button" class="btn-cmd-primary btn-cmd-sm campaign-edit-btn"
                                 data-cid="${c.id}" data-cname="${attrName}" data-cdesc="${attrDesc}" data-cdir="${attrDir}" data-has-ref="${hasRef ? '1' : ''}">${t('actions.edit')}</button>
                             <button type="button" class="btn-cmd-danger btn-cmd-sm campaign-delete-btn"
                                 data-cid="${c.id}" data-cname="${attrName}">${t('actions.delete')}</button>
                         </div>
                     </div>
+                    ${descBlock}
                 </li>`;
             }).join('');
             listEl.querySelectorAll('.campaign-select-area').forEach(el => {

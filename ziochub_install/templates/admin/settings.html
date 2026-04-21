@@ -1,0 +1,951 @@
+{% extends "admin/base.html" %}
+{% block title %}Settings{% endblock %}
+
+{% block admin_content %}
+<div class="mb-4">
+    <p class="text-secondary text-sm">Feeds, TAXII availability, feed cache, and search display. Platform connections: LDAP, MISP, and Syslog below. Built-in vendor integrations (Trellix EX/NX, Cisco ESA) are under <a href="{{ url_for('admin_pages.admin_integrations') }}" class="text-cyan-400 hover:underline">Integrations</a>; outbound automations (IOC push, YARA push, OpenDXL) under <a href="{{ url_for('admin_pages.admin_automations') }}" class="text-cyan-400 hover:underline">Automations</a>.</p>
+</div>
+
+<nav class="settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-6">
+    <button type="button" class="settings-tab-btn active" data-tab="feeds">Feeds</button>
+    <button type="button" class="settings-tab-btn" data-tab="search">Search</button>
+    <button type="button" class="settings-tab-btn" data-tab="tags">Tags</button>
+    <button type="button" class="settings-tab-btn" data-tab="ldap">LDAP</button>
+    <button type="button" class="settings-tab-btn" data-tab="misp">MISP</button>
+    <button type="button" class="settings-tab-btn" data-tab="syslog">Syslog</button>
+</nav>
+
+<!-- Tab: Feeds & TAXII -->
+<div id="settings-tab-feeds" class="settings-tab-pane">
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
+        <h3 class="text-lg font-semibold accent-blue mb-4">Feeds &amp; TAXII</h3>
+        <p class="text-secondary text-sm mb-6">Control whether the public Feed and TAXII endpoints are available. When disabled, <code class="px-1 py-0.5 rounded bg-white/10">/feed/*</code> and TAXII object endpoints return 503. Use when defense systems pull from MISP only and you do not need ZIoCHub as a feed source.</p>
+
+        <form id="feedsForm" class="space-y-4">
+            <div>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="feeds_public_enabled" name="feeds_public_enabled" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" {% if settings.feeds_public_enabled != 'false' %}checked{% endif %}>
+                    <span class="text-sm text-primary font-medium">Feeds and TAXII publicly available</span>
+                </label>
+                <p class="text-secondary text-xs mt-2">Uncheck to disable public access to Feed and TAXII (clients will receive 503).</p>
+            </div>
+            <div class="pt-2 border-t border-white/10">
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="feed_cache_enabled" name="feed_cache_enabled" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" {% if settings.feed_cache_enabled != 'false' %}checked{% endif %}>
+                    <span class="text-sm text-primary font-medium">Cache /feed responses (shared, all workers)</span>
+                </label>
+                <p class="text-secondary text-xs mt-2">When enabled, each feed URL (plain, Palo Alto, Check Point, STIX, YARA list, ePO, etc.) is built at most once per TTL; repeat clients read from SQLite. Reduces DB load when many systems poll frequently. New IOCs may appear in feeds after up to the TTL delay.</p>
+            </div>
+            <div>
+                <label for="feed_cache_ttl_seconds" class="block text-sm font-semibold text-secondary mb-1">Feed cache refresh interval</label>
+                <select id="feed_cache_ttl_seconds" name="feed_cache_ttl_seconds" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="60" {% if settings.feed_cache_ttl_seconds == '60' %}selected{% endif %}>1 minute</option>
+                    <option value="300" {% if settings.feed_cache_ttl_seconds == '300' %}selected{% endif %}>5 minutes</option>
+                    <option value="600" {% if settings.feed_cache_ttl_seconds == '600' %}selected{% endif %}>10 minutes</option>
+                    <option value="900" {% if settings.feed_cache_ttl_seconds == '900' %}selected{% endif %}>15 minutes</option>
+                    <option value="1800" {% if settings.feed_cache_ttl_seconds == '1800' %}selected{% endif %}>30 minutes</option>
+                    <option value="3600" {% if settings.feed_cache_ttl_seconds == '3600' %}selected{% endif %}>1 hour</option>
+                    <option value="43200" {% if settings.feed_cache_ttl_seconds == '43200' %}selected{% endif %}>12 hours</option>
+                </select>
+                <p class="text-secondary text-xs mt-1">How often cached /feed bodies may be rebuilt from the database. After saving Feeds settings, the cache is cleared once so the new interval applies. Legacy custom TTL values are normalized to the nearest preset when the page loads.</p>
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Feeds Settings</button>
+        </form>
+        <div id="feedsMessage" class="mt-4 hidden text-sm"></div>
+    </div>
+</div>
+
+<!-- Tab: Search (display options) -->
+<div id="settings-tab-search" class="settings-tab-pane hidden">
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
+        <h3 class="text-lg font-semibold accent-blue mb-4">Search display</h3>
+        <p class="text-secondary text-sm mb-6">In Search &amp; Investigate results, the Comment column can be shown RTL when the text is mostly Hebrew or Arabic (e.g. comments from MISP sync). When disabled, comments always use the default direction (LTR).</p>
+
+        <form id="searchForm" class="space-y-4">
+            <div>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="search_comment_rtl_by_script" name="search_comment_rtl_by_script" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" {% if settings.search_comment_rtl_by_script != 'false' %}checked{% endif %}>
+                    <span class="text-sm text-primary font-medium">Comment direction by script (RTL when mostly Hebrew/Arabic)</span>
+                </label>
+                <p class="text-secondary text-xs mt-2">When enabled, comments with more Hebrew or Arabic letters than Latin are displayed right-to-left.</p>
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Search Settings</button>
+        </form>
+        <div id="searchMessage" class="mt-4 hidden text-sm"></div>
+    </div>
+</div>
+
+<!-- Tab: Tags governance -->
+<div id="settings-tab-tags" class="settings-tab-pane hidden">
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+        <h3 class="text-lg font-semibold accent-blue mb-2">Tags governance</h3>
+        <p class="text-secondary text-sm mb-6">
+            Maintain a clean tagging taxonomy. When enabled, analysts can only use tags from the Allowed list.
+            Analysts may optionally suggest new tags for admin approval.
+        </p>
+
+        <form id="tagsForm" class="space-y-4">
+            <div>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="tags_restricted_enabled" name="tags_restricted_enabled" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green">
+                    <span class="text-sm text-primary font-medium">Restrict tags to Allowed list</span>
+                </label>
+                <p class="text-secondary text-xs mt-2">When enabled, submission/edit APIs reject tags not in the allowed list.</p>
+            </div>
+            <div>
+                <label class="flex items-center gap-2 cursor-pointer">
+                    <input type="checkbox" id="tags_allow_suggest" name="tags_allow_suggest" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" checked>
+                    <span class="text-sm text-primary font-medium">Allow analysts to suggest new tags</span>
+                </label>
+                <p class="text-secondary text-xs mt-2">Suggestions are queued for admin approval and do not become usable until approved.</p>
+            </div>
+            <div class="pt-2 border-t border-white/10">
+                <label for="allowed_tags_text" class="block text-sm font-semibold text-secondary mb-1">Allowed tags (one per line)</label>
+                <textarea id="allowed_tags_text" rows="10" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="phishing&#10;malware&#10;c2&#10;ransomware"></textarea>
+                <p class="text-secondary text-xs mt-1">Tags are normalized to lowercase and deduped on save.</p>
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Tags Settings</button>
+        </form>
+        <div id="tagsMessage" class="mt-4 hidden text-sm"></div>
+
+        <div class="mt-8 pt-6 border-t border-white/10">
+            <div class="flex items-center justify-between gap-2 mb-3">
+                <h4 class="text-base font-semibold text-primary">Pending tag suggestions</h4>
+                <button type="button" id="refreshTagSuggestions" class="px-3 py-1.5 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-accent-green transition text-sm">Refresh</button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm border border-white/10 rounded-lg overflow-hidden">
+                    <thead class="bg-secondary">
+                        <tr>
+                            <th class="px-3 py-2 text-left text-secondary">Tag</th>
+                            <th class="px-3 py-2 text-left text-secondary">Suggested by</th>
+                            <th class="px-3 py-2 text-left text-secondary">Suggested at</th>
+                            <th class="px-3 py-2 text-left text-secondary">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tagSuggestionsBody" class="divide-y divide-white/5">
+                        <tr><td colspan="4" class="px-3 py-3 text-secondary text-sm">Loading…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p id="tagSuggestionsEmpty" class="text-secondary text-xs mt-2 hidden">No pending suggestions.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Tab: LDAP -->
+<div id="settings-tab-ldap" class="settings-tab-pane hidden">
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
+        <h3 class="text-lg font-semibold accent-blue mb-4">LDAP / Authentication</h3>
+        <p class="text-secondary text-sm mb-6">Auth configuration (LDAP/AD). You can add multiple LDAP servers; login will try them in order until one succeeds. When LDAP is unreachable and DEV_MODE=1, use <code class="px-1 py-0.5 rounded bg-white/10 text-xs">ldaptest</code> / <code class="px-1 py-0.5 rounded bg-white/10 text-xs">ldaptest</code> to test.</p>
+
+        <form id="settingsForm" class="space-y-4">
+            <div class="p-4 rounded-lg border border-white/10 bg-black/20">
+                <h4 class="text-sm font-semibold text-primary mb-2">Session timeout</h4>
+                <p class="text-secondary text-xs mb-3">Auto-logoff after a period of inactivity. Set to <strong class="text-primary">Never</strong> to disable. Default is 15 minutes.</p>
+                <label for="session_inactivity_timeout_minutes" class="block text-sm font-semibold text-secondary mb-1">Inactivity timeout</label>
+                <select id="session_inactivity_timeout_minutes" name="session_inactivity_timeout_minutes" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="0" {% if settings.session_inactivity_timeout_minutes == '0' %}selected{% endif %}>Never</option>
+                    <option value="5" {% if settings.session_inactivity_timeout_minutes == '5' %}selected{% endif %}>5 minutes</option>
+                    <option value="10" {% if settings.session_inactivity_timeout_minutes == '10' %}selected{% endif %}>10 minutes</option>
+                    <option value="15" {% if settings.session_inactivity_timeout_minutes == '15' %}selected{% endif %}>15 minutes</option>
+                    <option value="30" {% if settings.session_inactivity_timeout_minutes == '30' %}selected{% endif %}>30 minutes</option>
+                    <option value="60" {% if settings.session_inactivity_timeout_minutes == '60' %}selected{% endif %}>60 minutes</option>
+                    <option value="120" {% if settings.session_inactivity_timeout_minutes == '120' %}selected{% endif %}>120 minutes</option>
+                </select>
+            </div>
+            <div>
+                <label for="auth_mode" class="block text-sm font-semibold text-secondary mb-1">Auth Mode</label>
+                <select id="auth_mode" name="auth_mode" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="local_only" {% if settings.auth_mode == 'local_only' %}selected{% endif %}>Local Only</option>
+                    <option value="ldap" {% if settings.auth_mode == 'ldap' %}selected{% endif %}>LDAP</option>
+                    <option value="local_with_ldap_fallback" {% if settings.auth_mode == 'local_with_ldap_fallback' %}selected{% endif %}>Local with LDAP Fallback</option>
+                </select>
+            </div>
+            <div>
+                <label for="ldap_enabled" class="block text-sm font-semibold text-secondary mb-1">LDAP Enabled</label>
+                <select id="ldap_enabled" name="ldap_enabled" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="false" {% if settings.ldap_enabled == 'false' %}selected{% endif %}>No</option>
+                    <option value="true" {% if settings.ldap_enabled == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+            </div>
+            <div>
+                <div class="flex items-center justify-between mb-2">
+                    <label class="block text-sm font-semibold text-secondary">LDAP Servers (tried in order)</label>
+                    <button type="button" id="ldapAddServerBtn" class="text-sm px-3 py-1 rounded bg-cyan-600/30 text-cyan-400 hover:bg-cyan-500/40 transition">+ Add server</button>
+                </div>
+                <div id="ldapServersContainer" class="space-y-4">
+                    {% for s in settings.ldap_servers %}
+                    <div class="ldap-server-row rounded-lg border border-white/10 bg-black/20 overflow-hidden">
+                        <div class="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/30">
+                            <span class="ldap-server-label text-xs font-semibold text-secondary">Server {{ loop.index }}</span>
+                            <button type="button" class="ldap-remove-server px-2 py-1.5 rounded text-sm font-medium bg-red-600/80 hover:bg-red-500 text-white transition">Remove</button>
+                        </div>
+                        <div class="p-4 space-y-3">
+                            <div>
+                                <label class="block text-xs font-semibold text-secondary mb-1">URL</label>
+                                <input type="text" class="ldap-srv-url w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="ldap://dc.example.com" value="{{ s.url }}">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-secondary mb-1">Base DN</label>
+                                <input type="text" class="ldap-srv-base-dn w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="DC=example,DC=com" value="{{ s.base_dn }}">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-secondary mb-1">Bind DN (service account)</label>
+                                <input type="text" class="ldap-srv-bind-dn w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="CN=svc_ldap,..." value="{{ s.bind_dn }}">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-secondary mb-1">Bind Password</label>
+                                <input type="password" class="ldap-srv-bind-password w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="***" value="{{ s.bind_password }}" autocomplete="new-password">
+                            </div>
+                        </div>
+                    </div>
+                    {% else %}
+                    <div class="ldap-server-row rounded-lg border border-white/10 bg-black/20 overflow-hidden">
+                        <div class="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/30">
+                            <span class="ldap-server-label text-xs font-semibold text-secondary">Server 1</span>
+                            <button type="button" class="ldap-remove-server px-2 py-1.5 rounded text-sm font-medium bg-red-600/80 hover:bg-red-500 text-white transition">Remove</button>
+                        </div>
+                        <div class="p-4 space-y-3">
+                            <div>
+                                <label class="block text-xs font-semibold text-secondary mb-1">URL</label>
+                                <input type="text" class="ldap-srv-url w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="ldap://dc.example.com">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-secondary mb-1">Base DN</label>
+                                <input type="text" class="ldap-srv-base-dn w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="DC=example,DC=com">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-secondary mb-1">Bind DN (service account)</label>
+                                <input type="text" class="ldap-srv-bind-dn w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="CN=svc_ldap,...">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-secondary mb-1">Bind Password</label>
+                                <input type="password" class="ldap-srv-bind-password w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="***" autocomplete="new-password">
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            <div>
+                <label for="ldap_user_filter" class="block text-sm font-semibold text-secondary mb-1">LDAP User Filter (%(user)s = username)</label>
+                <input type="text" id="ldap_user_filter" name="ldap_user_filter" placeholder="(sAMAccountName=%(user)s)" value="{{ settings.ldap_user_filter }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save LDAP Settings</button>
+        </form>
+        <div id="settingsMessage" class="mt-4 hidden text-sm"></div>
+
+        <div class="mt-6 pt-6 border-t border-white/10">
+            <h4 class="text-sm font-semibold text-secondary mb-2">Test LDAP connection</h4>
+            <p class="text-secondary text-xs mb-3">Uses the values currently in the form above (not yet saved).</p>
+            <div class="flex items-center gap-3 pt-2">
+                <button type="button" id="ldapTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test Connection</button>
+            </div>
+            <div id="ldapTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto overflow-y-auto max-h-64">
+                <div id="ldapTestLogContent" class="space-y-1 whitespace-pre-wrap"></div>
+            </div>
+            <div id="ldapTestSpinner" class="mt-2 hidden text-amber-400 text-sm">Testing...</div>
+        </div>
+    </div>
+</div>
+
+<!-- Tab: MISP -->
+<div id="settings-tab-misp" class="settings-tab-pane hidden">
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
+        <h3 class="text-lg font-semibold accent-blue mb-4">MISP Integration</h3>
+        <p class="text-secondary text-sm mb-6">Pull threat indicators from a local MISP instance into ZIoCHub automatically.</p>
+
+        <form id="mispForm" class="space-y-4">
+            <div>
+                <label for="misp_enabled" class="block text-sm font-semibold text-secondary mb-1">MISP Sync Enabled</label>
+                <select id="misp_enabled" name="misp_enabled" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="false" {% if settings.misp_enabled == 'false' %}selected{% endif %}>No</option>
+                    <option value="true" {% if settings.misp_enabled == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+            </div>
+            <div>
+                <label for="misp_url" class="block text-sm font-semibold text-secondary mb-1">MISP URL</label>
+                <input type="text" id="misp_url" name="misp_url" placeholder="https://127.0.0.1:8443 or https://misp.local" value="{{ settings.misp_url }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <p class="text-secondary text-xs mt-1">Include the port if not 443 (e.g. https://127.0.0.1:8443).</p>
+            </div>
+            <div>
+                <label for="misp_api_key" class="block text-sm font-semibold text-secondary mb-1">MISP API Key (Authkey)</label>
+                <input type="password" id="misp_api_key" name="misp_api_key" placeholder="***" value="{{ settings.misp_api_key }}" autocomplete="off"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <div>
+                <label for="misp_verify_ssl" class="block text-sm font-semibold text-secondary mb-1">Verify SSL</label>
+                <select id="misp_verify_ssl" name="misp_verify_ssl" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="false" {% if settings.misp_verify_ssl == 'false' %}selected{% endif %}>No</option>
+                    <option value="true" {% if settings.misp_verify_ssl == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+            </div>
+            <div class="border-t border-white/5 pt-4 mt-4">
+                <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Fetch Parameters</p>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label for="misp_last_days" class="block text-sm font-semibold text-secondary mb-1">Lookback (days)</label>
+                    <input type="number" id="misp_last_days" name="misp_last_days" min="1" max="365" value="{{ settings.misp_last_days }}"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+                <div>
+                    <label for="misp_pull_interval" class="block text-sm font-semibold text-secondary mb-1">Auto-sync interval (min)</label>
+                    <input type="number" id="misp_pull_interval" name="misp_pull_interval" min="5" max="1440" value="{{ settings.misp_pull_interval }}"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+            </div>
+            <div>
+                <label for="misp_filter_tags" class="block text-sm font-semibold text-secondary mb-1">Filter by Tags (comma-separated, empty = all)</label>
+                <input type="text" id="misp_filter_tags" name="misp_filter_tags" placeholder="tlp:white, apt" value="{{ settings.misp_filter_tags }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <div>
+                <label for="misp_filter_types" class="block text-sm font-semibold text-secondary mb-1">Filter MISP Attribute Types (comma-separated)</label>
+                <input type="text" id="misp_filter_types" name="misp_filter_types" placeholder="ip-src, ip-dst, domain, url, md5, sha256" value="{{ settings.misp_filter_types }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <div>
+                <label for="misp_published_only" class="block text-sm font-semibold text-secondary mb-1">Published Events Only</label>
+                <select id="misp_published_only" name="misp_published_only" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="true" {% if settings.misp_published_only != 'false' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if settings.misp_published_only == 'false' %}selected{% endif %}>No</option>
+                </select>
+            </div>
+            <div class="border-t border-white/5 pt-4 mt-4">
+                <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Import Settings</p>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label for="misp_default_ttl" class="block text-sm font-semibold text-secondary mb-1">Default TTL (days, 0 = permanent)</label>
+                    <input type="text" id="misp_default_ttl" name="misp_default_ttl" placeholder="permanent" value="{{ settings.misp_default_ttl }}"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+                <div>
+                    <label for="misp_sync_user" class="block text-sm font-semibold text-secondary mb-1">Sync Analyst Username</label>
+                    <input type="text" id="misp_sync_user" name="misp_sync_user" value="{{ settings.misp_sync_user }}" placeholder="misp_sync"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+            </div>
+            <div>
+                <label for="misp_exclude_from_champs" class="block text-sm font-semibold text-secondary mb-1">Exclude from Champs Leaderboard</label>
+                <select id="misp_exclude_from_champs" name="misp_exclude_from_champs" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="true" {% if settings.misp_exclude_from_champs != 'false' %}selected{% endif %}>Yes - MISP sync user will not appear in Champs</option>
+                    <option value="false" {% if settings.misp_exclude_from_champs == 'false' %}selected{% endif %}>No - MISP sync user scores like any analyst</option>
+                </select>
+            </div>
+            <div class="border-t border-white/5 pt-4 mt-4">
+                <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Push to MISP (when SOC uses ZIoCHub but feeds MISP)</p>
+            </div>
+            <div>
+                <label for="misp_push_enabled" class="block text-sm font-semibold text-secondary mb-1">Push new IOCs to MISP when submitting</label>
+                <select id="misp_push_enabled" name="misp_push_enabled" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="false" {% if settings.misp_push_enabled == 'false' %}selected{% endif %}>No</option>
+                    <option value="true" {% if settings.misp_push_enabled == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+                <p class="text-secondary text-xs mt-1">When enabled, each IOC submitted in ZIoCHub is also added as an attribute to MISP.</p>
+            </div>
+            <div>
+                <label for="misp_push_include_comment" class="block text-sm font-semibold text-secondary mb-1">Include ZIoCHub comment in MISP attribute</label>
+                <select id="misp_push_include_comment" name="misp_push_include_comment" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="true" {% if settings.misp_push_include_comment != 'false' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if settings.misp_push_include_comment == 'false' %}selected{% endif %}>No</option>
+                </select>
+            </div>
+            <div>
+                <label for="misp_push_default_event_id" class="block text-sm font-semibold text-secondary mb-1">Default MISP Event ID (optional)</label>
+                <input type="text" id="misp_push_default_event_id" name="misp_push_default_event_id" placeholder="Leave empty to create a new event per push" value="{{ settings.misp_push_default_event_id }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <div class="flex items-center gap-3 pt-2">
+                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save MISP Settings</button>
+                <button type="button" id="mispTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test Connection</button>
+                <button type="button" id="mispSyncBtn" class="px-4 py-2 rounded-lg font-semibold bg-green-600 hover:bg-green-500 text-white transition">Sync Now</button>
+            </div>
+        </form>
+        <div id="mispMessage" class="mt-4 hidden text-sm"></div>
+
+        <div class="mt-6 pt-6 border-t border-white/10">
+            <h4 class="text-sm font-semibold text-secondary mb-2">MISP operation log</h4>
+            <p class="text-secondary text-xs mb-3">Live output from Test Connection or Sync Now.</p>
+            <div id="mispLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto overflow-y-auto max-h-64">
+                <div id="mispLogContent" class="space-y-1 whitespace-pre-wrap"></div>
+            </div>
+            <div id="mispSpinner" class="mt-2 hidden text-amber-400 text-sm">Running...</div>
+        </div>
+        {% if settings.misp_last_sync %}
+        <div class="mt-4 text-xs text-secondary border-t border-white/5 pt-3">
+            <span class="font-semibold">Last sync:</span> {{ settings.misp_last_sync }}
+            {% if settings.misp_last_sync_result %}
+            <span class="ml-2">{{ settings.misp_last_sync_result }}</span>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Tab: Syslog -->
+<div id="settings-tab-syslog" class="settings-tab-pane hidden">
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
+        <h3 class="text-lg font-semibold accent-blue mb-4">Syslog / CEF Forwarding</h3>
+        <p class="text-secondary text-sm mb-6">Forward audit logs in CEF format via UDP to a SIEM or syslog server. Logs are always stored locally (48h rotation).</p>
+
+        <form id="syslogForm" class="space-y-4">
+            <div>
+                <label for="syslog_udp_enabled" class="block text-sm font-semibold text-secondary mb-1">Enable UDP Syslog Forwarding</label>
+                <select id="syslog_udp_enabled" name="syslog_udp_enabled" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="false" {% if settings.syslog_udp_enabled == 'false' %}selected{% endif %}>No</option>
+                    <option value="true" {% if settings.syslog_udp_enabled == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+            </div>
+            <div>
+                <label for="syslog_udp_host" class="block text-sm font-semibold text-secondary mb-1">Syslog Host (IP or hostname)</label>
+                <input type="text" id="syslog_udp_host" name="syslog_udp_host" placeholder="192.168.1.100 or siem.example.com" value="{{ settings.syslog_udp_host }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <div>
+                <label for="syslog_udp_port" class="block text-sm font-semibold text-secondary mb-1">UDP Port</label>
+                <input type="number" id="syslog_udp_port" name="syslog_udp_port" min="1" max="65535" value="{{ settings.syslog_udp_port }}" placeholder="514"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Syslog Settings</button>
+        </form>
+        <div id="syslogMessage" class="mt-4 hidden text-sm"></div>
+    </div>
+</div>
+
+<script>
+document.querySelectorAll('.settings-tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        var tab = this.getAttribute('data-tab');
+        document.querySelectorAll('.settings-tab-btn').forEach(function(b) { b.classList.remove('active', 'bg-cyan-600', 'text-white'); b.classList.add('bg-tertiary', 'text-primary'); });
+        this.classList.add('active', 'bg-cyan-600', 'text-white');
+        this.classList.remove('bg-tertiary', 'text-primary');
+        document.querySelectorAll('.settings-tab-pane').forEach(function(p) { p.classList.add('hidden'); });
+        var pane = document.getElementById('settings-tab-' + tab);
+        if (pane) pane.classList.remove('hidden');
+    });
+});
+
+document.getElementById('feedsForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('feedsMessage');
+    msgEl.classList.add('hidden');
+    try {
+        var res = await fetch('/api/admin/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                feeds_public_enabled: document.getElementById('feeds_public_enabled').checked ? 'true' : 'false',
+                feed_cache_enabled: document.getElementById('feed_cache_enabled').checked ? 'true' : 'false',
+                feed_cache_ttl_seconds: document.getElementById('feed_cache_ttl_seconds').value
+            })
+        });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        if (data.success) {
+            msgEl.classList.add('text-green-400');
+            msgEl.classList.remove('text-red-400');
+            msgEl.textContent = 'Settings saved.';
+        } else {
+            msgEl.classList.add('text-red-400');
+            msgEl.classList.remove('text-green-400');
+            msgEl.textContent = data.message || 'Failed to save.';
+        }
+    } catch (err) {
+        msgEl.classList.remove('hidden');
+        msgEl.classList.add('text-red-400');
+        msgEl.textContent = 'Network error.';
+    }
+});
+
+document.getElementById('searchForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('searchMessage');
+    msgEl.classList.add('hidden');
+    try {
+        var res = await fetch('/api/admin/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                search_comment_rtl_by_script: document.getElementById('search_comment_rtl_by_script').checked ? 'true' : 'false'
+            })
+        });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        if (data.success) {
+            msgEl.classList.add('text-green-400');
+            msgEl.classList.remove('text-red-400');
+            msgEl.textContent = 'Settings saved. Reload the main app page for the change to apply.';
+        } else {
+            msgEl.classList.add('text-red-400');
+            msgEl.classList.remove('text-green-400');
+            msgEl.textContent = data.message || 'Failed to save.';
+        }
+    } catch (err) {
+        msgEl.classList.remove('hidden');
+        msgEl.classList.add('text-red-400');
+        msgEl.textContent = 'Network error.';
+    }
+});
+
+document.getElementById('settingsForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('settingsMessage');
+    msgEl.classList.add('hidden');
+    try {
+        var ldapServers = [];
+        document.querySelectorAll('#ldapServersContainer .ldap-server-row').forEach(function(row) {
+            var url = (row.querySelector('.ldap-srv-url') && row.querySelector('.ldap-srv-url').value) || '';
+            var baseDn = (row.querySelector('.ldap-srv-base-dn') && row.querySelector('.ldap-srv-base-dn').value) || '';
+            var bindDn = (row.querySelector('.ldap-srv-bind-dn') && row.querySelector('.ldap-srv-bind-dn').value) || '';
+            var bindPw = (row.querySelector('.ldap-srv-bind-password') && row.querySelector('.ldap-srv-bind-password').value) || '';
+            ldapServers.push({ url: url, base_dn: baseDn, bind_dn: bindDn, bind_password: bindPw });
+        });
+        var res = await fetch('/api/admin/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                session_inactivity_timeout_minutes: document.getElementById('session_inactivity_timeout_minutes').value,
+                auth_mode: document.getElementById('auth_mode').value,
+                ldap_enabled: document.getElementById('ldap_enabled').value,
+                ldap_servers: ldapServers,
+                ldap_user_filter: document.getElementById('ldap_user_filter').value
+            })
+        });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        if (data.success) {
+            msgEl.classList.add('text-green-400');
+            msgEl.classList.remove('text-red-400');
+            msgEl.textContent = 'Settings saved.';
+        } else {
+            msgEl.classList.add('text-red-400');
+            msgEl.classList.remove('text-green-400');
+            msgEl.textContent = data.message || 'Failed to save.';
+        }
+    } catch (err) {
+        msgEl.classList.remove('hidden');
+        msgEl.classList.add('text-red-400');
+        msgEl.textContent = 'Network error.';
+    }
+});
+
+var ldapServerRowHtml = '<div class="ldap-server-row rounded-lg border border-white/10 bg-black/20 overflow-hidden">'
+    + '<div class="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/30">'
+    + '<span class="ldap-server-label text-xs font-semibold text-secondary">Server</span>'
+    + '<button type="button" class="ldap-remove-server px-2 py-1.5 rounded text-sm font-medium bg-red-600/80 hover:bg-red-500 text-white transition">Remove</button>'
+    + '</div>'
+    + '<div class="p-4 space-y-3">'
+    + '<div><label class="block text-xs font-semibold text-secondary mb-1">URL</label>'
+    + '<input type="text" class="ldap-srv-url w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="ldap://dc.example.com"></div>'
+    + '<div><label class="block text-xs font-semibold text-secondary mb-1">Base DN</label>'
+    + '<input type="text" class="ldap-srv-base-dn w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="DC=example,DC=com"></div>'
+    + '<div><label class="block text-xs font-semibold text-secondary mb-1">Bind DN (service account)</label>'
+    + '<input type="text" class="ldap-srv-bind-dn w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="CN=svc_ldap,..."></div>'
+    + '<div><label class="block text-xs font-semibold text-secondary mb-1">Bind Password</label>'
+    + '<input type="password" class="ldap-srv-bind-password w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="***" autocomplete="new-password"></div>'
+    + '</div></div>';
+function ldapRenumberServers() {
+    document.querySelectorAll('#ldapServersContainer .ldap-server-row .ldap-server-label').forEach(function(el, i) {
+        el.textContent = 'Server ' + (i + 1);
+    });
+}
+document.getElementById('ldapAddServerBtn').addEventListener('click', function() {
+    var container = document.getElementById('ldapServersContainer');
+    var div = document.createElement('div');
+    div.innerHTML = ldapServerRowHtml.trim();
+    container.appendChild(div.firstChild);
+    ldapRenumberServers();
+});
+document.getElementById('ldapServersContainer').addEventListener('click', function(e) {
+    if (e.target && e.target.classList && e.target.classList.contains('ldap-remove-server')) {
+        var row = e.target.closest('.ldap-server-row');
+        if (row) {
+            row.remove();
+            ldapRenumberServers();
+        }
+    }
+});
+
+document.getElementById('ldapTestBtn').addEventListener('click', async function() {
+    var logEl = document.getElementById('ldapTestLog');
+    var contentEl = document.getElementById('ldapTestLogContent');
+    var spinnerEl = document.getElementById('ldapTestSpinner');
+    logEl.classList.add('hidden');
+    contentEl.innerHTML = '';
+    spinnerEl.classList.remove('hidden');
+    this.disabled = true;
+    var ldapServers = [];
+    document.querySelectorAll('#ldapServersContainer .ldap-server-row').forEach(function(row) {
+        var url = (row.querySelector('.ldap-srv-url') && row.querySelector('.ldap-srv-url').value) || '';
+        var baseDn = (row.querySelector('.ldap-srv-base-dn') && row.querySelector('.ldap-srv-base-dn').value) || '';
+        var bindDn = (row.querySelector('.ldap-srv-bind-dn') && row.querySelector('.ldap-srv-bind-dn').value) || '';
+        var bindPw = (row.querySelector('.ldap-srv-bind-password') && row.querySelector('.ldap-srv-bind-password').value) || '';
+        ldapServers.push({ url: url, base_dn: baseDn, bind_dn: bindDn, bind_password: bindPw });
+    });
+    try {
+        var res = await fetch('/api/admin/ldap/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify(ldapServers.length ? { ldap_servers: ldapServers } : {})
+        });
+        var text = await res.text();
+        var data = null;
+        try {
+            data = text ? JSON.parse(text) : null;
+        } catch (parseErr) {
+            spinnerEl.classList.add('hidden');
+            logEl.classList.remove('hidden');
+            var preview = (text || '').trim().substring(0, 400);
+            if (preview.length < (text || '').trim().length) preview += '...';
+            var escaped = preview.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            contentEl.innerHTML = '<div class="text-red-400 space-y-2">'
+                + '<div><strong>Server returned a non-JSON response (HTTP ' + res.status + ').</strong></div>'
+                + '<div>This usually means: (1) Session expired - log in again as admin, or (2) Server error.</div>'
+                + '<div class="text-amber-300 text-xs mt-2">Response preview:</div>'
+                + '<pre class="bg-black/40 p-2 rounded break-all text-xs overflow-x-auto">' + escaped + '</pre></div>';
+            this.disabled = false;
+            return;
+        }
+        spinnerEl.classList.add('hidden');
+        logEl.classList.remove('hidden');
+        if (data && data.servers && data.servers.length) {
+            var parts = [];
+            data.servers.forEach(function(srv, idx) {
+                var title = 'Server ' + (idx + 1) + ' (' + (srv.url || 'empty') + ')';
+                parts.push('<div class="font-semibold text-amber-300 mt-2">' + title + ' &mdash; ' + (srv.success ? 'OK' : 'Failed') + '</div>');
+                (srv.steps || []).forEach(function(s) {
+                    var icon = s.status === 'ok' ? '\u2713' : (s.status === 'fail' ? '\u2717' : '?');
+                    var color = s.status === 'ok' ? 'text-green-400' : (s.status === 'fail' ? 'text-red-400' : 'text-secondary');
+                    var msg = (s.message || '') ? ' \u2014 ' + s.message : '';
+                    parts.push('<div class="' + color + ' pl-2">[' + icon + '] ' + (s.step || '') + msg + '</div>');
+                });
+            });
+            contentEl.innerHTML = parts.join('');
+        } else if (data && data.steps && data.steps.length) {
+            var lines = [];
+            data.steps.forEach(function(s) {
+                var icon = s.status === 'ok' ? '\u2713' : (s.status === 'fail' ? '\u2717' : '?');
+                var color = s.status === 'ok' ? 'text-green-400' : (s.status === 'fail' ? 'text-red-400' : 'text-secondary');
+                lines.push({ icon: icon, color: color, step: s.step, msg: s.message || '' });
+            });
+            contentEl.innerHTML = lines.map(function(l) {
+                var msg = l.msg ? ' \u2014 ' + l.msg : '';
+                return '<div class="' + l.color + '">[' + l.icon + '] ' + l.step + msg + '</div>';
+            }).join('');
+        } else {
+            var errMsg = (data && data.message) ? data.message : 'Unknown error';
+            var isAuth = (data && data.require_login) || res.status === 401;
+            contentEl.innerHTML = '<div class="text-red-400">'
+                + (isAuth ? '<div class="font-semibold">Session expired or not authorized.</div>' : '')
+                + '<div class="mt-1 font-mono text-sm break-words">' + errMsg.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div></div>';
+        }
+    } catch (err) {
+        spinnerEl.classList.add('hidden');
+        logEl.classList.remove('hidden');
+        contentEl.innerHTML = '<div class="text-red-400">Network error: ' + (err.message || 'Failed') + '</div>';
+    }
+    this.disabled = false;
+});
+
+document.getElementById('syslogForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('syslogMessage');
+    msgEl.classList.add('hidden');
+    try {
+        var res = await fetch('/api/admin/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                syslog_udp_enabled: document.getElementById('syslog_udp_enabled').value,
+                syslog_udp_host: document.getElementById('syslog_udp_host').value.trim(),
+                syslog_udp_port: document.getElementById('syslog_udp_port').value || '514'
+            })
+        });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        if (data.success) {
+            msgEl.classList.add('text-green-400');
+            msgEl.classList.remove('text-red-400');
+            msgEl.textContent = 'Syslog settings saved.';
+        } else {
+            msgEl.classList.add('text-red-400');
+            msgEl.classList.remove('text-green-400');
+            msgEl.textContent = data.message || 'Failed to save.';
+        }
+    } catch (err) {
+        msgEl.classList.remove('hidden');
+        msgEl.classList.add('text-red-400');
+        msgEl.textContent = 'Network error.';
+    }
+});
+
+function mispPayload() {
+    return {
+        misp_enabled: document.getElementById('misp_enabled').value,
+        misp_url: document.getElementById('misp_url').value,
+        misp_api_key: document.getElementById('misp_api_key').value,
+        misp_verify_ssl: document.getElementById('misp_verify_ssl').value,
+        misp_last_days: document.getElementById('misp_last_days').value,
+        misp_filter_tags: document.getElementById('misp_filter_tags').value,
+        misp_filter_types: document.getElementById('misp_filter_types').value,
+        misp_published_only: document.getElementById('misp_published_only').value,
+        misp_default_ttl: document.getElementById('misp_default_ttl').value,
+        misp_sync_user: document.getElementById('misp_sync_user').value,
+        misp_pull_interval: document.getElementById('misp_pull_interval').value,
+        misp_exclude_from_champs: document.getElementById('misp_exclude_from_champs').value,
+        misp_push_enabled: document.getElementById('misp_push_enabled').value,
+        misp_push_include_comment: document.getElementById('misp_push_include_comment').value,
+        misp_push_default_event_id: (document.getElementById('misp_push_default_event_id') && document.getElementById('misp_push_default_event_id').value) ? document.getElementById('misp_push_default_event_id').value.trim() : '',
+    };
+}
+function showMispMsg(text, ok) {
+    var el = document.getElementById('mispMessage');
+    el.classList.remove('hidden', 'text-green-400', 'text-red-400', 'text-yellow-400');
+    el.classList.add(ok ? 'text-green-400' : 'text-red-400');
+    el.textContent = text;
+}
+document.getElementById('mispForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    try {
+        var res = await fetch('/api/admin/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(mispPayload())
+        });
+        var data = await res.json();
+        showMispMsg(data.success ? 'MISP settings saved.' : (data.message || 'Failed to save.'), data.success);
+    } catch (err) {
+        showMispMsg('Network error.', false);
+    }
+});
+function renderMispLog(steps, addedSamples, invalidSamples) {
+    var logEl = document.getElementById('mispLog');
+    var contentEl = document.getElementById('mispLogContent');
+    var parts = [];
+    if (steps && steps.length) {
+        parts.push(steps.map(function(s) {
+            var icon = s.status === 'ok' ? '\u2713' : (s.status === 'fail' ? '\u2717' : '?');
+            var color = s.status === 'ok' ? 'text-green-400' : (s.status === 'fail' ? 'text-red-400' : 'text-secondary');
+            var msg = s.message ? ' \u2014 ' + s.message : '';
+            return '<div class="' + color + '">[' + icon + '] ' + s.step + msg + '</div>';
+        }).join(''));
+    }
+    if (addedSamples && addedSamples.length > 0) {
+        parts.push('<div class="mt-3 pt-2 border-t border-white/10 text-cyan-300 font-semibold">New IOCs added (showing up to 100):</div>');
+        addedSamples.forEach(function(item) {
+            var type = (item.type || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            var value = (item.value || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            parts.push('<div class="text-sm mt-0.5">' + type + ': <span class="text-white/90">' + value + '</span></div>');
+        });
+    }
+    if (invalidSamples && invalidSamples.length > 0) {
+        parts.push('<div class="mt-3 pt-2 border-t border-white/10 text-amber-300 font-semibold">Invalid (skipped by validation, showing up to 30):</div>');
+        invalidSamples.forEach(function(item) {
+            var type = (item.type || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            var value = (item.value || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            parts.push('<div class="text-sm mt-0.5 text-amber-200/90">' + type + ': <span class="text-white/70">' + value + '</span></div>');
+        });
+    }
+    if (parts.length === 0) {
+        contentEl.innerHTML = '<div class="text-secondary">No steps returned.</div>';
+    } else {
+        contentEl.innerHTML = parts.join('');
+    }
+    logEl.classList.remove('hidden');
+}
+
+document.getElementById('mispTestBtn').addEventListener('click', async function() {
+    var logEl = document.getElementById('mispLog');
+    var contentEl = document.getElementById('mispLogContent');
+    var spinnerEl = document.getElementById('mispSpinner');
+    var btn = this;
+    logEl.classList.add('hidden');
+    contentEl.innerHTML = '';
+    spinnerEl.classList.remove('hidden');
+    btn.disabled = true;
+    showMispMsg('Testing connection...', true);
+    document.getElementById('mispMessage').classList.remove('text-green-400');
+    document.getElementById('mispMessage').classList.add('text-yellow-400');
+    try {
+        var res = await fetch('/api/admin/misp/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                misp_url: document.getElementById('misp_url').value,
+                misp_api_key: document.getElementById('misp_api_key').value,
+                misp_verify_ssl: document.getElementById('misp_verify_ssl').value,
+            })
+        });
+        var data = await res.json();
+        spinnerEl.classList.add('hidden');
+        if (data && data.data && data.data.steps && data.data.steps.length) {
+            renderMispLog(data.data.steps, data.data.added_samples, data.data.invalid_samples);
+        } else {
+            contentEl.innerHTML = '<div class="text-red-400">' + (data.message || 'No steps returned.') + '</div>';
+            logEl.classList.remove('hidden');
+        }
+        showMispMsg(data.message || (data.success ? 'Connected!' : 'Check log above.'), data.success);
+    } catch (err) {
+        spinnerEl.classList.add('hidden');
+        contentEl.innerHTML = '<div class="text-red-400">Network error: ' + (err.message || 'Failed') + '</div>';
+        logEl.classList.remove('hidden');
+        showMispMsg('Network error.', false);
+    }
+    btn.disabled = false;
+});
+document.getElementById('mispSyncBtn').addEventListener('click', async function() {
+    if (typeof appConfirm !== 'function') { if (!confirm('Run MISP sync now?')) return; }
+    else { var ok = await appConfirm({ title: 'MISP Sync', message: 'Run MISP sync now? New IOCs will be imported.', okText: 'Run Sync' }); if (!ok) return; }
+    var logEl = document.getElementById('mispLog');
+    var contentEl = document.getElementById('mispLogContent');
+    var spinnerEl = document.getElementById('mispSpinner');
+    var btn = this;
+    logEl.classList.add('hidden');
+    contentEl.innerHTML = '';
+    spinnerEl.classList.remove('hidden');
+    btn.disabled = true;
+    showMispMsg('Syncing...', true);
+    document.getElementById('mispMessage').classList.remove('text-green-400');
+    document.getElementById('mispMessage').classList.add('text-yellow-400');
+    try {
+        var res = await fetch('/api/admin/misp/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        var data = await res.json();
+        spinnerEl.classList.add('hidden');
+        if (data && data.data && data.data.steps && data.data.steps.length) {
+            renderMispLog(data.data.steps, data.data.added_samples, data.data.invalid_samples);
+        } else if (data && data.data && (data.data.added !== undefined || data.data.error)) {
+            var steps = [
+                { step: 'Sync result', status: data.success ? 'ok' : 'fail', message: data.message || data.data.error || 'Unknown' }
+            ];
+            renderMispLog(steps, data.data.added_samples, data.data.invalid_samples);
+        } else {
+            contentEl.innerHTML = '<div class="' + (data.success ? 'text-green-400' : 'text-red-400') + '">' + (data.message || 'No log.') + '</div>';
+            logEl.classList.remove('hidden');
+        }
+        var msg = data.message || (data.success ? 'Sync complete.' : 'Sync failed.');
+        if (data.data && data.data.added !== undefined) {
+            msg += ' (added: ' + data.data.added + ', skipped: ' + data.data.skipped + ', errors: ' + (data.data.errors || 0) + ')';
+        }
+        showMispMsg(msg, data.success);
+    } catch (err) {
+        spinnerEl.classList.add('hidden');
+        contentEl.innerHTML = '<div class="text-red-400">Network error: ' + (err.message || 'Failed') + '</div>';
+        logEl.classList.remove('hidden');
+        showMispMsg('Network error.', false);
+    }
+    btn.disabled = false;
+});
+
+async function loadTagsGovernance() {
+    try {
+        var res = await fetch('/api/admin/tags');
+        var data = await res.json();
+        if (!data || !data.success) return;
+        var cfg = data.allowed_tags || [];
+        document.getElementById('tags_restricted_enabled').checked = !!data.tags_restricted_enabled;
+        document.getElementById('tags_allow_suggest').checked = !!data.tags_allow_suggest;
+        document.getElementById('allowed_tags_text').value = (cfg || []).join('\n');
+    } catch (e) { /* ignore */ }
+}
+
+async function loadTagSuggestions() {
+    var body = document.getElementById('tagSuggestionsBody');
+    var empty = document.getElementById('tagSuggestionsEmpty');
+    if (!body) return;
+    body.innerHTML = '<tr><td colspan="4" class="px-3 py-3 text-secondary text-sm">Loading…</td></tr>';
+    try {
+        var res = await fetch('/api/admin/tags/suggestions');
+        var data = await res.json();
+        var items = (data && data.success && data.suggestions) ? data.suggestions : [];
+        if (empty) empty.classList.toggle('hidden', items.length > 0);
+        if (!items.length) {
+            body.innerHTML = '';
+            return;
+        }
+        body.innerHTML = items.map(function(it) {
+            var tag = (it.tag || '');
+            var by = (it.suggested_by || '');
+            var at = (it.suggested_at || '').slice(0, 19).replace('T', ' ');
+            var id = (it.id || '');
+            return '<tr>' +
+                '<td class="px-3 py-2 font-mono text-primary">' + tag.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</td>' +
+                '<td class="px-3 py-2 text-secondary">' + by.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</td>' +
+                '<td class="px-3 py-2 text-secondary whitespace-nowrap">' + at.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</td>' +
+                '<td class="px-3 py-2">' +
+                    '<div class="flex gap-2">' +
+                        '<button type="button" class="px-3 py-1.5 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition text-xs" data-action="approve" data-id="' + id + '">Approve</button>' +
+                        '<button type="button" class="px-3 py-1.5 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-red-400/70 transition text-red-300 text-xs" data-action="reject" data-id="' + id + '">Reject</button>' +
+                    '</div>' +
+                '</td>' +
+            '</tr>';
+        }).join('');
+    } catch (e) {
+        body.innerHTML = '<tr><td colspan="4" class="px-3 py-3 text-red-400 text-sm">Failed to load.</td></tr>';
+    }
+}
+
+document.getElementById('tagsForm')?.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('tagsMessage');
+    msgEl.classList.add('hidden');
+    try {
+        var allowedText = (document.getElementById('allowed_tags_text').value || '').trim();
+        // Accept newline or comma separated
+        var normalized = allowedText.replace(/\r/g, '').split('\n').map(function(s){return s.trim();}).filter(Boolean).join(', ');
+        var res = await fetch('/api/admin/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                tags_restricted_enabled: document.getElementById('tags_restricted_enabled').checked ? 'true' : 'false',
+                tags_allow_suggest: document.getElementById('tags_allow_suggest').checked ? 'true' : 'false',
+                allowed_tags: normalized
+            })
+        });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        if (data.success) {
+            msgEl.classList.add('text-green-400');
+            msgEl.classList.remove('text-red-400');
+            msgEl.textContent = 'Tags settings saved.';
+            await loadTagsGovernance();
+        } else {
+            msgEl.classList.add('text-red-400');
+            msgEl.classList.remove('text-green-400');
+            msgEl.textContent = data.message || 'Failed to save.';
+        }
+    } catch (err) {
+        msgEl.classList.remove('hidden');
+        msgEl.classList.add('text-red-400');
+        msgEl.textContent = 'Network error.';
+    }
+});
+
+document.getElementById('refreshTagSuggestions')?.addEventListener('click', loadTagSuggestions);
+document.getElementById('tagSuggestionsBody')?.addEventListener('click', async function(e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    var action = btn.getAttribute('data-action');
+    var id = btn.getAttribute('data-id');
+    if (!id) return;
+    try {
+        var url = action === 'approve' ? '/api/admin/tags/suggestions/approve' : '/api/admin/tags/suggestions/reject';
+        var res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [id] }) });
+        var data = await res.json();
+        if (data && data.success) {
+            await loadTagsGovernance();
+            await loadTagSuggestions();
+        }
+    } catch (e2) { /* ignore */ }
+});
+
+// Initial load for Tags tab
+loadTagsGovernance();
+loadTagSuggestions();
+</script>
+{% endblock %}

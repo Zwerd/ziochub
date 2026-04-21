@@ -1,0 +1,105 @@
+// ============================================================================
+// BASE - Typography, Reset, Global Styles
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Font Families
+// ----------------------------------------------------------------------------
+body, input, select, textarea, button, label, .tab-button {
+    font-family: $font-ui;
+}
+
+.font-mono, .badge, code, pre {
+    font-family: $font-mono;
+}
+
+// Global font inheritance and scrollbar
+* {
+    font-family: inherit;
+    @include custom-scrollbar;
+}
+
+// ----------------------------------------------------------------------------
+// Utility Classes (mapped to CSS variables)
+// ----------------------------------------------------------------------------
+.bg-primary { background-color: var(--bg-primary); }
+.bg-secondary { background-color: var(--bg-secondary); }
+.bg-tertiary { background-color: var(--bg-tertiary); }
+.text-primary { color: var(--text-primary); }
+.text-secondary { color: var(--text-secondary); }
+.accent-green { color: var(--accent-green); }
+.accent-blue { color: var(--accent-blue); }
+
+// ----------------------------------------------------------------------------
+// Links
+// ----------------------------------------------------------------------------
+a {
+    color: var(--accent-blue);
+    text-decoration: none;
+    transition: color var(--transition-fast);
+    
+    &:hover {
+        text-decoration: underline;
+    }
+    
+    @include focus-visible-ring;
+}
+
+// ----------------------------------------------------------------------------
+// Selection
+// ----------------------------------------------------------------------------
+::selection {
+    background: var(--accent-blue);
+    color: #fff;
+}
+
+// ----------------------------------------------------------------------------
+// Code
+// ----------------------------------------------------------------------------
+code {
+    font-family: $font-mono;
+    font-size: 0.875em;
+    padding: 0.125rem 0.375rem;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    color: var(--accent-green);
+}
+
+pre {
+    font-family: $font-mono;
+    overflow-x: auto;
+    padding: var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    
+    code {
+        padding: 0;
+        background: none;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Images
+// ----------------------------------------------------------------------------
+img {
+    max-width: 100%;
+    height: auto;
+}
+
+// ----------------------------------------------------------------------------
+// Lists (when not styled)
+// ----------------------------------------------------------------------------
+ul, ol {
+    &:not([class]) {
+        padding-left: 1.5rem;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// HR
+// ----------------------------------------------------------------------------
+hr {
+    border: none;
+    border-top: 1px solid var(--border-light);
+    margin: var(--space-4) 0;
+}

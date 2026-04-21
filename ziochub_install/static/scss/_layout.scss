@@ -1,0 +1,300 @@
+// ============================================================================
+// LAYOUT - Header, Navigation, Tabs
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Header Bar
+// ----------------------------------------------------------------------------
+.header-bar {
+    background-color: var(--bg-secondary);
+    border-radius: 0;
+    box-shadow: none;
+    
+    .bg-tertiary {
+        background-color: var(--bg-tertiary);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Neon Header
+// ----------------------------------------------------------------------------
+.neon-header {
+    position: sticky;
+    top: 0;
+    z-index: var(--z-sticky);
+    background-color: var(--bg-secondary);
+    @include glass-effect;
+}
+
+header.neon-header {
+    background-color: rgba(30, 41, 59, 0.95);
+    padding: 0;
+    display: flex;
+    align-items: stretch;
+    min-height: 60px;
+}
+
+[data-theme="light"] header.neon-header {
+    background-color: rgba(255, 255, 255, 0.98);
+    border-bottom: 1px solid var(--border-light);
+}
+
+// Brand styling
+[data-theme="light"] header .brand-name {
+    color: #047857;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 20px rgba(4, 120, 87, 0.25);
+    font-weight: 800;
+    letter-spacing: 0.08em;
+}
+
+[data-theme="light"] header .creator-name {
+    color: #0369a1;
+    font-weight: 600;
+}
+
+// ----------------------------------------------------------------------------
+// Main Tabs
+// ----------------------------------------------------------------------------
+.navbar-tabs {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    flex-wrap: nowrap;
+    border: none;
+    background: transparent;
+    margin: 0;
+    @include hide-scrollbar;
+}
+
+.tab-button {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    height: 100%;
+    min-height: 60px;
+    min-width: 7rem;
+    padding: 8px 12px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.5);
+    text-decoration: none;
+    white-space: normal;
+    text-align: center;
+    position: relative;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    transition: color var(--transition-normal), background var(--transition-normal);
+    
+    &:hover {
+        color: rgba(255, 255, 255, 0.85);
+        background: rgba(255, 255, 255, 0.05);
+    }
+    
+    &.active {
+        color: #fff;
+        font-weight: 600;
+        
+        &::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--accent-green);
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.8), 0 0 20px rgba(0, 255, 65, 0.4);
+            border: none;
+        }
+    }
+    
+    svg {
+        opacity: 0.7;
+        transition: opacity var(--transition-normal);
+    }
+    
+    &:hover svg,
+    &.active svg {
+        opacity: 1;
+    }
+}
+
+// Light mode tabs
+[data-theme="light"] {
+    .tab-button {
+        color: rgba(0, 0, 0, 0.5);
+        
+        &:hover {
+            color: rgba(0, 0, 0, 0.85);
+            background: rgba(0, 0, 0, 0.03);
+        }
+        
+        &.active {
+            color: #111;
+            
+            &::after {
+                background: #2563eb;
+                box-shadow: none;
+            }
+        }
+    }
+}
+
+// Tab container reset (removes Tailwind borders)
+.tab-container,
+nav[role="tablist"],
+nav:has(.tab-button),
+div:has(.tab-button):not(.navbar-left):not(.navbar-tabs) {
+    border: none;
+    box-shadow: none;
+    outline: none;
+    margin: 0;
+    padding-top: 0;
+}
+
+div:has(.tab-button):not(.navbar-left):not(.navbar-tabs) {
+    padding-bottom: var(--space-1);
+    display: flex;
+    align-items: center;
+}
+
+div:has(.tab-button)::before,
+div:has(.tab-button)::after {
+    display: none;
+    content: none;
+}
+
+// ----------------------------------------------------------------------------
+// Admin Panel Tabs
+// ----------------------------------------------------------------------------
+.admin-tab-nav {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    gap: 2px;
+    margin-bottom: var(--space-6);
+    border-bottom: 1px solid var(--border-subtle);
+    overflow-x: auto;
+    direction: ltr;
+    @include hide-scrollbar;
+}
+
+.admin-tab {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 18px;
+    min-width: 7rem;
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.55);
+    text-decoration: none;
+    white-space: nowrap;
+    position: relative;
+    transition: color var(--transition-normal), background var(--transition-normal);
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    direction: ltr;
+    text-align: center;
+    
+    &:hover {
+        color: rgba(255, 255, 255, 0.9);
+        background: rgba(255, 255, 255, 0.04);
+    }
+    
+    &.active {
+        color: #fff;
+        font-weight: 600;
+        
+        &::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--accent-green);
+            box-shadow: 0 0 10px rgba(0, 255, 65, 0.7), 0 0 20px rgba(0, 255, 65, 0.3);
+            border-radius: 2px 2px 0 0;
+        }
+    }
+    
+    svg {
+        opacity: 0.7;
+        transition: opacity var(--transition-normal);
+        flex-shrink: 0;
+    }
+    
+    &:hover svg,
+    &.active svg {
+        opacity: 1;
+    }
+}
+
+// Light mode admin tabs
+[data-theme="light"] {
+    .admin-tab-nav {
+        border-bottom-color: var(--border-light);
+    }
+    
+    .admin-tab {
+        color: rgba(0, 0, 0, 0.5);
+        
+        &:hover {
+            color: rgba(0, 0, 0, 0.85);
+            background: rgba(0, 0, 0, 0.03);
+        }
+        
+        &.active {
+            color: #111;
+            
+            &::after {
+                background: #2563eb;
+                box-shadow: none;
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Settings Sub-Tabs
+// ----------------------------------------------------------------------------
+.settings-tab-btn {
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    font-weight: 500;
+    font-size: 0.875rem;
+    transition: all var(--transition-normal);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border: none;
+    cursor: pointer;
+    
+    &:hover {
+        background: rgba(255, 255, 255, 0.08);
+    }
+    
+    &.active {
+        background: #0891b2;
+        color: #ffffff;
+    }
+}
+
+[data-theme="light"] {
+    .settings-tab-btn {
+        background: rgba(0, 0, 0, 0.03);
+        
+        &:hover {
+            background: rgba(0, 0, 0, 0.06);
+        }
+        
+        &.active {
+            background: #0891b2;
+            color: #ffffff;
+        }
+    }
+}

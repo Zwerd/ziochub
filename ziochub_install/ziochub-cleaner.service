@@ -1,0 +1,18 @@
+[Unit]
+Description=ZIoCHub Expired IOC Cleanup
+After=network.target
+
+[Service]
+Type=oneshot
+User=ziochub
+Group=ziochub
+WorkingDirectory=/opt/ziochub
+Environment=ZIOCHUB_DATA_DIR=/opt/ziochub/data
+ExecStart=/opt/ziochub/venv/bin/python /opt/ziochub/cleaner.py
+Environment="PATH=/opt/ziochub/venv/bin:/usr/bin:/bin"
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/ziochub/data
+ProtectHome=true

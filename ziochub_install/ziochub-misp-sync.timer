@@ -1,0 +1,10 @@
+[Unit]
+Description=ZIoCHub MISP Sync check (job decides based on admin interval)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,182 @@
+// ============================================================================
+// COMPONENTS - Buttons, Cards, Modals, Badges
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Badges
+// ----------------------------------------------------------------------------
+.badge-type,
+.badge-md5,
+.badge-sha256,
+.badge-hash {
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #fff;
+}
+
+.badge-type--md5,
+.badge-md5 { background-color: #800080; }
+
+.badge-type--sha256,
+.badge-sha256 { background-color: #0000FF; }
+
+.badge-type--hash,
+.badge-hash { background-color: #6c757d; }
+
+// ----------------------------------------------------------------------------
+// Buttons - Command Style
+// ----------------------------------------------------------------------------
+.btn-cmd-primary,
+.btn-cmd-danger,
+.btn-cmd-neutral {
+    @include btn-base;
+    @include focus-visible-glow;
+}
+
+.btn-cmd-primary {
+    background: linear-gradient(180deg, rgba(0, 255, 65, 0.2) 0%, rgba(0, 255, 65, 0.1) 100%);
+    border-color: rgba(0, 255, 65, 0.4);
+    color: var(--accent-green);
+    
+    &:hover:not(:disabled) {
+        background: linear-gradient(180deg, rgba(0, 255, 65, 0.3) 0%, rgba(0, 255, 65, 0.15) 100%);
+        border-color: var(--accent-green);
+        box-shadow: var(--shadow-glow);
+    }
+}
+
+.btn-cmd-danger {
+    background: linear-gradient(180deg, rgba(239, 68, 68, 0.2) 0%, rgba(239, 68, 68, 0.1) 100%);
+    border-color: rgba(239, 68, 68, 0.4);
+    color: #ef4444;
+    
+    &:hover:not(:disabled) {
+        background: linear-gradient(180deg, rgba(239, 68, 68, 0.3) 0%, rgba(239, 68, 68, 0.15) 100%);
+        border-color: #ef4444;
+        box-shadow: 0 0 20px rgba(239, 68, 68, 0.3);
+    }
+}
+
+.btn-cmd-neutral {
+    background: linear-gradient(180deg, rgba(148, 163, 184, 0.15) 0%, rgba(148, 163, 184, 0.08) 100%);
+    border-color: rgba(148, 163, 184, 0.3);
+    color: var(--text-secondary);
+    
+    &:hover:not(:disabled) {
+        background: linear-gradient(180deg, rgba(148, 163, 184, 0.25) 0%, rgba(148, 163, 184, 0.12) 100%);
+        border-color: rgba(148, 163, 184, 0.5);
+        color: var(--text-primary);
+    }
+}
+
+// Compact button for tables
+.btn-cmd-sm {
+    padding: 0.25rem 0.625rem;
+    font-size: 0.6875rem;
+    letter-spacing: 0.04em;
+    line-height: 1.25;
+}
+
+// Light mode button adjustments
+[data-theme="light"] {
+    .btn-cmd-primary {
+        background: linear-gradient(180deg, rgba(0, 168, 50, 0.15) 0%, rgba(0, 168, 50, 0.08) 100%);
+        border-color: rgba(0, 168, 50, 0.4);
+        color: #15803d;
+        
+        &:hover:not(:disabled) {
+            background: linear-gradient(180deg, rgba(0, 168, 50, 0.25) 0%, rgba(0, 168, 50, 0.12) 100%);
+            box-shadow: 0 0 15px rgba(0, 168, 50, 0.2);
+        }
+    }
+    
+    .btn-cmd-danger {
+        color: #dc2626;
+        
+        &:hover:not(:disabled) {
+            box-shadow: 0 0 15px rgba(220, 38, 38, 0.2);
+        }
+    }
+    
+    .btn-cmd-primary:focus-visible,
+    .btn-cmd-danger:focus-visible,
+    .btn-cmd-neutral:focus-visible,
+    button:focus-visible {
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.4);
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Cards
+// ----------------------------------------------------------------------------
+.card-panel {
+    @include card-base;
+    overflow: hidden;
+}
+
+.card-panel--compact {
+    padding: var(--space-3) var(--space-4);
+}
+
+.report-card {
+    @include card-base;
+    padding: var(--space-4);
+}
+
+// ----------------------------------------------------------------------------
+// Modals
+// ----------------------------------------------------------------------------
+.modal-dialog {
+    @include card-base;
+    padding: var(--space-6);
+    max-width: 28rem;
+    width: 100%;
+    margin-left: var(--space-4);
+    margin-right: var(--space-4);
+}
+
+.modal-dialog--sm { max-width: 24rem; }
+.modal-dialog--lg { max-width: 32rem; }
+.modal-dialog--xl { max-width: 48rem; }
+.modal-dialog--2xl { max-width: 64rem; }
+
+// Modal visibility (must override Tailwind .flex)
+#editModal.hidden,
+#privateConfirmModal.hidden,
+#yaraPreviewModal.hidden,
+#yaraEditModal.hidden,
+#campaignEditModal.hidden,
+#yaraMetaEditModal.hidden {
+    display: none !important;
+}
+
+// Tab content visibility
+.tab-content.hidden {
+    display: none !important;
+}
+
+// ----------------------------------------------------------------------------
+// Commander Badge
+// ----------------------------------------------------------------------------
+.commander-badge {
+    background: rgba(0, 255, 65, 0.2);
+    border: 1px solid var(--accent-green);
+    color: var(--accent-green);
+    text-shadow: 0 0 6px rgba(0, 255, 65, 0.5);
+    padding: 0.25rem 0.5rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+[data-theme="light"] .commander-badge {
+    background: rgba(5, 150, 105, 0.12);
+    border-color: #0d9488;
+    color: #0f766e;
+    text-shadow: none;
+    font-weight: 700;
+}

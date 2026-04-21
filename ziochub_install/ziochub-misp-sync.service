@@ -1,0 +1,17 @@
+[Unit]
+Description=ZIoCHub MISP Sync - Pull IOCs from MISP
+After=network.target
+
+[Service]
+Type=oneshot
+User=ziochub
+Group=ziochub
+WorkingDirectory=/opt/ziochub
+ExecStart=/opt/ziochub/venv/bin/python /opt/ziochub/misp_sync_job.py
+Environment="PATH=/opt/ziochub/venv/bin:/usr/bin:/bin"
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/ziochub/data
+ProtectHome=true

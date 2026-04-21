@@ -1,0 +1,10 @@
+# Screenshot Placeholders
+
+Place the following screenshots in this directory:
+
+1. `dashboard_overview.png` - Commander Dashboard (Live Stats tab)
+2. `search_interface.png` - Search & Investigate tab
+3. `add_ioc_form.png` - Single Submission form
+4. `champs_tab.png` - Champs Analysis leaderboard
+
+See README.md for detailed screenshot instructions.

@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Shield shape (threat/security) -->
+  <path fill="#0ea5e9" d="M16 2L4 8v8c0 7 6 12 12 14 6-2 12-7 12-14V8L16 2z"/>
+  <!-- Inner shield highlight -->
+  <path fill="#38bdf8" d="M16 5L6 10v6c0 5.5 4.5 9.5 10 11.3 5.5-1.8 10-5.8 10-11.3v-6L16 5z"/>
+  <!-- Crosshair / target (IOC) -->
+  <circle cx="16" cy="14" r="4" fill="#0f172a"/>
+  <circle cx="16" cy="14" r="2" fill="#38bdf8"/>
+  <circle cx="16" cy="14" r="0.8" fill="#fff"/>
+</svg>

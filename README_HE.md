@@ -1,677 +1,495 @@
-# ZIoCHub — פורטל ניהול IOC ו-YARA
+# ZIoCHub — פורטל ניהול IOC ו‑YARA (בעברית)
 
-מסמך זה הוא **מדריך המערכת בעברית** (מאוחד מ־`README_HEB.md` הישן). למידע טכני מלא באנגלית (כולל פרטי API נוספים) ראו [`README.md`](README.md) ו-[`OFFLINE.md`](OFFLINE.md).
+זה ה־README בעברית. הוא לא “מסמך דרישות”, הוא יותר כמו יומן מלחמה של SOC: הייתה בעיה, נשבר לנו עוד משהו, ואז החלטנו שעדיף שיהיה לנו **Hub אחד** שמחזיק IOC + YARA + קמפיינים + דוחות + פידים — ובסוף גם מחייך אלינו בחזרה.
 
-מספר הגרסה בממשק מגיע מ־`constants.py` (למשל **2.0 Beta**).
+לגרסה האנגלית המלאה (כולל פרטים נוספים על API): [`../../README.md`](../../README.md)  
+לפריסה אופליין: [`../../OFFLINE.md`](../../OFFLINE.md)  
+לטיפול ב‑YARA pending בפידים: [`../YARA_FEEDS_AND_PENDING.md`](../YARA_FEEDS_AND_PENDING.md)
 
----
+מספר הגרסה שמופיע בכותרת המערכת מגיע מ־`constants.py` (למשל **2.0 Beta**).
+
+-
 
 ## תוכן עניינים
 
-- [למה יצרנו את המערכת](#he-why)
-- [פרויקטי קוד פתוח](#readme-he-open-source)
-- [תכונות עיקריות (מבט-על)](#he-features)
-- [גלריית תמונות](#he-gallery)
-- [הערך לארגון ולאנליסט](#he-value)
-- [מודולי הממשק (טאבים)](#he-tabs)
-- [התקנה](#he-install)
-- [פורטים ורשת](#he-ports)
-- [שירותי systemd](#he-systemd)
-- [מסכי הממשק (פירוט)](#he-screens)
-- [נקודות קצה — פידים](#he-feeds)
-- [TAXII 2.1 / STIX 2.1](#he-taxii)
-- [אינטגרציית MISP](#he-misp)
-- [אינטגרציית Cisco ESA (מילונים)](#he-esa)
-- [מודל הנתונים](#he-datamodel)
-- [הגדרות ומשתני סביבה](#he-config)
-- [תחזוקה](#he-maintenance)
-- [סקריפטים](#he-scripts)
-- [אבטחה](#he-security)
-- [ארכיטקטורת הפרויקט](#he-architecture)
-- [פריסה אופליינית](#he-offline)
-- [פתרון בעיות](#he-troubleshooting)
-- [גרסה ורישיונות](#he-version)
+- [למה בכלל זה קיים](#he-why)
+- [מה רואים בממשק (הטאבים)](#he-tabs)
+- [זרימת עבודה “יום בחיי אנליסט”](#he-day)
+- [פידים, TAXII, ומה פתאום צריך גם וגם](#he-feeds-taxii)
+- [אינטגרציות (אופציונלי)](#he-integrations)
+- [אדמין ומה הוא שולט](#he-admin)
+- [מודל נתונים (SQLite)](#he-data)
+- [אבטחה (בגובה העיניים)](#he-security)
+- [התקנה והרצה](#he-install)
+- [שירותים, טיימרים ותחזוקה](#he-ops)
+- [DEMO סטטי (GitHub Pages)](#he-demo)
+- [ארכיטקטורת קוד — איפה כל דבר חי](#he-architecture)
+- [פתרון תקלות נפוצות](#he-troubleshooting)
+- [קרדיטים וקוד פתוח](#he-oss)
 
----
+-
 
 <a id="he-why"></a>
 
-## למה יצרנו את המערכת?
+## למה בכלל זה קיים
 
-בסביבות SOC רבות יש צורך במקום **אחד**, **פשוט** ו**עצמאי** שבו אנליסטים מזינים מודיעין, מנהלים אותו לאורך זמן, ומזרימים אותו לציוד הגנה — בלי תלות בשירותי ענן או בשרשרת כלים מורכבת. ZIoCHub נבנתה סביב שלושה עקרונות:
+הסיפור הקצר: יום אחד גילינו שיש לנו חמישה מקומות שונים ל־IOC. אחד באקסל, אחד ב־MISP, אחד בפתקיות, אחד ב־SIEM, ואחד בראש של “רן מהלילה”.  
+הסיפור הארוך: אחרי שהאקסל החליט שהוא “נעול לעריכה”, והפתקיות החליטו שהן “ננעלות בתוך הכיס של המכנסיים בכביסה”, החלטנו להפסיק להתווכח עם המציאות:
 
-### 1. מצב OFFLINE מלא (או סגור לרשת)
+- צריך **מקור אמת אחד**.
+- צריך שזה יעבוד גם כשהרשת עקומה / מנותקת / “ה‑FW עשה עדכון”.
+- צריך שזה יהיה **פשוט**: אנליסט צריך IOC, קמפיין, הערה, תפוגה — לא דוקטורט.
+- צריך פידים לציוד שמבין **plain-text**.
+- ואם כבר יש לנו את כל זה, אז למה לא להפוך את העבודה לקצת יותר אנושית עם Champs, טיקר, יעדי צוות, ודוחות.
 
-- **אין תלות בקריאות חיצוניות** לתפעול שגרתי: ממשק, תרגומים, נכסי UI, ומסד הנתונים (SQLite) פועלים מקומית.
-- **GeoIP** (אופציונלי) עובד מקובץ MaxMind מקומי (`data/GeoLite2-City.mmdb`) — לא API בענן.
-- אינטגרציות כמו **MISP**, **LDAP**, **ESA**, **DXL** הן **אופציונליות** ומתבצעות רק מול תשתית **שלכם** ברשת הפנימית או בסגמנט המאושר.
-- ניתן להתקין באמצעות **חבילת offline** (`package_offline.sh` / `setup.sh --offline`) לסביבות מנותקות.
+ZIoCHub בנויה סביב שלושה עקרונות:
 
-### 2. KISS — פשוטות בתפעול
+- **OFFLINE‑friendly**: אפשר לעבוד בלי תלות בקריאות חיצוניות שוטפות. GeoIP יכול להיות מקומי (`data/GeoLite2-City.mmdb`). אינטגרציות הן “אם רוצים”.
+- **KISS**: אפליקציה אחת, SQLite אחד, גיבוי = קובץ.
+- **SOC‑first**: חקירה, הערות, היסטוריה, קמפיינים, YARA, פידים, TAXII — סביב הזרימה האמיתית של הצוות.
 
-- **ממשק אחד** עם טאבים ברורים: סטטיסטיקות, חיפוש, הגשה, YARA, קמפיינים, דוחות ועוד.
-- **SQLite** כמסד נתונים יחיד: גיבוי הוא קובץ, שחזור פשוט.
-- **פידים בטקסט פשוט** לציוד רשת ואבטחת דוא"ל (וגם פורמטים ל-Palo Alto, Checkpoint).
-- **TAXII 2.1 / STIX 2.1** ללקוחות תואמים — אותו מקור אמת.
-- הגדרות **אדמין** מרוכזות (משתמשים, אינטגרציות, תעודות, סקורינג).
-
-### 3. ערך מוסף ואמביציה לאנליסטים — חקירות עומק
-
-- **חיפוש וחקירה** — סינונים, היסטוריה, **הערות IOC** (נשמרות לפי סוג+ערך גם אחרי מחזורי מחיקה).
-- **קמפיינים וגרף** — קישור IOC ו-YARA, ויזואליזציה (vis-network).
-- **Feed Pulse** — נכנס/יוצא, אנומליות שפיות, החרגות; קטלוג פידים וחיבורים (כולל TAXII).
-- **Champs** — לוח מובילים, תגים, יעדי צוות.
-- **דוחות מודיעין** — תקופות, KPIs, ייצוא PDF.
-- **Hunter's Playbook** — קישורים מהירים לכלי חקירה.
-- **הישגים / מוטיבציה** (אופציונלי בפרופיל).
-
----
-
-<a id="readme-he-open-source"></a>
-
-## פרויקטי קוד פתוח — תשתית, יעילות וערך במחקר סייבר
-
-ZIoCHub נשענת על **מערכת אקולוגית של פרויקטים בקוד פתוח** (ברובם ברישיון פרמיסיבי — BSD/MIT/Apache ודומים).
-
-1. **שקיפות וביקורת** — קוד מקור, CVE, המלצות קהילה.
-2. **יעילות הנדסית** — לא לבנות מאפס HTTP, ORM, הדגשת קוד, גרפים.
-3. **ערך לאנליסט** — YARA, STIX/TAXII, MISP, גרפים — כלים מוכרים בתעשייה.
-
-### ליבת יישום השרת (Python)
-
-| פרויקט | קישור | תפקיד ב-ZIoCHub | יעילות | ערך לאנליסט |
-|--------|--------|------------------|---------|-------------|
-| **Python** | [python.org](https://www.python.org/) | שפת הריצה | אקוסיסטם עשיר, קלות הטמעה ב-Linux | סקריפטים וכלים זהים לשפת הצוות |
-| **Flask** | [Flask](https://flask.palletsprojects.com/) | Web: נתיבים, בקשות, תבניות | קל משקל, מתאים ל-air-gap | תגובה מהירה, פחות מורכבות |
-| **Flask-Login** | [Flask-Login](https://github.com/maxcountryman/flask-login) | סשן משתמש | סטנדרט עם Flask | הפרדת משתמשים, צוות מרובה |
-| **Flask-SQLAlchemy** | [Flask-SQLAlchemy](https://flask-sqlalchemy.palletsprojects.com/) | ORM + SQLite | שאילתות פרמטריות | חיפושים מהירים ללא SQL ידני |
-| **SQLAlchemy** | [SQLAlchemy](https://www.sqlalchemy.org/) | מיפוי, טרנזקציות | יציבות נתונים | מחזור חיים וחקירה עקביים |
-| **Werkzeug** | [Werkzeug](https://werkzeug.palletsprojects.com/) | WSGI, אבטחה (hash סיסמאות) | בסיס Flask | סיסמאות מודרניות (למשל scrypt) |
-| **SQLite** | [SQLite](https://www.sqlite.org/) | `ziochub.db` | קובץ יחיד, ACID | גיבוי/שכפול פשוט לחקירה |
-| **Jinja2** | [Jinja](https://jinja.palletsprojects.com/) | תבניות HTML | הפרדת תצוגה | i18n ועקביות מסכים |
-
-### שרת יישום בפרודקשן
-
-| פרויקט | קישור | תפקיד | יעילות | ערך לאנליסט |
-|--------|--------|--------|---------|-------------|
-| **Gunicorn** | [Gunicorn](https://gunicorn.org/) | WSGI (`start.sh`) | workers, עומס מקבילי | זמינות גבוהה באירועים |
-
-### ממשק (דפדפן — `static/`)
-
-| פרויקט | קישור | תפקיד | ערך לאנליסט |
-|--------|--------|--------|-------------|
-| **Tailwind CSS** | [Tailwind](https://tailwindcss.com/) | עיצוב | מסכים קריאים תחת לחץ |
-| **Chart.js** | [Chart.js](https://www.chartjs.org/) | גרפים | מגמות בלי ייצוא ל-Excel |
-| **vis-network** | [vis-network](https://visjs.org/) | גרף קמפיינים | חקירה הקשרית |
-| **Prism** | [Prism](https://prismjs.com/) | הדגשת YARA | פחות טעויות תחביר |
-| **marked** / **Turndown** | [marked](https://github.com/markedjs/marked), [Turndown](https://github.com/domchristie/turndown) | Markdown ↔ HTML | Playbook ודוחות |
-| **jsPDF** / **html2canvas** | [jsPDF](https://github.com/parallax/jsPDF), [html2canvas](https://html2canvas.hertzen.com/) | PDF | מסירות למנהלים |
-| **Flag Icons** | [flag-icons](https://github.com/lipis/flag-icons) | דגלים | הקשר גיאוגרפי מהיר |
-
-### אינטגרציות אופציונליות (`requirements.txt`)
-
-| פרויקט | קישור | תפקיד |
-|--------|--------|--------|
-| **geoip2** + **maxminddb** | [GeoIP2-python](https://github.com/maxmind/GeoIP2-python) | GeoIP מקומי |
-| **ldap3** | [ldap3](https://github.com/cannatag/ldap3) | AD/LDAP |
-| **PyMISP** | [PyMISP](https://github.com/MISP/PyMISP) | משיכת MISP |
-| **yara-python** + **YARA** | [yara-python](https://github.com/VirusTotal/yara-python) | בדיקת תחביר כללים |
-| **dxlclient** + **dxltieclient** | [OpenDXL](https://github.com/opendxl/) | DXL/TIE (ePO) |
-
-### סטנדרטים פתוחים
-
-| סטנדרט | מקור | תפקיד |
-|--------|------|--------|
-| **STIX 2.1** / **TAXII 2.1** | [OASIS](https://www.oasis-open.org/) | `/taxii2/...` — אינטרואפרביליות |
-
-### כלי פיתוח
-
-`requirements-dev.txt`: **pytest**, **pytest-cov**, **Ruff**, **Black**.
-
-> **משפטי:** לאמת רישיון לכל רכיב לפני הפצה ארגונית. רשימה ממוספרת באנגלית — [`README.md`](README.md).
-
----
-
-<a id="he-features"></a>
-
-## תכונות עיקריות (מבט-על)
-
-| תכונה | תיאור |
-|--------|--------|
-| אימות | חשבונות מקומיים, LDAP/AD אופציונלי, אדמין, שינוי סיסמה חובה בכניסה ראשונה |
-| MISP | משיכת מאפיינים מתוזמנת, סינונים, TTL, משתמש `misp_sync`, החרגה מ-Champs |
-| Cisco ESA | דחיפה אופציונלית למילוני תוכן (Email/Domain/IP/URL), בדיקת חיבור, ניקוי בפקיעה (כשמוגדר) |
-| Champs | לוח מובילים, שיטות ניקוד, תגים, יעדי צוות, טיקר (כיוון RTL/LTR ניתן להגדרה) |
-| Feed Pulse | נכנס/יוצא/נמחק, אנומליות, החרגות, ייצוא; חיבורי פיד+TAXII |
-| קמפיינים | גרף אינטראקטיבי, קישור IOC ו-YARA, ייצוא |
-| YARA | Upload / Write / Status, Prism, **Check syntax** (yara-python), אישור, ניקוד איכות |
-| פידים | סטנדרטי, Palo Alto EDL, Checkpoint CSV, רשימת YARA ותוכן קובץ |
-| TAXII 2.1 | STIX 2.1 indicators — לקוחות תואמים (למשל IronPort) |
-| SSL/HTTPS | העלאת תעודה באדמין, הפניה HTTP→HTTPS |
-| היסטוריית IOC | created / edited / deleted / expired וכו' |
-| הערות IOC | לפי סוג+ערך, שורדות מחיקות |
-| Allowlist | מניעת חסימת תשתית קריטית |
-| שפיות | אנומליות (IP מקומי, דומיין קצר, defang וכו') |
-| GeoIP | מדינות, TLD, דומייני מייל; תגי "Rare Find" |
-| אודיט | **CEF** לקובץ מקומי + רוטציה; אופציונלי UDP syslog |
-| דוחות | תקופתיים, KPIs, PDF |
-| i18n | עברית ואנגלית |
-| Offline | נכסים מקומיים; אין טלמטריה חיצונית בשגרה |
-
----
-
-<a id="he-gallery"></a>
-
-## גלריית תמונות (מקומות להחלפה)
-
-שמרו קבצים תחת `docs/README_HE/images/` (שמות מומלצים בטבלה). אפשר גם להשתמש בתיקייה `screenshots/` אם תעדכנו את הנתיבים כאן.
-
-| # | קובץ מומלץ | תיאור |
-|---|------------|--------|
-| 01 | `01_overview_dashboard.png` | Live Stats |
-| 02 | `02_submit_iocs.png` | Submit IOCs |
-| 03 | `03_search_investigate.png` | Search & Investigate |
-| 04 | `04_feed_pulse.png` | Feed Pulse |
-| 05 | `05_yara_manager.png` | YARA Manager |
-| 06 | `06_champs.png` | Champs |
-| 07 | `07_campaign_graph.png` | Campaign Graph |
-| 08 | `08_reports.png` | Intelligence Reports |
-| 09 | `09_admin_integrations.png` | Admin — אינטגרציות |
-| 10 | `10_architecture_diagram.png` | דיאגרמה (אופציונלי) |
-| 11 | `11_admin_users.png` | Admin — משתמשים |
-| 12 | `12_admin_certificate.png` | Admin — תעודת SSL |
-
-![01 – Live Stats](docs/README_HE/images/01_overview_dashboard.png)
-![02 – Submit](docs/README_HE/images/02_submit_iocs.png)
-![03 – Search](docs/README_HE/images/03_search_investigate.png)
-![04 – Feed Pulse](docs/README_HE/images/04_feed_pulse.png)
-![05 – YARA](docs/README_HE/images/05_yara_manager.png)
-![06 – Champs](docs/README_HE/images/06_champs.png)
-![07 – Campaigns](docs/README_HE/images/07_campaign_graph.png)
-![08 – Reports](docs/README_HE/images/08_reports.png)
-![09 – Admin integrations](docs/README_HE/images/09_admin_integrations.png)
-![10 – Architecture](docs/README_HE/images/10_architecture_diagram.png)
-![11 – Admin users](docs/README_HE/images/11_admin_users.png)
-![12 – Certificate](docs/README_HE/images/12_admin_certificate.png)
-
----
-
-<a id="he-value"></a>
-
-## הערך שהמערכת נותנת
-
-### לארגון ול-SOC
-
-| תחום | ערך |
-|------|-----|
-| מקור אמת | IOC + YARA במקום אחד, תוקף, הערות, קמפיין |
-| הזנה לציוד | פידים, PA/CP, TAXII/STIX |
-| ביקורת | CEF מקומי + syslog אופציונלי |
-| תפעול | offline, גיבויים, cleaner, מיגרציה מ־`data/Main/*.txt` |
-| בטיחות | Allowlist |
-
-### לאנליסט
-
-| תחום | ערך |
-|------|-----|
-| מהירות | זיהוי סוג, refang, ולידציה, אזהרות |
-| המוני | CSV/TXT, staging, דופליקציות |
-| זיכרון | הערות + היסטוריה + קמפיין |
-| YARA | עורך, Prism, קומפילציה בשרת |
-| ויזואליזציה | מדינות, TLD, גרף |
-| מעורבות | Champs |
-
-### אינטגרציות (כשמופעלות)
-
-MISP, ESA מילונים, LDAP, DXL/TIE, `/health` לניטור.
-
----
+-
 
 <a id="he-tabs"></a>
 
-## מודולי הממשק (טאבים)
+## מה רואים בממשק (הטאבים)
 
-1. **Live Stats** — ספירות, לוחות מובילים, פיד חי.  
-2. **Feed Pulse** — חלונות זמן, אנומליות, ייצוא, קטלוגים וחיבורים.  
-3. **Search & Investigate** — חיפוש, עריכה, מחיקה, היסטוריה, הערות.  
-4. **Submit IOCs** — יחיד ובולק, TTL, קמפיין, תגיות.  
-5. **YARA Manager** — Upload / Write / Status.  
-6. **Champs Analysis** — דירוגים, יעדים, טיקר.  
-7. **Campaign Graph** — יצירה, קישור, ייצוא.  
-8. **Hunter's Playbook** — Markdown וקישורים.  
-9. **Intelligence Reports** — תקופות ו-PDF.
+המערכת היא SPA (מסך אחד עם טאבים) ב־`templates/index.html`, והלוגיקה מפוצלת לקבצי JS תחת `static/js/`.
 
-שפות: `static/i18n/en.json`, `he.json`.
+### Live Stats
 
----
+מה זה נותן לנו?
+
+- **ספירות** של IOC פעילים לפי סוג (IP/Domain/URL/Hash/Email) + YARA.
+- **Dashboard של מודיעין**: Top Countries / TLD / Email Domains / Campaign Impact.
+- **Live Feed** של פעילות אחרונה.
+
+הקבצים הרלוונטיים:
+
+- `static/js/live-stats.js`
+- API: `GET /api/stats`, `GET /api/stats/counts`
+
+### Feed Pulse
+
+אם Live Stats זה “כמה יש לנו”, Feed Pulse זה “מה קרה לנו בזמן האחרון”.
+
+- Incoming / Outgoing / Excluded (לפי חלון זמן)
+- **Sanity anomalies**: דברים חשודים שמופיעים ב־IOC (למשל IP פנימי, דומיין קצר מדי, defang וכד’)
+- **Allowlist**: כדי לא לשרוף לעצמנו תשתית קריטית
+- **Connections**: מי משך פידים (`/feed/...`) או TAXII (`/taxii2/...`) ומתי
+- Export report
+
+הקבצים הרלוונטיים:
+
+- `static/js/feed-pulse.js`
+- API: `GET /api/feed-pulse`, `POST/DELETE /api/sanity-exclude`, `GET /api/integration-connections`, `GET /api/allowlist-view`
+
+### Search & Investigate
+
+זה המקום שבו אנליסטים חיים בפועל.
+
+- חיפוש IOC עם פילטרים
+- עריכה / revoke / delete
+- **היסטוריה מלאה** (מי עשה מה ומתי)
+- **IOC Notes**: הערות לפי (type+value) ששורדות גם מחיקות (כי לפעמים צריך לזכור “למה זה היה פה בכלל”)
+- ייצוא CSV
+
+הקבצים הרלוונטיים:
+
+- `static/js/search.js`
+- API: `GET /api/search`, `GET /api/ioc-history`, `GET/POST /api/ioc-notes`, `GET /api/export`
+
+### Submit IOCs
+
+ארבעה מצבים, כי החיים מגוונים:
+
+- Single IOC
+- TXT (קובץ)
+- Paste (לוגים/דוחות מבולגנים)
+- CSV (בולק)
+
+כולל Preview/Staging כדי לא להכניס זבל בלחיצה אחת.
+
+הקבצים הרלוונטיים:
+
+- `static/js/submit.js`
+- API: `POST /api/submit-ioc`, `POST /api/preview-*`, `POST /api/submit-staging`
+
+### YARA Manager
+
+שלושה מצבים:
+
+- Upload (קובץ)
+- Write (כתיבה בתוך המערכת)
+- Status (מאושרים/ממתינים)
+
+מה מיוחד כאן?
+
+- “Check syntax” בצד שרת (עם `yara-python`) כדי לא לשלוח כלל שבור לכולם.
+- Workflow של pending → approve/reject (מאוד בכוונה).
+
+קבצים:
+
+- `static/js/yara.js`
+- API: `/api/upload-yara`, `/api/yara/pending`, `/api/yara/approve`, `/api/yara/reject`, `/api/yara/validate-syntax`
+
+### Champs Analysis
+
+המוטו: “אי אפשר לנצח את האויב כל היום בלי קצת ניקוד וניצנוץ”.
+
+- Leaderboard + Analyst spotlight
+- XP/Badges/Level
+- יעדי צוות (שבועי/חודשי)
+- טיקר הודעות (RTL/LTR)
+
+קבצים:
+
+- `static/js/champs.js`
+- API: `/api/champs/leaderboard`, `/api/champs/analyst/<user_id>`, `/api/champs/team-goal`, `/api/champs/ticker`
+
+### Campaign Graph
+
+כשיש IOC בלי הקשר, זה סתם טקסט. כשמחברים אותם לקמפיין זה כבר “תמונה”.
+
+- ניהול קמפיינים (CRUD)
+- קישור IOC ו‑YARA לקמפיין
+- גרף ויזואלי (vis-network)
+- ייצוא (CSV/JSON)
+- תמונת Reference (אופציונלי)
+
+קבצים:
+
+- `static/js/campaigns.js`
+- API: `/api/campaigns`, `/api/campaigns/link`, `/api/campaign-graph/<id>`, `/api/campaigns/<id>/export(-json)`
+
+### Hunter’s Playbook
+
+מקום מרוכז לקישורים/Workflow של חקירה. כן, גם “האתר ההוא שכולם שומרים בבוקמרק אבל אף אחד לא זוכר”.
+
+קבצים:
+
+- `static/js/playbook.js`, `static/js/playbook-edit.js`
+- API: `/api/playbook`, `/api/playbook/reorder`
+
+### Intelligence Reports
+
+דוחות תקופתיים (Day/Week/Month), KPIs, גרפים וייצוא PDF.
+
+קבצים:
+
+- `static/js/reports.js`
+- API: `/api/reports/data`, `/api/reports/periods`
+- PDF: `html2canvas` + `jsPDF`
+
+-
+
+<a id="he-day"></a>
+
+## זרימת עבודה “יום בחיי אנליסט”
+
+ב־08:00 אתה נכנס. ב־08:01 אתה כבר יודע שזה הולך להיות יום עם הרבה Hashes.
+
+1. **Live Stats** נותן תמונת מצב: האם יש “עלייה מוזרה” ב‑Domains? האם יש Top Country שמופיע יותר מדי?
+2. עוברים ל־**Feed Pulse** כדי להבין מה חדש באמת: נכנס/יצא/חריגים, ואם יש “סימני שפיות” שנכשלו (כי לפעמים האויב שולח לנו IOC שהם… איך לומר… יצירתיים).
+3. מגיע משהו חשוב? **Submit IOCs**:
+   - אם זה אחד־אחד: Single.
+   - אם זה מתוך דוח: Paste (והמערכת תעשה סדר).
+   - אם זה הגיע כקובץ: TXT/CSV עם Preview.
+4. **Search & Investigate**:
+   - מחפשים IOC לפי value / analyst / tag / campaign / date.
+   - מוסיפים **IOC Note** כדי שמי שיבוא אחריך יבין למה זה פה.
+   - עורכים/מבטלים/מוחקים — וכל זה נכנס להיסטוריה.
+5. אם החקירה היא “קמפיינית”: נכנסים ל־**Campaign Graph**, קושרים IOCs, ומסתכלים על ההקשרים.
+6. אם יש חתימה: **YARA Manager**, בודקים syntax, מעלים, שולחים ל‑pending, ואז אדמין מאשר.
+7. ובסוף? Champs וריפורטים. כי גם SOC צריך קצת “מסגרת”.
+
+-
+
+<a id="he-feeds-taxii"></a>
+
+## פידים, TAXII, ומה פתאום צריך גם וגם
+
+### למה יש גם `/feed/...` וגם `/taxii2/...`?
+
+- `/feed/...` זה “מינימום חיכוך”: ציוד ותיק, FW, EDR, SIEM, כל מי שרוצה **plain-text**.
+- `/taxii2/...` זה סטנדרט: TAXII 2.1 / STIX 2.1 ללקוחות תואמים.
+
+הכל מגיע מאותו מקור אמת (DB), אבל הקהל שונה.
+
+### פידים (Plain text + פורמטים)
+
+הפידים הם ציבוריים (אין Flask-Login) ולכן ההמלצה היא **Firewall**.  
+במערכת אמיתית זה intentional: הפיד מיועד לצרכנים חיצוניים, לא ל־UI.
+
+- סטנדרטי: `/feed/ip`, `/feed/domain`, `/feed/url`, `/feed/hash`, `/feed/md5`, `/feed/sha1`, `/feed/sha256`, `/feed/email`
+- Palo Alto EDL: `/feed/pa/ip`, `/feed/pa/domain`, `/feed/pa/url` (ללא פרוטוקול), `/feed/pa/md5`, `/feed/pa/sha256`, `/feed/pa/email`
+- Check Point (CSV): `/feed/cp/ip`, `/feed/cp/domain`, `/feed/cp/url`, `/feed/cp/hash`, `/feed/cp/md5`, `/feed/cp/sha1`, `/feed/cp/sha256`
+- Cisco ESA: `/feed/esa/email` (comma-separated)
+- Trellix ePO: `/feed/epo/files-list`, `/feed/epo/<ticket_id>`
+- STIX bundle “נוח”: `/feed/stix`
+- YARA: `/feed/yara-list`, `/feed/yara-content/<filename>`
+
+הקוד:
+
+- `routes/feeds.py`
+- `utils/feed_cache.py` (מטמון/הגשה)
+- `docs/YARA_FEEDS_AND_PENDING.md` (למה pending לא יוצא בפיד)
+
+### TAXII 2.1 / STIX 2.1
+
+השרת נמצא ב־`routes/taxii_server.py` תחת `/taxii2/...`.
+
+דוגמה בסיסית (תיאור, לא פקודה “מחייבת”):
+
+- `GET /taxii2/` (Discovery)
+- `GET /taxii2/ziochub/collections/` (Collections)
+- Objects/Manifest תחת ה־collection
+
+חשוב: לקוחות צריכים לשלוח:
+
+- `Accept: application/taxii+json;version=2.1`
+
+-
+
+<a id="he-integrations"></a>
+
+## אינטגרציות (אופציונלי)
+
+הקטע היפה באינטגרציות: הן קיימות, אבל הן לא תוקעות אותך. אם אין לך LDAP — אתה עדיין עובד. אם אין לך MISP — אתה עדיין עובד. אם יש לך הכל — יופי, זה מתחבר.
+
+### MISP
+
+- Pull: job מתוזמן (`misp_sync_job.py`) + לוגיקה ב־`utils/misp_sync.py`
+- Push (אופציונלי): `utils/misp_push.py`
+- אדמין: בדיקה/סנכרון דרך `routes/admin.py`
+- Systemd timer: `ziochub-misp-sync.timer`
+
+### LDAP / AD
+
+- לוגיקה: `utils/ldap_auth.py`
+- מצבי auth: local / ldap / ldap עם fallback
+- בדיקות: `/api/ldap/health` + אדמין `/api/admin/ldap/test`
+
+### Cisco ESA (Content Dictionaries)
+
+- לוגיקה: `utils/cisco_esa.py`
+- אדמין: `/api/admin/esa/test`
+- אופציה “remove on expire” מחוברת ל־cleaner
+
+### DXL/TIE (ePO reputation)
+
+- לוגיקה: `utils/dxl_tie.py` (תלוי חבילות, לא חובה)
+- בדיקות/העלאות: `/api/admin/dxl/test`, `/api/admin/dxl/upload`
+
+### GeoIP
+
+- קובץ מקומי: `data/GeoLite2-City.mmdb`
+- משפיע על Top Countries וכו’
+
+### Syslog/CEF Audit
+
+- לוגיקה: `utils/cef_logger.py`
+- קובץ לוג אופייני (בפרודקשן): `data/audit_cef.log`
+- אפשר גם UDP syslog (אופציונלי)
+
+-
+
+<a id="he-admin"></a>
+
+## אדמין ומה הוא שולט
+
+הדבר הכי חשוב באדמין: לא “לשחק” בפרודקשן בלי להבין. מצד שני — מישהו חייב להחזיק את ההגה.
+
+מסכים עיקריים (HTML תחת `templates/admin/` + API ב־`routes/admin.py`):
+
+- Settings: הפעלה/כיבוי פידים/TAXII ציבוריים, מדיניות sanity, ועוד.
+- Integrations: MISP/LDAP/ESA/DXL ועוד בדיקות.
+- Allowlist: ניהול allowlist.
+- Users: ניהול משתמשים, active/inactive, אווטארים.
+- Certificate: תעודת SSL.
+- Scoring: שיטת ניקוד Champs.
+- Logs: Tail לוגים.
+- Admin Inbox: snapshot של pending YARA/תהליכים.
+
+API בולט:
+
+- `GET /api/admin/inbox`
+- `GET/POST /api/admin/settings`
+- `GET/POST /api/admin/allowlist`
+- `GET/POST /api/admin/scoring-method`
+
+-
+
+<a id="he-data"></a>
+
+## מודל נתונים (SQLite)
+
+SQLite הוא לא “צעצוע”. הוא פשוט כלי נכון כשאתה רוצה:
+
+- קובץ אחד (`ziochub.db`)
+- גיבוי פשוט
+- ושאילתות עקביות בלי להרים DB server
+
+קבצים:
+
+- מודלים: `models.py`
+- הרחבה: `extensions.py`
+
+טבלאות עיקריות (מילים פשוטות):
+
+- `users`, `user_profiles`, `user_sessions`
+- `iocs`, `ioc_history`, `ioc_notes`
+- `campaigns`
+- `yara_rules`
+- `sanity_exclusions`
+- `system_settings`
+- Champs: `activity_events`, `team_goals`, `champ_rank_snapshots`
+
+-
+
+<a id="he-security"></a>
+
+## אבטחה (בגובה העיניים)
+
+- התחברות: Flask‑Login
+- סיסמאות: hashing דרך Werkzeug (scrypt)
+- פידים/TAXII: **ציבוריים** → חייבים הגבלת רשת (FW / reverse proxy)
+- ORM (SQLAlchemy): שאילתות פרמטריות (פחות “SQL injection surprise”)
+- `DEV_MODE`: לא בפרודקשן
+- Audit: CEF לקובץ + אופציונלי syslog
+
+-
 
 <a id="he-install"></a>
 
-## התקנה
+## התקנה והרצה
 
-### פיתוח (מקומי)
+### פיתוח מקומי
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 python app.py
-# דפדפן: http://127.0.0.1:5000
 ```
 
-ברירת מחדל: `admin` / `admin` — **יש לשנות מיד**.
+ברירת מחדל: `admin` / `admin` (ואז מחליפים מיד כי אנחנו אנשים טובים).
 
-אם **Check syntax** ב-YARA נכשל: ודאו ש־`yara-python` מותקן ב־venv **של אותו Python** שמריץ את האפליקציה. בסביבות offline ראו [`OFFLINE.md`](OFFLINE.md).
+### ייצור (setup)
 
-### ייצור — עם אינטרנט
+הסקריפט `setup.sh` עושה: משתמש מערכת `ziochub`, תיקייה `/opt/ziochub`, venv, תלויות, DB, systemd units, הפעלה.
 
-```bash
-scp -r ZIoCHub/ user@server:/tmp/
-cd /tmp/ZIoCHub
-sudo ./setup.sh
-```
+Offline:
 
-### ייצור — offline
+- `package_offline.sh` על מחשב עם אינטרנט
+- `setup.sh --offline` בשרת
 
-```bash
-# מחשב עם אינטרנט:
-./package_offline.sh
-# העברת ziochub_installer.zip לשרת
+-
 
-unzip ziochub_installer.zip -d ziochub_install
-cd ziochub_install
-sudo ./setup.sh --offline
-```
+<a id="he-ops"></a>
 
-### שדרוג
+## שירותים, טיימרים ותחזוקה
 
-```bash
-sudo ./setup.sh --upgrade
-# או:
-sudo ./setup.sh --upgrade --offline
-```
+בפרודקשן חיים על systemd:
 
-### מה `setup.sh` עושה (בקצרה)
+- `ziochub.service` (Gunicorn)
+- `ziochub-redirect.service` (HTTP→HTTPS, אם פרוס)
+- `ziochub-cleaner.timer` (פקיעת IOC)
+- `ziochub-backup.timer` (גיבויים)
+- `ziochub-misp-sync.timer` (MISP)
 
-בודק Python/SQLite/systemd, יוצר משתמש `ziochub`, מעתיק ל־`/opt/ziochub`, venv + תלויות, אתחול DB, יחידות systemd, הפעלה.
+סקריפטים שימושיים:
 
-| פרמטר ייצור | ערך נפוץ |
-|---------------|----------|
-| HTTPS | פורט **8443** |
-| הפניה HTTP | **8080** → HTTPS |
-| התקנה | `/opt/ziochub` |
-| DB | `/opt/ziochub/data/ziochub.db` |
-| גיבויים | `/opt/ziochub/backups/` |
+- `backup_ziochub.sh`
+- `cleaner.py`
+- `reset_data.py`
+- `create_lab_users.py`
+- `scripts/reset_admin_password.py`
 
----
+-
 
-<a id="he-ports"></a>
+<a id="he-demo"></a>
 
-## פורטים ורשת
+## DEMO סטטי (GitHub Pages)
 
-| פורט | פרוטוקול | תיאור |
-|------|----------|--------|
-| 8443 | HTTPS (או HTTP אם אין תעודה) | Gunicorn — אפליקציה ראשית |
-| 8080 | HTTP | הפניה ל-HTTPS |
-| 5000 | HTTP | פיתוח בלבד (`python app.py`) |
+### מה הדמו עושה ולמה הוא קיים
 
----
+הדמו הוא “קופסה סגורה” שמדמה מערכת אמיתית בלי backend. זה מעולה ל:
 
-<a id="he-systemd"></a>
+- הדגמות
+- תיעוד
+- סרטוני הדרכה
+- להראות UI בלי לפתוח רשת פנימית
 
-## שירותי systemd
+### הבילדר של הדמו
 
-| יחידה | תיאור |
-|--------|--------|
-| `ziochub.service` | Gunicorn |
-| `ziochub-redirect.service` | HTTP → HTTPS |
-| `ziochub-cleaner.timer` | ניקוי IOC שפג תוקף |
-| `ziochub-backup.timer` | גיבוי יומי |
-| `ziochub-misp-sync.timer` | סנכרון MISP |
+הסקריפט:
 
-```bash
-sudo systemctl status ziochub
-sudo systemctl restart ziochub
-sudo journalctl -u ziochub -f
-```
+- `demo/ziochub-demo/build_demo.py`
 
----
+קלטים:
 
-<a id="he-screens"></a>
+- `users/users.json`
+- `indicators/*.txt`, `indicators/campains.txt`
+- `indicators/*.yar`
 
-## מסכי הממשק (פירוט)
+פלט:
 
-- **Live Stats** — דשבורד, מובילים גיאו/TLD/מייל, פיד חי.  
-- **Feed Pulse** — נכנס/יוצא/נמחק, allowlist באנומליות, החרגות.  
-- **Search** — מסננים מרובים, עריכה, היסטוריה, הערות.  
-- **Submit** — יחיד + בולק (CSV/TXT), staging.  
-- **YARA** — שלושה מצבים, אישור לממתינים.  
-- **Champs** — דירוגים, יעדים (חודש קלנדרי למטרות חודשיות וכו').  
-- **Campaigns** — vis-network.  
-- **Playbook** — קישורים ותוכן.  
-- **Reports** — תקופות ו-PDF.  
-- **Admin** — משתמשים, הגדרות ואינטגרציות (LDAP, MISP, Syslog, DXL, ESA, פידים), Allowlist, תעודה, סקורינג Champs.
+- `demo/ziochub-demo/site/index.html` (הממשק)
+- `demo/ziochub-demo/site/static/` (CSS/JS)
+- `demo/ziochub-demo/site/data/*.json` (דאטה)
+- `demo/ziochub-demo/site/assets/*` (avatars/yara)
 
----
+### והחלק החשוב: פידים בדמו — סטטי אמיתי
 
-<a id="he-feeds"></a>
+כדי שהדמו יעבוד גם תחת GitHub Pages בתת־נתיב (למשל `https://cybugs3.github.io/projects/ziochub-demo/site/`) נבנים **דפים סטטיים**:
 
-## נקודות קצה — פידים
+- `demo/ziochub-demo/site/feed/<type>/index.html`
 
-**אין אימות משתמש** על הפידים — להגביל ב-firewall.
+הלינקים ב־Feed Catalog בדמו הם יחסיים (`./feed/ip/`) ולא `/feed/ip`, כדי שלא “יברחו” לרוט של הדומיין.
 
-### סטנדרטי
-
-| נקודת קצה | תוכן |
-|------------|--------|
-| `/feed/ip` | IP |
-| `/feed/domain` | דומיין |
-| `/feed/url` | URL (עם פרוטוקול) |
-| `/feed/hash` | כל ה-hash |
-| `/feed/md5`, `/sha1`, `/sha256` | לפי אלגוריתם |
-
-### Palo Alto (EDL)
-
-| נקודת קצה | הערה |
-|------------|------|
-| `/feed/pa/ip`, `/pa/domain` | סטנדרטי |
-| `/feed/pa/url` | **ללא** פרוטוקול |
-| `/feed/pa/md5` … | hash |
-
-### Checkpoint (CSV)
-
-| נקודת קצה | פורמט |
-|------------|--------|
-| `/feed/cp/ip`, `domain`, `url` | CSV + observe |
-| `/feed/cp/hash` | כל האלגוריתמים הנפוצים |
-| `/feed/cp/sha2` | כינוי ל-SHA-256 |
-
-### YARA
-
-| נקודת קצה | תיאור |
-|------------|--------|
-| `/feed/yara-list` | שמות קבצים **מאושרים** בלבד (קבצים בתיקיית ה-YARA המאושרים) |
-| `/feed/yara-content/<filename>` | תוכן גולמי של קובץ מאושר |
-
-**ממתין לאישור מול מערכות חיצוניות:** כללים במצב pending **אינם** מופיעים בפידים האלה. אחרי **עריכת תוכן** לכלל שכבר היה מאושר, הכלל חוזר ל-pending — השם נעלם מהרשימה ו-`/feed/yara-content/...` מחזיר **404** עד אישור אדמין מחדש. זה מכוון: צרכנים מקבלים רק כללים שעברו סינון.
-
-**תפעול:** צוותים שמסנכרנים מהפיד צריכים לצפות להיעדרות **זמנית** של קובץ במהלך חלון pending; לא בהכרח תקלת סנכרון.
-
-פירוט: [`docs/YARA_FEEDS_AND_PENDING.md`](docs/YARA_FEEDS_AND_PENDING.md) (באנגלית).
-
-**הבחנה:** פידי **טקסט ל-IOC** מחזירים ערכים פעילים (לא פגי תוקף). פידי **YARA** מבוססי קבצים מתיקיית המאושרים בלבד — לא אותה לוגיקה כמו תפוגת IOC. `Content-Type: text/plain`.
-
----
-
-<a id="he-taxii"></a>
-
-## TAXII 2.1 / STIX 2.1
-
-דורש `Accept: application/taxii+json;version=2.1`. דוגמאות נתיבים:
-
-| נתיב | תיאור |
-|------|--------|
-| `GET /taxii2/` | Discovery |
-| `GET /taxii2/ziochub/` | API Root |
-| `GET /taxii2/ziochub/collections/` | רשימת אוספים |
-| `GET /taxii2/ziochub/collections/indicators/objects/` | אובייקטים (עימוד) |
-| `GET .../manifest/` | מניפסט |
-
-פירוט מלא — [`README.md`](README.md).
-
----
-
-<a id="he-misp"></a>
-
-## אינטגרציית MISP
-
-הגדרה: **Admin** (MISP Integration).
-
-| הגדרה | תיאור |
-|--------|--------|
-| Sync Enabled | הפעלה |
-| URL, API Key | חיבור |
-| Verify SSL | אימות תעודה |
-| Lookback, Interval (מינימום ~5 דק') | תזמון |
-| Tags / Attribute Types | סינון |
-| Published only | רק מאירועים שפורסמו |
-| Default TTL | תפוגה |
-| Sync username | ברירת מחדל `misp_sync` |
-| Exclude from Champs | החרגת משתמש הסנכרון מטבלת המובילים |
-
-סוגי מאפיינים נפוצים: `ip-src`/`ip-dst` → IP, `domain` → Domain, `url` → URL, `md5`/`sha256` → Hash, `email` וכו' → Email.
-
-תהליך: טיימר מפעיל `misp_sync_job.py`, בודק מרווח, שולף ב־PyMISP, מוודא כמו הגשה ידנית, מוסיף ללא כפילות, כותב `ioc_history`, נעילת DB נגד מקביליות.
-
----
-
-<a id="he-esa"></a>
-
-## אינטגרציית Cisco ESA (מילוני תוכן)
-
-אופציונלי: **Admin → Integrations → Cisco ESA**. לאחר login ל-API (JWT), דחיפת מילים לפי מיפוי מילון ↔ סוג IOC (Email / Domain / IP / URL). מצבי deployment: standalone / cluster / group / machine. בדיקת חיבור עושה `GET .../config/dictionaries` עם אותה מחרוזת שאילתה כמו בפעולות המילון.
-
-פירוט גופי בקשה וטריגרים — [`README.md`](README.md) סעיף Cisco ESA.
-
----
-
-<a id="he-datamodel"></a>
-
-## מודל הנתונים (SQLite)
-
-קובץ: `data/ziochub.db` (בייצור לרוב `/opt/ziochub/data/ziochub.db`).
-
-| טבלה | תיאור |
-|--------|--------|
-| `users` | משתמשים, מקור (local/ldap), אדמין, סיסמה, `must_change_password`, `last_login_at` |
-| `user_profiles` | שם תצוגה, אווטאר, העדפות (צליל, פופאפים) |
-| `user_sessions` | כניסה/יציאה, IP |
-| `iocs` | סוג, ערך, אנליסט, טיקט, תגובה, תפוגה, קמפיין, `user_id`, תגיות, שדות Rare Find / גיאו |
-| `ioc_history` | אירועי מחזור חיים + payload JSON |
-| `ioc_notes` | הערות לפי סוג+ערך |
-| `campaigns` | שם, תיאור, כיוון טקסט, תמונת התייחסות |
-| `yara_rules` | מטא-דאטה, `quality_points`, `status`, קמפיין |
-| `sanity_exclusions` | החרגות Feed Pulse |
-| `system_settings` | מפתח→ערך (LDAP, MISP, ESA, Champs, syslog…) |
-| `activity_events` | לוג Champs / פעילות |
-| `team_goals` | יעדי צוות |
-| `champ_rank_snapshots` | דירוג יומי |
-| `feed_source_last_seen` / מטמון פידים | טלמטריית חיבורי פיד/TAXII (לפי גרסה) |
-
----
-
-<a id="he-config"></a>
-
-## הגדרות ומשתני סביבה
-
-### משתני סביבה (נבחרים)
-
-| משתנה | ברירת מחדל | תיאור |
-|--------|-------------|--------|
-| `FLASK_PORT` | 5000 | פיתוח |
-| `FLASK_DEBUG` | false | דיבאג |
-| `FLASK_ENV` / `ZIOCHUB_ENV` | — | `production` בייצור |
-| `DEV_MODE` | 0 | **לא** לפרודקשן |
-| `SECRET_KEY` | קובץ/אקראי | סשן Flask |
-| `ZIOCHUB_DATA_DIR` | `<app>/data` | נתונים |
-| `ADMIN_DEFAULT_PASSWORD` | admin | ראשוני בלבד |
-| `ZIOCHUB_PORT` | 8443 | Gunicorn |
-| `ZIOCHUB_WORKERS` | 3 | workers |
-| `REDIRECT_HTTP_PORT` / `REDIRECT_HTTPS_PORT` | 8080 / 8443 | הפניה |
-
-### אדמין (ממשק)
-
-מצבי אימות, LDAP, MISP, Syslog/CEF, DXL, ESA, פידים ו-TAXII ציבוריים, סקורינג Champs, טיקר, ועוד — לפי עמודי האדמין בפריסה שלכם.
-
----
-
-<a id="he-maintenance"></a>
-
-## תחזוקה
-
-### גיבוי
-
-`ziochub-backup.timer`: DB, `data/ssl/*.pem`, `data/YARA/*.yar`, `allowlist.txt` — שמירה לרוב 30 יום.
-
-```bash
-sudo -u ziochub /opt/ziochub/backup_ziochub.sh
-```
-
-### ניקוי פקיעה
-
-`ziochub-cleaner.timer` — מוחק IOC שפג תוקף, רושם `ioc_history`; אם ESA "הסר בפקיעה" פעיל — קורא ל-API לפני מחיקה.
-
-### איפוס נתונים
-
-```bash
-cd /opt/ziochub
-sudo systemctl stop ziochub
-python reset_data.py              # אינטראקטיבי
-python reset_data.py --all --yes  # הכל
-python reset_data.py --iocs --yara --history --yes
-sudo systemctl start ziochub
-```
-
-### משתמשי מעבדה
-
-```bash
-python create_lab_users.py
-# ייצור: create_lab_users.py --env prod (בייצור, מול users.json)
-```
-
-### איפוס סיסמה
-
-```bash
-sudo -u ziochub /opt/ziochub/venv/bin/python scripts/reset_admin_password.py --username admin --password '...'
-```
-
----
-
-<a id="he-scripts"></a>
-
-## סקריפטים
-
-| סקריפט | תיאור |
-|---------|--------|
-| `setup.sh` | התקנה / offline / שדרוג |
-| `uninstall.sh` | הסרה |
-| `package_offline.sh` | ZIP להתקנה מנותקת |
-| `backup_ziochub.sh` | גיבוי ידני |
-| `reset_data.py` | איפוס נתונים |
-| `create_lab_users.py` | משתמשי דמו |
-| `cleaner.py` | פקיעה (טיימר) |
-| `misp_sync_job.py` | MISP (טיימר) |
-| `http_redirect.py` | הפניה |
-| `start.sh` | Gunicorn |
-| `scripts/reset_admin_password.py` | איפוס סיסמה |
-
----
-
-<a id="he-security"></a>
-
-## אבטחה
-
-- אימות Flask-Login לדפים ורוב ה-API.  
-- פידים ו-TAXII **ציבוריים** — חובה firewall.  
-- סיסמאות: scrypt (Werkzeug).  
-- LDAP אופציונלי + fallback מקומי.  
-- ORM — שאילתות פרמטריות.  
-- משתמש `misp_sync` — לא נכנס לממשק.  
-- אודיט: **CEF** (`data/audit_cef.log`) + syslog אופציונלי.  
-- `DEV_MODE` כבוי בפרודקשן.  
-- עוגיות: HttpOnly; SameSite/Secure לפי צורך.
-
----
+-
 
 <a id="he-architecture"></a>
 
-## ארכיטקטורת הפרויקט
+## ארכיטקטורת קוד — איפה כל דבר חי
 
-### Backend (עיקרי)
+Backend:
 
-```
-app.py                 Flask, אתחול DB, מיגרציות קלות, health
-models.py              מודלים
-extensions.py          db
-constants.py           VERSION, IOC_FILES
-config.py              אופציונלי
+- `app.py` (bootstrap)
+- `routes/*.py` (blueprints)
 
-routes/
-  admin.py             משתמשים, הגדרות, תעודה, MISP, ESA test…
-  auth.py              login, פרופיל, LDAP
-  champs.py            לוח, יעדים, טיקר
-  campaigns.py         קמפיינים וגרף
-  feeds.py             פידים, עזרי STIX
-  ioc.py               הגשת IOC, ESA ברקע
-  reports.py           דוחות
-  search.py            חיפוש, revoke, ESA
-  stats.py             סטטיסטיקות, Feed Pulse API, חיבורים
-  taxii_server.py      TAXII 2.1
-  yara.py              YARA
-```
+Frontend:
 
-### Frontend
+- `templates/index.html` (SPA)
+- `static/js/*.js`
+- `static/css/style.css`
+- `static/i18n/en.json`, `static/i18n/he.json`
 
-SPA ב־`templates/index.html`; מודולים ב־`static/js/` (`app.js`, `api.js`, `live-stats.js`, `search.js`, `submit.js`, `yara.js`, `campaigns.js`, `feed-pulse.js`, `champs.js`, `reports.js`, `playbook.js`, `profile.js`, …).
+מסמכים שימושיים:
 
-### תבניות נוספות
+- `../TROUBLESHOOTING.md`
+- `../DXL_INTEGRATION.md`
+- `../CSS_DESIGN_AUDIT_REPORT.md`
 
-`templates/login.html`, `templates/admin/*`, partials.
-
----
-
-<a id="he-offline"></a>
-
-## פריסה אופליינית
-
-- נכסי UI מקומיים; GeoIP מקובץ מקומי.  
-- MISP/LDAP — רק לתשתית פנימית.  
-- `package_offline.sh` + `setup.sh --offline`.  
-- פרטים על Prism/YARA wheels — [`OFFLINE.md`](OFFLINE.md).
-
----
+-
 
 <a id="he-troubleshooting"></a>
 
-## פתרון בעיות
+## פתרון תקלות נפוצות
 
-```bash
-journalctl -u ziochub -n 50 --no-pager
-```
+- **DB locked (SQLite)**: בדרך כלל מופע כפול או פעולה כבדה. עושים restart, בודקים timers.
+- **YARA check syntax נכשל**: לוודא `yara-python` מותקן ב־venv הנכון.
+- **פידים לא זמינים**: בדקו admin setting של “feeds_public_enabled” + FW.
+- **GitHub Pages שובר `/feed/...`**: חייבים לינקים יחסיים (בדמו זה כבר מטופל בבילד).
 
-**DB נעול (SQLite):** מופע יחיד; restart; האפליקציה מבצעת commit עם retry על lock.
+-
 
-**MISP:**
+<a id="he-oss"></a>
 
-```bash
-systemctl status ziochub-misp-sync.timer
-journalctl -u ziochub-misp-sync -n 20 --no-pager
-```
+## קרדיטים וקוד פתוח
 
-**הפניה HTTP:**
+ZIoCHub נשענת על: Flask, SQLAlchemy, Tailwind, Chart.js, vis-network, Prism, marked, Turndown, jsPDF, html2canvas ועוד.  
+הרשימה באנגלית (עם פרטים) נמצאת כאן: [`../../README.md`](../../README.md)
 
-```bash
-systemctl status ziochub-redirect
-sudo systemctl restart ziochub ziochub-redirect
-```
 
-**התקנה מחדש (עם גיבוי):**
-
-```bash
-sudo ./uninstall.sh --backup
-sudo ./setup.sh --offline
-```
-
----
-
-<a id="he-version"></a>
-
-## גרסה ורישיונות
-
-- גרסת ממשק: `constants.py` → `VERSION`.  
-- **פירוט קוד פתוח בעברית** — סעיף [פרויקטי קוד פתוח](#readme-he-open-source).  
-- **רשימה באנגלית + גרסאות pip** — [`README.md`](README.md), [`requirements.txt`](requirements.txt), [`requirements-dev.txt`](requirements-dev.txt).
-
----
-
-*מסמך README בעברית — מאוחד מ־README_HE + README_HEB. תמונות: `docs/README_HE/images/`.*

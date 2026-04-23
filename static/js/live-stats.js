@@ -31,6 +31,14 @@
         return name || code.toUpperCase();
     }
 
+    /** Resolve /static/... for both domain-root installs and subpaths (e.g. GitHub Pages project site). */
+    function flagSvgUrl(cc) {
+        let root = (typeof window !== 'undefined' && window.ZIOCHUB_STATIC_ROOT) ? String(window.ZIOCHUB_STATIC_ROOT) : '';
+        root = root.replace(/\/?$/, '/');
+        if (!root) root = './static/';
+        return root + 'flags/1x1/' + encodeURIComponent(cc) + '.svg';
+    }
+
     function renderGenericLeaderboard(containerId, data, iconClass) {
         try {
             const container = document.getElementById(containerId);
@@ -58,7 +66,7 @@
                 if (iconClass === 'flag') {
                     const cc = key.toLowerCase();
                     const countryName = getCountryName(cc);
-                    iconHtml = `<span class="inline-flex flex-shrink-0 w-6 h-6 rounded-full overflow-hidden border border-white/20" title="${escapeHtml(countryName)}"><img src="/static/flags/1x1/${escapeHtml(cc)}.svg" alt="" class="w-full h-full object-cover" loading="lazy" onerror="this.style.background='var(--bg-tertiary)'"></span>`;
+                    iconHtml = `<span class="inline-flex flex-shrink-0 w-6 h-6 rounded-full overflow-hidden border border-white/20" title="${escapeHtml(countryName)}"><img src="${escapeAttr(flagSvgUrl(cc))}" alt="" class="w-full h-full object-cover" loading="lazy" onerror="this.style.background='var(--bg-tertiary)'"></span>`;
                 } else if (iconClass === 'globe' || iconClass === 'envelope' || iconClass === 'target') {
                     labelHtml = `<span class="text-sm font-semibold" style="color: var(--text-primary);" title="${escapeAttr(key)}">${escapeHtml(key)}</span>`;
                 }

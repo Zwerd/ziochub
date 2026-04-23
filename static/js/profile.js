@@ -83,6 +83,11 @@ const authProfileBtn = document.getElementById('authProfile');
 if (authProfileBtn) {
     authProfileBtn.addEventListener('click', (e) => {
         e.preventDefault();
+        if (!authState || !authState.authenticated) {
+            // On narrow screens we hide the top Login link and use the profile button as Login entrypoint.
+            window.location.href = '/login';
+            return;
+        }
         openProfileModal();
     });
 }

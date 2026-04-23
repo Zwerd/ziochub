@@ -9,6 +9,10 @@
     "read_only": "צפייה בלבד (התחבר לעריכה)",
     "login_required": "נא להתחבר כדי לשלוח IOCs"
   },
+  "nav": {
+    "open_menu": "פתיחת תפריט",
+    "close_menu": "סגירת תפריט"
+  },
   "tab": {
     "submit": "שליחת IOCs",
     "search": "חיפוש וחקירה",

@@ -137,6 +137,14 @@ body, input, select, textarea, button, label, .tab-button {
     border-radius: 0 !important;
     box-shadow: none !important;
 }
+
+/* Main app header: stacking above mobile drawer backdrop (no reliance on Tailwind arbitrary z-index) */
+.app-header-shell {
+    position: relative;
+    z-index: 115;
+}
+
+/* (mobile drawer styles removed) */
 .header-bar .bg-tertiary {
     background-color: var(--bg-tertiary) !important;
 }
@@ -914,6 +922,19 @@ nav:has(.tab-button) {
     padding: 0.5rem 0;
 }
 
+/* Brand text block hidden on narrow viewports only (must override .navbar-logo above — higher specificity) */
+@media (max-width: 1023px) {
+    .navbar-logo.navbar-logo-desktop {
+        display: none !important;
+    }
+}
+
+@media (min-width: 1024px) {
+    .navbar-logo.navbar-logo-desktop {
+        display: flex !important;
+    }
+}
+
 .navbar-logo-link {
     display: flex;
     flex-shrink: 0;
@@ -996,10 +1017,22 @@ nav:has(.tab-button) {
 .navbar-right #authLogout {
     height: 2rem;
     min-height: 2rem;
-    display: inline-flex;
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
+}
+
+/* Never override Tailwind/utility "hidden" (display:none) */
+.navbar-right #authLogout:not(.hidden) {
+    display: inline-flex;
+}
+
+/* Header tweaks */
+/* Desktop: keep brand text visible. Mobile: hide brand text (logo remains). */
+@media (max-width: 1023px) {
+    .brand-text-block {
+        display: none !important;
+    }
 }
 
 
@@ -1018,7 +1051,240 @@ header .navbar-tabs {
     overflow-y: hidden;
 }
 
-/* Responsive: overflow-x already set on header .navbar-tabs; scrollbar visible when tabs overflow */
+/* Mobile-specific: allow Live Stats tab to scroll vertically (dashboard is stacked) */
+@media (max-width: 1023px) {
+    #tab-live-stats.live-stats-tab-root {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+        min-height: 0;
+    }
+
+    #tab-live-stats.live-stats-tab-root .live-stats-dashboard-wrap {
+        flex: none !important;
+        min-height: auto !important;
+    }
+
+    /* Mobile UX: don't pin the summary cards; scroll the whole page */
+    #tab-live-stats .stats-sticky-header {
+        position: static !important;
+        top: auto !important;
+        z-index: auto !important;
+    }
+
+    /* Campaign Graph: stack sections vertically and allow scroll */
+    #tab-campaigns {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+    }
+
+    #tab-campaigns .campaigns-layout-root {
+        flex-direction: column !important;
+        gap: 0.75rem !important;
+    }
+
+    #tab-campaigns .campaigns-layout-root > aside,
+    #tab-campaigns .campaigns-layout-root > div {
+        width: 100% !important;
+        min-width: 0 !important;
+    }
+
+    /* Make the graph visible on phones (give it a stable height) */
+    #tab-campaigns #campaign-network {
+        min-height: 60vh !important;
+        height: 60vh !important;
+        flex: none !important;
+    }
+
+    /* Prevent sidebars from stretching and visually overlapping the graph area */
+    #tab-campaigns .campaigns-layout-root > aside {
+        flex: none !important;
+        min-height: auto !important;
+        overflow: visible !important;
+    }
+
+    #tab-campaigns .campaigns-layout-root > div {
+        flex: none !important;
+        min-height: auto !important;
+    }
+
+    /* Champs Analysis: stack sections vertically and allow scroll */
+    #tab-champs {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+    }
+
+    #tab-champs .champs-layout-root {
+        flex-direction: column !important;
+        gap: 0.75rem !important;
+        overflow: visible !important;
+        flex: none !important;
+        min-height: auto !important;
+    }
+
+    /* Full-width blocks in stacked layout */
+    #tab-champs .champs-layout-root > aside,
+    #tab-champs .champs-layout-root > div {
+        width: 100% !important;
+        min-width: 0 !important;
+        flex: none !important;
+        min-height: auto !important;
+        overflow: visible !important;
+    }
+
+    /* Leaderboard list: give a reasonable height and internal scroll */
+    #tab-champs #champsLadder .custom-scrollbar {
+        max-height: 45vh !important;
+        min-height: 14rem;
+    }
+
+    /* Analyst spotlight: give stable height so it's always visible */
+    #tab-champs #champsSpotlight {
+        min-height: 55vh !important;
+        height: 55vh !important;
+        flex: none !important;
+        overflow: hidden !important;
+    }
+
+    /* Trophy cabinet: show below spotlight with internal scroll */
+    #tab-champs #champsTrophyCabinetList {
+        max-height: 35vh !important;
+        min-height: 12rem;
+    }
+
+    /* Search & Investigate: mobile table = 4 columns (Found in | IOC | Date | Actions) */
+    #searchResults table {
+        min-width: 0 !important;
+        table-layout: fixed;
+    }
+
+    /* Hide columns 4..9 (User, Ticket, Comment, Tags, Campaign, Expiration) */
+    #searchResults th:nth-child(4),
+    #searchResults td:nth-child(4),
+    #searchResults th:nth-child(5),
+    #searchResults td:nth-child(5),
+    #searchResults th:nth-child(6),
+    #searchResults td:nth-child(6),
+    #searchResults th:nth-child(7),
+    #searchResults td:nth-child(7),
+    #searchResults th:nth-child(8),
+    #searchResults td:nth-child(8),
+    #searchResults th:nth-child(9),
+    #searchResults td:nth-child(9) {
+        display: none !important;
+    }
+
+    /* Rebalance visible widths */
+    #searchResults th:nth-child(1),
+    #searchResults td:nth-child(1) { width: 72px !important; }
+
+    #searchResults th:nth-child(2),
+    #searchResults td:nth-child(2) { width: auto !important; }
+
+    #searchResults th:nth-child(3),
+    #searchResults td:nth-child(3) { width: 96px !important; }
+
+    #searchResults th:nth-child(10),
+    #searchResults td:nth-child(10) { width: 140px !important; }
+
+    /* IOC cell: value on top, copy button underneath */
+    #searchResults td:nth-child(2) > span.inline-flex {
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 0.35rem !important;
+    }
+    #searchResults td:nth-child(2) .copy-ioc-btn {
+        margin-left: 0 !important;
+        width: auto;
+        max-width: 100%;
+    }
+
+    /* Actions column: stack buttons vertically */
+    #searchResults td:last-child > div.flex {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 0.4rem !important;
+        flex-wrap: nowrap !important;
+    }
+    #searchResults td:last-child > div.flex > button,
+    #searchResults td:last-child > div.flex > a {
+        width: 100%;
+        justify-content: center;
+    }
+
+    /* Sticky actions can be annoying on very small screens with fewer columns */
+    #searchResults th:last-child,
+    #searchResults td:last-child {
+        position: static !important;
+    }
+    #searchResults th:last-child::before,
+    #searchResults td:last-child::before {
+        display: none !important;
+    }
+
+    /* Intelligence Reports: period selector first, then content (single vertical scroll) */
+    #tab-reports {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+    }
+
+    #tab-reports .reports-layout-root {
+        flex-direction: column !important;
+        gap: 0.75rem !important;
+        overflow: visible !important;
+        flex: none !important;
+        min-height: auto !important;
+    }
+
+    /* Sidebar becomes the first block (time range buttons at top) */
+    #tab-reports .reports-sidebar {
+        order: 0;
+        width: 100% !important;
+        flex: none !important;
+        max-height: none !important;
+    }
+
+    /* Keep report list compact so data sections come right after */
+    #tab-reports #reportsList {
+        max-height: 28vh !important;
+    }
+
+    /* Detail panel should not trap scrolling on mobile */
+    #tab-reports #reportDetailPanel {
+        order: 1;
+        overflow: visible !important;
+        border-radius: 0 !important;
+    }
+
+    /* Feed Pulse (mobile): fixed heights for Incoming/Outgoing/Excluded so you can scroll page to see all */
+    #tab-feed-pulse {
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        -webkit-overflow-scrolling: touch;
+        overscroll-behavior: contain;
+    }
+
+    #tab-feed-pulse .feed-pulse-streams-root {
+        flex: none !important;
+        min-height: auto !important;
+    }
+
+    #tab-feed-pulse .feed-pulse-streams-root > div {
+        flex: none !important;
+        height: 55vh !important;
+        min-height: 22rem !important;
+    }
+}
+
+/* Responsive: horizontal scroll on desktop header tabs only */
 
 /* Glowing underline ONLY for active tab - flush at very bottom of header */
 .tab-button.active::after {

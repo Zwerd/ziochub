@@ -9,6 +9,10 @@
     "read_only": "View-only (login to edit)",
     "login_required": "Please log in to submit IOCs"
   },
+  "nav": {
+    "open_menu": "Open menu",
+    "close_menu": "Close menu"
+  },
   "tab": {
     "submit": "Submit IOCs",
     "search": "Search & Investigate",

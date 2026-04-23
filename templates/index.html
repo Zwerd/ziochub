@@ -32,14 +32,14 @@
 </head>
 <body class="bg-primary text-primary h-screen w-screen overflow-hidden flex flex-col" data-authenticated="{{ '1' if authenticated else '0' }}" data-user-id="{{ user_id or '' }}" data-mute-sound="{{ '1' if mute_sound else '0' }}" data-ambition-popup-disabled="{{ '1' if ambition_popup_disabled else '0' }}" data-achievement-popup-disabled="{{ '1' if achievement_popup_disabled else '0' }}" data-search-comment-rtl="{{ '1' if search_comment_rtl_by_script else '0' }}">
     <!-- Top Bar (header-bar = solid bg, no glass override) -->
-    <header class="header-bar border-b-2 border-white/10 bg-secondary sticky top-0 z-50 neon-header backdrop-blur-md flex-shrink-0">
+    <header class="header-bar border-b-2 border-white/10 bg-secondary sticky top-0 neon-header backdrop-blur-md flex-shrink-0 relative app-header-shell">
         <div class="navbar-container">
-            <!-- LEFT: Logo + Navigation Tabs -->
+            <!-- LEFT: Brand + Navigation Tabs -->
             <div class="navbar-left">
                 <div class="navbar-logo">
                     {% include 'partials/_brand_block.html' %}
                 </div>
-                <nav class="navbar-tabs">
+                <nav id="mainNavbarTabs" class="navbar-tabs" role="navigation" aria-label="Main">
                     <button class="tab-button" data-tab="live-stats" data-i18n="tab.stats">
                         <span data-i18n="tab.stats">Live Stats</span>
                     </button>
@@ -71,8 +71,8 @@
             <!-- RIGHT: User Controls -->
             <div class="navbar-right">
                 <div id="authBox" class="flex items-center gap-2 shrink-0">
-                    <a id="authLogin" href="/login" class="px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400 {% if authenticated %}hidden{% endif %}" data-i18n="auth.login">Login</a>
-                    <button id="authProfile" type="button" class="analyst-avatar-btn flex items-center rounded-full transition-all duration-300 {% if not authenticated %}hidden{% endif %}" title="{{ display_name or '' }}">
+                    <a id="authLogin" href="/login" class="px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400 hidden" data-i18n="auth.login">Login</a>
+                    <button id="authProfile" type="button" class="analyst-avatar-btn flex items-center rounded-full transition-all duration-300" title="{{ display_name or '' }}">
                         {% if avatar_url %}
                         <img id="authAvatar" class="analyst-avatar-img w-14 h-14 rounded-full object-cover" src="{{ avatar_url }}" alt="">
                         <span id="authAvatarPlaceholder" class="analyst-avatar-placeholder hidden w-14 h-14 rounded-full flex items-center justify-center text-xl">👤</span>
@@ -88,8 +88,8 @@
                         </span>
                         <span id="adminInboxBadge" class="hidden absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] leading-[18px] text-center font-bold"></span>
                     </button>
-                    <a id="authAdmin" href="/admin" class="px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400 {% if not is_admin %}hidden{% endif %}" data-i18n="auth.admin">Admin</a>
-                    <a id="authLogout" href="/logout" class="px-3 py-1 bg-tertiary rounded hover:border-red-400/70 transition text-sm text-red-400 {% if not authenticated %}hidden{% endif %}" data-i18n="auth.logout">Logout</a>
+                    <a id="authAdmin" href="/admin" class="hidden px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400" data-i18n="auth.admin">Admin</a>
+                    <a id="authLogout" href="/logout" class="hidden px-3 py-1 bg-tertiary rounded hover:border-red-400/70 transition text-sm text-red-400" data-i18n="auth.logout">Logout</a>
                 </div>
                 <div class="navbar-lang-theme flex flex-col gap-0.5">
                     <button id="langToggle" class="w-8 h-7 flex items-center justify-center bg-tertiary rounded hover:border-accent-green transition text-xs">
@@ -110,8 +110,8 @@
 
             <!-- Tab Contents -->
             <div class="px-3 py-4 flex-1 min-h-0 flex flex-col overflow-hidden">
-                <!-- Tab 1: Live Stats (Default) - Fixed-height cockpit, no page scroll -->
-                <div id="tab-live-stats" class="tab-content hidden flex flex-col h-full overflow-hidden">
+                <!-- Tab 1: Live Stats (Default) — desktop: fixed cockpit; mobile: full tab scrolls (see style.css) -->
+                <div id="tab-live-stats" class="tab-content live-stats-tab-root hidden flex flex-col h-full min-h-0 overflow-hidden">
                     <div class="flex justify-between items-center mb-3 flex-shrink-0">
                         <h2 class="text-2xl font-bold accent-blue" data-i18n="stats.title">Live Statistics</h2>
                         <div id="liveIndicator" class="flex items-center gap-2 text-sm accent-green" style="display: none;">
@@ -167,7 +167,7 @@
                         </div>
                     </div>
                     <!-- Threat Intelligence Dashboard (5-Column Grid: Countries, TLDs, Emails, Campaign Impact, Live Feed) -->
-                    <div class="flex-1 flex flex-col min-h-0">
+                    <div class="flex-1 flex flex-col min-h-0 live-stats-dashboard-wrap">
                         <h3 class="text-xl font-bold mb-3 accent-blue flex-shrink-0" data-i18n="stats.charts.title">Threat Intelligence Dashboard</h3>
                         <div class="grid grid-cols-1 lg:grid-cols-5 gap-3 items-stretch flex-1 min-h-0">
                             <!-- Column 1: Top Countries -->
@@ -771,7 +771,7 @@
                     </div>
 
                     <!-- Ladder (left) + Analyst Spotlight (center) -->
-                    <div class="flex-1 min-h-0 flex gap-4 overflow-hidden">
+                    <div class="flex-1 min-h-0 flex gap-4 overflow-hidden champs-layout-root">
                         <aside id="champsLadder" class="champs-ladder w-[300px] flex-shrink-0 flex flex-col min-h-0 bg-tertiary rounded-xl border border-white/10 overflow-hidden shadow-lg">
                             <div class="champs-ladder-header px-4 py-3 border-b border-white/10">
                                 <div class="flex items-center justify-between">
@@ -824,9 +824,9 @@
                 <!-- Tab: Campaign Graph (3-column fixed layout, no page scroll) -->
                 <div id="tab-campaigns" class="tab-content hidden flex flex-col h-full overflow-hidden">
                     <h2 class="text-2xl font-bold mb-3 accent-blue flex-shrink-0" data-i18n="campaign.title">Campaign Graph</h2>
-                    <div class="flex-1 min-h-0 flex gap-3">
-                        <!-- Left Sidebar: Active Campaigns (wider cards + full description) -->
-                        <aside class="w-[400px] flex-shrink-0 flex flex-col min-h-0 overflow-hidden">
+                    <div class="flex-1 min-h-0 flex gap-3 campaigns-layout-root">
+                        <!-- Left Sidebar: Active Campaigns -->
+                        <aside class="w-[300px] flex-shrink-0 flex flex-col min-h-0 overflow-hidden">
                             <div class="card bg-tertiary rounded-lg p-4 flex flex-col h-full min-h-0">
                                 <div class="flex items-center justify-between mb-2 flex-shrink-0">
                                     <h3 class="text-lg font-semibold accent-blue" data-i18n="campaign.active">Active Campaigns</h3>
@@ -996,7 +996,7 @@
                     </div>
 
                     <!-- Area B: Split View (Incoming | Outgoing | Excluded) - Incoming left, Outgoing center, Excluded right -->
-                    <div class="flex-1 min-h-0 flex gap-3 flex-col lg:flex-row">
+                    <div class="flex-1 min-h-0 flex gap-3 flex-col lg:flex-row feed-pulse-streams-root">
                         <div class="flex-1 min-h-0 min-w-0 flex flex-col bg-tertiary border border-green-500/30 rounded-lg overflow-hidden">
                             <div class="flex-shrink-0 px-3 py-2 bg-tertiary border-b border-green-500/30 font-semibold text-green-200 text-sm">
                                 <span data-i18n="feedpulse.incoming">Incoming Stream</span> <span id="feedPulseIncomingCount" class="opacity-80">(0)</span>
@@ -1081,7 +1081,7 @@
                             <span data-i18n="reports.export_pdf">Export PDF</span>
                         </button>
                     </div>
-                    <div class="flex flex-1 min-h-0 gap-4">
+                    <div class="flex flex-1 min-h-0 gap-4 reports-layout-root">
                         <!-- Master: Left sidebar (Champs-style) -->
                         <div class="reports-sidebar w-56 flex-shrink-0 flex flex-col bg-tertiary rounded-xl border border-white/10 overflow-hidden shadow-lg">
                             <div class="flex border-b border-white/10">
@@ -1531,6 +1531,13 @@
                                 Remove Photo
                             </button>
                         </div>
+                    </div>
+
+                    <div class="mt-6 pt-6 border-t border-white/10 {% if not authenticated %}hidden{% endif %}">
+                        {% if is_admin %}
+                        <a id="profileAdminBtn" href="/admin" class="btn-cmd-primary w-full text-center inline-flex items-center justify-center mb-2" data-i18n="auth.admin">Admin</a>
+                        {% endif %}
+                        <a id="profileLogoutBtn" href="/logout" class="btn-cmd-neutral w-full text-center inline-flex items-center justify-center" data-i18n="auth.logout">Logout</a>
                     </div>
                 </div>
             </div>
@@ -2176,6 +2183,8 @@
     </script>
     <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
     <script src="{{ url_for('static', filename='js/api.js') }}"></script>
+    {# Prefix for static assets (subpath / reverse-proxy safe). Plain GitHub Pages demo: falls back in JS to ./static/ #}
+    <script>window.ZIOCHUB_STATIC_ROOT = {{ url_for('static', filename='js/app.js').replace('js/app.js', '') | tojson }};</script>
     <script src="{{ url_for('static', filename='js/live-stats.js') }}"></script>
     <script>
     window.TG_CONFIG = {

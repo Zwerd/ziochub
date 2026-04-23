@@ -106,6 +106,7 @@ function updateTranslations() {
         }
         if (value) el.placeholder = value;
     });
+    // nav drawer removed
 }
 
 function t(key, replacements) {
@@ -252,7 +253,8 @@ function updateAuthUI() {
             profileEl.classList.remove('hidden');
             profileEl.title = authState.display_name || authState.username || 'User';
         }
-        logoutEl.classList.remove('hidden');
+        // Logout/Admin live in the profile modal now (header buttons are hidden via CSS)
+        logoutEl.classList.add('hidden');
         if (authState.avatar_url && avatarImg) {
             avatarImg.src = authState.avatar_url;
             avatarImg.classList.remove('hidden');
@@ -261,10 +263,7 @@ function updateAuthUI() {
             if (avatarImg) avatarImg.classList.add('hidden');
             if (avatarPlaceholder) avatarPlaceholder.classList.remove('hidden');
         }
-        if (adminEl) {
-            if (authState.is_admin) adminEl.classList.remove('hidden');
-            else adminEl.classList.add('hidden');
-        }
+        if (adminEl) adminEl.classList.add('hidden');
         const inboxBtn = document.getElementById('adminInboxBtn');
         if (inboxBtn) {
             if (authState.is_admin) inboxBtn.classList.remove('hidden');
@@ -280,8 +279,14 @@ function updateAuthUI() {
         const yaraPendingSection = document.getElementById('yaraPendingSection');
         if (yaraPendingSection) yaraPendingSection.classList.remove('hidden');
     } else {
-        loginEl.classList.remove('hidden');
-        if (profileEl) profileEl.classList.add('hidden');
+        // Anonymous mode: profile button stays visible (acts as Login entrypoint)
+        loginEl.classList.add('hidden');
+        if (profileEl) {
+            profileEl.classList.remove('hidden');
+            profileEl.title = 'Anonymous';
+        }
+        if (avatarImg) avatarImg.classList.add('hidden');
+        if (avatarPlaceholder) avatarPlaceholder.classList.remove('hidden');
         logoutEl.classList.add('hidden');
         if (adminEl) adminEl.classList.add('hidden');
         const inboxBtn = document.getElementById('adminInboxBtn');
@@ -478,6 +483,9 @@ async function switchTab(tabId, skipHash) {
         } catch (e) {
             console.error('Failed to load tab scripts:', e);
             showToast('Failed to load tab resources', 'error');
+            try {
+                closeNavDrawer();
+            } catch (_) {}
             return;
         }
     }
@@ -538,11 +546,14 @@ async function switchTab(tabId, skipHash) {
         const firstTab = document.querySelector('#playbookTabs .playbook-tab-item');
         if (firstTab) firstTab.click();
     }
+
+    closeNavDrawer();
 }
 
 document.querySelectorAll('.tab-button').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.getAttribute('data-tab')));
 });
+// nav drawer removed
 
 window.addEventListener('hashchange', () => {
     const tab = _getTabFromHash();
@@ -846,6 +857,8 @@ initApp();
             if (taxiiModal) taxiiModal.classList.remove('hidden');
         });
     }
+
+    // No demo-specific behavior here; demo rewrites links at build time.
 })();
 
 // ---------------------------------------------------------------------------

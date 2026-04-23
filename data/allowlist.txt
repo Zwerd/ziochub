@@ -1,0 +1,43 @@
+# ============================================================
+# Allowlist - Known-Good / Legitimate Assets
+# ============================================================
+# Add domains, IPs, or CIDRs that should NOT be blocked.
+# IOCs matching this list will trigger an anomaly in Feed Pulse
+# and will be blocked from submission (Safety Net).
+#
+# Supported formats:
+#   suffix:google.com       - matches google.com and *.google.com
+#   domain:exact.example.com - matches only exact.example.com
+#   tld:gov                 - matches all .gov domains
+#   ip:8.8.8.8              - exact IP
+#   cidr:10.0.0.0/8         - CIDR range
+#   192.168.0.0/16          - auto-detected as CIDR
+#   8.8.8.8                 - auto-detected as IP
+#   google.com              - auto-detected as suffix match
+#
+# Lines starting with # are comments.
+# Manage this file via Admin > Allowlist in the UI.
+# ============================================================
+domain:google.com
+cidr:10.0.0.0/8
+cidr:54.0.1.0/24 #test
+66.5.66.20 # test
+66.5.66.19 # test
+66.5.66.18
+66.5.66.17
+66.5.66.16
+66.5.66.15
+66.5.66.14
+66.5.66.13
+66.5.66.12
+66.5.66.11
+66.5.66.10
+66.5.66.9
+66.5.66.8
+66.5.66.7
+66.5.66.6
+66.5.66.5
+66.5.66.4 # must not be block
+66.5.66.3
+66.5.66.2
+66.5.66.1

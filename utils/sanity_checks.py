@@ -21,6 +21,9 @@ from urllib.parse import urlparse
 CRITICAL_INFRA_IPS = {
     '8.8.8.8', '8.8.4.4',      # Google DNS
     '1.1.1.1', '1.0.0.1',      # Cloudflare DNS
+    '9.9.9.9', '149.112.112.112',  # Quad9
+    '208.67.222.222', '208.67.220.220',  # OpenDNS
+    '8.26.56.26', '8.20.247.20',  # Comodo Secure DNS
 }
 
 _CCSLD_SUFFIXES = {
@@ -109,6 +112,14 @@ _STALE_DAYS_THRESHOLD = 180
 
 _URL_CREDS_RE = re.compile(r'://[^/]*:[^/@]+@')
 
+_URL_SHORTENER_DOMAINS = {
+    # Common URL shorteners / redirectors (high collateral risk if blocked broadly)
+    'bit.ly', 'tinyurl.com', 't.co', 'goo.gl', 'ow.ly', 'is.gd', 'buff.ly',
+    'cutt.ly', 'rebrand.ly', 't.ly', 'rb.gy', 'lnkd.in', 'shorturl.at',
+}
+
+_LOCAL_DOMAIN_SUFFIXES = ('.local', '.internal', '.lan')
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -147,6 +158,41 @@ def _is_bogon_ip(ip_str: str) -> ipaddress.IPv4Network | None:
     for net in _BOGON_NETWORKS:
         if ip in net:
             return net
+    return None
+
+
+def _is_private_or_local_ip(ip_str: str) -> str | None:
+    """Return label for private/local/test ranges (RFC1918/loopback/link-local/multicast/etc.)."""
+    try:
+        ip = ipaddress.ip_address(ip_str.strip())
+    except ValueError:
+        return None
+    if getattr(ip, 'is_loopback', False):
+        return 'Loopback'
+    if getattr(ip, 'is_private', False):
+        return 'Private'
+    if getattr(ip, 'is_link_local', False):
+        return 'Link-local'
+    if getattr(ip, 'is_multicast', False):
+        return 'Multicast'
+    # Documentation ranges (RFC 5737) - explicit for clarity even though not "private"
+    try:
+        if ip in ipaddress.ip_network('192.0.2.0/24') or ip in ipaddress.ip_network('198.51.100.0/24') or ip in ipaddress.ip_network('203.0.113.0/24'):
+            return 'TEST-NET (documentation)'
+    except Exception:
+        pass
+    return None
+
+
+def _is_url_shortener(domain: str) -> str | None:
+    d = (domain or '').lower().strip('.')
+    if not d:
+        return None
+    if d in _URL_SHORTENER_DOMAINS:
+        return d
+    for s in _URL_SHORTENER_DOMAINS:
+        if d.endswith('.' + s):
+            return s
     return None
 
 
@@ -324,6 +370,9 @@ def get_sanity_warnings(value: str, ioc_type: str) -> list[str]:
 
     # Bogon / reserved IP
     if ioc_type == 'IP':
+        pl = _is_private_or_local_ip(val)
+        if pl:
+            warnings.append(f'{pl} IP address ({val}). Verify this is intended; blocking may disrupt internal access.')
         net = _is_bogon_ip(val)
         if net:
             warnings.append(f'Bogon/reserved IP range ({net}). Not routable on the public internet.')
@@ -332,6 +381,9 @@ def get_sanity_warnings(value: str, ioc_type: str) -> list[str]:
     if ioc_type in ('Domain', 'URL'):
         domain = _extract_domain(val, ioc_type)
         if domain:
+            short = _is_url_shortener(domain)
+            if short:
+                warnings.append(f'URL shortener domain ({short}). Destination may change; consider expanding before blocking.')
             pop = _is_popular_domain(domain)
             if pop:
                 warnings.append(f'High-traffic domain ({pop}). Blocking could disrupt critical services.')
@@ -344,6 +396,9 @@ def get_sanity_warnings(value: str, ioc_type: str) -> list[str]:
                 warnings.append(f'Free email provider ({domain}). Blocking would cut email access for many users.')
 
     if ioc_type == 'Domain':
+        low = val.lower().strip('.')
+        if low == 'localhost' or low.endswith(_LOCAL_DOMAIN_SUFFIXES):
+            warnings.append(f'Local/internal domain ({val}). Usually not routable publicly; verify before blocking.')
         if _is_punycode(val):
             warnings.append('Punycode/IDN domain detected. May be a homograph phishing attack - verify visually.')
         elif _is_dga_like(val):
@@ -440,6 +495,25 @@ def get_feed_pulse_anomalies(items: list[dict]) -> list[dict]:
                             })
                 except (ValueError, IndexError):
                     pass
+            else:
+                # IPv6 / other IP shapes: still flag private/local/bogon using ipaddress helpers
+                pl = _is_private_or_local_ip(val)
+                if pl:
+                    anomalies.append({
+                        'type': 'private_or_local_ip',
+                        'value': val,
+                        'message': f'{pl} IP address ({val}). Verify this is intended; blocking may disrupt internal access.',
+                        'ioc_type': ioc_type
+                    })
+                else:
+                    net = _is_bogon_ip(val)
+                    if net:
+                        anomalies.append({
+                            'type': 'bogon_ip',
+                            'value': val,
+                            'message': f'Bogon/reserved IP range ({net}). Not routable on the public internet.',
+                            'ioc_type': ioc_type
+                        })
 
         # ── Short domain - ccSLD-aware ──
         if ioc_type == 'Domain':
@@ -494,6 +568,16 @@ def get_feed_pulse_anomalies(items: list[dict]) -> list[dict]:
         if ioc_type in ('Domain', 'URL'):
             domain = _extract_domain(val, ioc_type)
             if domain:
+                # URL shortener / redirector
+                short = _is_url_shortener(domain)
+                if short:
+                    anomalies.append({
+                        'type': 'url_shortener',
+                        'value': val,
+                        'message': f'URL shortener domain ({short}). Destination may change; consider expanding before blocking.',
+                        'ioc_type': ioc_type
+                    })
+
                 pop = _is_popular_domain(domain)
                 if pop:
                     anomalies.append({
@@ -521,6 +605,17 @@ def get_feed_pulse_anomalies(items: list[dict]) -> list[dict]:
                         'message': f'Free email provider ({domain}). Blocking would cut email access for many users.',
                         'ioc_type': ioc_type
                     })
+
+        # ── NEW: Local/internal domains (localhost, .local, .internal, .lan) ──
+        if ioc_type == 'Domain':
+            low = val.lower().strip('.')
+            if low == 'localhost' or low.endswith(_LOCAL_DOMAIN_SUFFIXES):
+                anomalies.append({
+                    'type': 'local_domain',
+                    'value': val,
+                    'message': f'Local/internal domain ({val}). Usually not routable publicly; verify before blocking.',
+                    'ioc_type': ioc_type
+                })
 
         # ── NEW: Punycode / IDN domain ──
         if ioc_type == 'Domain' and _is_punycode(val):

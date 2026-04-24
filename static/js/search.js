@@ -776,6 +776,7 @@
                 edited: (typeof t === 'function' && t('history.edited')) ? t('history.edited') : 'Edited',
                 deleted: (typeof t === 'function' && t('history.deleted')) ? t('history.deleted') : 'Deleted',
                 expired: (typeof t === 'function' && t('history.expired')) ? t('history.expired') : 'Expired',
+                sanity_warning: (typeof t === 'function' && t('history.sanity_warning')) ? t('history.sanity_warning') : 'Sanity warning',
                 excluded: (typeof t === 'function' && t('history.excluded')) ? t('history.excluded') : 'Excluded',
                 unexcluded: (typeof t === 'function' && t('history.unexcluded')) ? t('history.unexcluded') : 'Un-excluded'
             };
@@ -813,6 +814,17 @@
                 if (ev.event_type === 'deleted' && ev.payload && ev.payload.reason) {
                     const reasonLabel = (typeof t === 'function' && t('history.deleted_reason')) ? t('history.deleted_reason') : 'Reason';
                     extra += ' <div class="mt-2 text-amber-200/90"><span class="font-semibold">' + escapeHtml(reasonLabel) + ':</span> ' + escapeHtml(ev.payload.reason) + '</div>';
+                }
+                if (ev.event_type === 'sanity_warning' && ev.payload) {
+                    const wl = (typeof t === 'function' && t('history.sanity_warning_reason')) ? t('history.sanity_warning_reason') : 'System warning';
+                    const msg = (ev.payload.message != null) ? String(ev.payload.message) : '';
+                    const warnings = Array.isArray(ev.payload.warnings) ? ev.payload.warnings : [];
+                    if (msg) {
+                        const dirMsg = (typeof detectTextDir === 'function') ? detectTextDir(msg) : 'auto';
+                        extra += ' <div class="mt-2 text-amber-200/90"><span class="font-semibold">' + escapeHtml(wl) + ':</span> <span class="whitespace-pre-wrap" dir="' + dirMsg + '">' + escapeHtml(msg) + '</span></div>';
+                    } else if (warnings.length) {
+                        extra += ' <div class="mt-2 text-amber-200/90"><span class="font-semibold">' + escapeHtml(wl) + ':</span> ' + escapeHtml(String(warnings[0] || '')) + '</div>';
+                    }
                 }
                 if (ev.event_type === 'deleted' && iocType === 'YARA' && ev.payload) {
                     const p = ev.payload;

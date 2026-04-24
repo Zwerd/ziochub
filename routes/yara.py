@@ -830,7 +830,7 @@ def fireeye_status():
 @admin_required
 def reject_yara():
     """Remove pending rule file and delete DB row (admin only)."""
-    _commit_with_retry, audit_log = _from_app('_commit_with_retry', 'audit_log')
+    _commit_with_retry, audit_log, refresh_champ_score_for_user = _from_app('_commit_with_retry', 'audit_log', 'refresh_champ_score_for_user')
     try:
         data = request.get_json() or {}
         filename = (data.get('filename') or '').strip()
@@ -847,9 +847,18 @@ def reject_yara():
                 os.remove(path_pending)
             except OSError:
                 pass
+        analyst_username = (rule.analyst or '').strip()
         db.session.delete(rule)
         _commit_with_retry()
         audit_log('YARA_REJECT', f'file={safe}')
+        # Pending rules don't grant points, but refresh anyway so caches/UI stay consistent.
+        if analyst_username:
+            owner = User.query.filter(func.lower(User.username) == analyst_username.lower()).first()
+            if owner:
+                try:
+                    refresh_champ_score_for_user(owner.id)
+                except Exception:
+                    pass
         return jsonify({'success': True, 'message': f'Rejected: {safe}'})
     except Exception as e:
         db.session.rollback()

@@ -281,12 +281,15 @@ def _score_ioc_rows(ioc_rows, scoring_method, comment_counts=None):
 
 
 def _compute_yara_points(qp, status, scoring_method):
-    """Return final YARA points, applying Smart Effort pending penalty if needed."""
+    """Return final YARA points for Champs.
+
+    Policy: YARA points are credited only after admin approval.
+    Non-approved rules contribute 0 points.
+    """
+    if status != 'approved':
+        return 0
     pts = (qp if qp is not None else YARA_DEFAULT)
-    pts = max(YARA_MIN, min(YARA_MAX, pts))
-    if scoring_method == SCORING_SMART and status != 'approved':
-        pts = YARA_MIN
-    return pts
+    return max(YARA_MIN, min(YARA_MAX, pts))
 
 
 def compute_yara_quality_points(content):
@@ -398,11 +401,10 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
 
     # 3) YARA: totals and daily points (10-50 per rule)
     yara_where = _dt_filter('yr', 'uploaded_at', params)
-    yara_pending_min = str(YARA_MIN) if scoring_method == SCORING_SMART else str(YARA_DEFAULT)
     q3 = text(f"""
         SELECT LOWER(yr.analyst) AS analyst,
-               SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE {yara_pending_min} END) AS yara_points,
-               COUNT(*) AS yara_count,
+               SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS yara_points,
+               SUM(CASE WHEN yr.status = 'approved' THEN 1 ELSE 0 END) AS yara_count,
                MAX(yr.uploaded_at) AS last_yara
         FROM yara_rules yr
         WHERE 1=1 {yara_where}
@@ -425,7 +427,7 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
     q3b = text(f"""
         SELECT LOWER(yr.analyst) AS analyst,
                DATE(yr.uploaded_at) AS d,
-               SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE {yara_pending_min} END) AS day_pts
+               SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS day_pts
         FROM yara_rules yr
         WHERE yr.uploaded_at IS NOT NULL {yara_where}
         GROUP BY LOWER(yr.analyst), DATE(yr.uploaded_at)
@@ -639,10 +641,11 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
         a = (analyst or 'unknown').lower()
         pts = _compute_yara_points(qp, status, scoring_method)
         d = _to_date(uploaded_at)
-        if d:
-            analyst_daily[a][d] = analyst_daily[a].get(d, 0) + pts
-        analyst_last[a] = max(analyst_last.get(a, d), d) if analyst_last.get(a) else d
-        analyst_yara[a] = analyst_yara[a] + 1
+        if status == 'approved':
+            if d:
+                analyst_daily[a][d] = analyst_daily[a].get(d, 0) + pts
+            analyst_last[a] = max(analyst_last.get(a, d), d) if analyst_last.get(a) else d
+            analyst_yara[a] = analyst_yara[a] + 1
 
     # Deletion and activity points (ActivityEvent)
     # - ioc_deletion: deleter gets +1 per deletion (not self-delete own IOC); assigned analyst loses IOC points when row removed
@@ -959,7 +962,8 @@ def _get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id, analys
         if d and (last_activity_date is None or d > last_activity_date):
             last_activity_date = d
     last_yara = db.session.query(func.max(YaraRule.uploaded_at)).filter(
-        func.lower(YaraRule.analyst) == analyst_lower
+        func.lower(YaraRule.analyst) == analyst_lower,
+        YaraRule.status == 'approved',
     ).scalar()
     if last_yara:
         d = _as_date(_to_date(last_yara))
@@ -1027,7 +1031,7 @@ def _get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id, analys
     has_early = db.session.query(IOC.id).filter(ioc_filter, func.strftime('%H', IOC.created_at).in_(early_h)).first() is not None
     has_weekend = db.session.query(IOC.id).filter(ioc_filter, func.strftime('%w', IOC.created_at).in_(['5', '6'])).first() is not None
     if not has_night or not has_early or not has_weekend:
-        yr_filter = func.lower(YaraRule.analyst) == analyst_lower
+        yr_filter = db.and_(func.lower(YaraRule.analyst) == analyst_lower, YaraRule.status == 'approved')
         if not has_night:
             has_night = db.session.query(YaraRule.id).filter(yr_filter, func.strftime('%H', YaraRule.uploaded_at).in_(night_h)).first() is not None
         if not has_early:
@@ -1069,7 +1073,10 @@ def _get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id, analys
     if campaign_linked >= 10:
         add_badge('campaign_master')
 
-    yara_count = db.session.query(YaraRule).filter(func.lower(YaraRule.analyst) == analyst_lower).count()
+    yara_count = db.session.query(YaraRule).filter(
+        func.lower(YaraRule.analyst) == analyst_lower,
+        YaraRule.status == 'approved',
+    ).count()
     if yara_count >= 1:
         add_badge('yara_rookie')
     if yara_count >= 3:
@@ -1164,7 +1171,7 @@ def _compute_team_daily_counts(db, IOC, YaraRule, today, days_back=30):
             team_daily[d] = team_daily.get(d, 0) + (row[1] or 0)
     q_yara = text("""
         SELECT DATE(uploaded_at) AS d, COUNT(*) AS cnt
-        FROM yara_rules WHERE uploaded_at >= :start_dt AND uploaded_at IS NOT NULL
+        FROM yara_rules WHERE uploaded_at >= :start_dt AND uploaded_at IS NOT NULL AND status = 'approved'
         GROUP BY DATE(uploaded_at)
     """)
     for row in db.session.execute(q_yara, {'start_dt': start_dt}).fetchall():
@@ -1363,7 +1370,10 @@ def compute_team_goal_current(db, goal, IOC, YaraRule, ActivityEvent):
     if goal_type == 'ioc_add':
         n = db.session.query(IOC).filter(IOC.created_at >= datetime.combine(start, datetime.min.time())).count()
     elif goal_type == 'yara_add':
-        n = db.session.query(YaraRule).filter(YaraRule.uploaded_at >= datetime.combine(start, datetime.min.time())).count()
+        n = db.session.query(YaraRule).filter(
+            YaraRule.uploaded_at >= datetime.combine(start, datetime.min.time()),
+            YaraRule.status == 'approved',
+        ).count()
     elif goal_type == 'deletion':
         if ActivityEvent:
             from sqlalchemy import and_
@@ -1386,7 +1396,11 @@ def compute_team_goal_for_week(db, goal, IOC, YaraRule, ActivityEvent, week_star
     if goal_type == 'ioc_add':
         return db.session.query(IOC).filter(IOC.created_at >= start_dt, IOC.created_at <= end_dt).count()
     elif goal_type == 'yara_add':
-        return db.session.query(YaraRule).filter(YaraRule.uploaded_at >= start_dt, YaraRule.uploaded_at <= end_dt).count()
+        return db.session.query(YaraRule).filter(
+            YaraRule.uploaded_at >= start_dt,
+            YaraRule.uploaded_at <= end_dt,
+            YaraRule.status == 'approved',
+        ).count()
     elif goal_type == 'deletion' and ActivityEvent:
         return db.session.query(ActivityEvent).filter(
             ActivityEvent.event_type == 'ioc_deletion',

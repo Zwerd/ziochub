@@ -31,6 +31,21 @@ from utils.upload_text_encoding import decode_uploaded_text_bytes
 
 bp = Blueprint('ioc_bp', __name__)
 
+def _log_sanity_warning_history(_log_ioc_history_fn, ioc_type: str, value: str, warnings_list: list[str]):
+    """
+    Record a sanity warning in IOC history so future searches show the system concern.
+    Stored as event_type='sanity_warning' by username='system'.
+    """
+    try:
+        items = [w.strip() for w in (warnings_list or []) if isinstance(w, str) and w.strip()]
+        if not items:
+            return
+        msg = 'sanity check failed: ' + ' | '.join(items)
+        _log_ioc_history_fn(ioc_type, value, 'sanity_warning', 'system', {'message': msg, 'warnings': items})
+    except Exception:
+        # Never block submission on history logging failures
+        return
+
 
 def _from_app(*names):
     import app as _app
@@ -677,6 +692,12 @@ def submit_ioc():
         if exp_date:
             payload_hist['expiration_date'] = exp_date.isoformat()
         _log_ioc_history(ioc_type, value, 'created', username, payload_hist)
+        _log_sanity_warning_history(
+            _log_ioc_history,
+            ioc_type,
+            value,
+            (sanity_warnings or []) + ([msg] if should_warn and msg else []),
+        )
         _commit_with_retry()
         cmt = (comment or '').strip() if comment else ''
         comment_preview = (cmt[:80] + '...') if len(cmt) > 80 else cmt
@@ -1060,6 +1081,7 @@ def bulk_csv():
                     if exp_date:
                         payload_hist['expiration_date'] = exp_date.isoformat()
                     _log_ioc_history(ioc_type, value, 'created', username, payload_hist)
+                    _log_sanity_warning_history(_log_ioc_history, ioc_type, value, get_sanity_warnings(value, ioc_type))
                     new_count += 1
                     new_iocs_for_push.append(ioc_context_from_submission(
                         ioc_type=ioc_type,
@@ -1720,6 +1742,7 @@ def submit_staging():
                 if exp_date:
                     payload_hist['expiration_date'] = exp_date.isoformat() if hasattr(exp_date, 'isoformat') else str(exp_date)[:10]
                 _log_ioc_history(ioc_type, ioc_value, 'created', analyst, payload_hist)
+                _log_sanity_warning_history(_log_ioc_history, ioc_type, ioc_value, get_sanity_warnings(ioc_value, ioc_type))
                 total_new += 1
                 if ioc_type == 'Hash':
                     new_hashes_for_dxl.append(ioc_value)

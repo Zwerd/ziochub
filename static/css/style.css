@@ -5680,3 +5680,28 @@ textarea:focus-visible {
         display: block !important;
     }
 }
+
+/* =============================================================================
+   ZIoCHub: Force Live Stats "Live Updating" pulse when OS disables motion
+   -----------------------------------------------------------------------------
+   Same rationale as Champs — undo global motion clamp only inside this tab so
+   the live indicator stays visibly animated.
+   ============================================================================= */
+@media (prefers-reduced-motion: reduce) {
+    #tab-live-stats *, #tab-live-stats *::before, #tab-live-stats *::after {
+        animation-duration: revert !important;
+        animation-iteration-count: revert !important;
+        transition-duration: revert !important;
+    }
+
+    #tab-live-stats #liveIndicator {
+        animation: live-block-pulse 2s ease-in-out infinite !important;
+        will-change: opacity;
+        transform: translateZ(0);
+    }
+
+    /* Keep dot static — parent block carries the pulse (matches non-reduced CSS). */
+    #tab-live-stats #liveIndicator .pulse-dot {
+        animation: none !important;
+    }
+}

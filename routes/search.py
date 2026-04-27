@@ -566,7 +566,7 @@ def _ioc_query_browse_aggregate(agg: str):
     """Return IOC query for ``browse_aggregate`` (empty ``q`` browse), or ``None`` if unknown."""
     vlen = func.length(func.trim(IOC.value))
     ag = (agg or '').strip().lower()
-    q = IOC.query.options(joinedload(IOC.campaign))
+    q = IOC.query.options(joinedload(IOC.campaign)).filter(IOC.revoked.is_(False))
     if ag == 'domain':
         return q.filter(IOC.type == 'Domain')
     if ag == 'email':
@@ -804,9 +804,10 @@ def search_ioc():
     # Empty search: treat as "All Groups" + "All Columns" and return all IOCs (paginated).
     # (YARA/Campaign have their own browse_aggregate buckets.)
     if not query and not country_cc and not browse_aggregate:
-        total = IOC.query.count()
+        total = IOC.query.filter(IOC.revoked.is_(False)).count()
         rows = (
             IOC.query.options(joinedload(IOC.campaign))
+            .filter(IOC.revoked.is_(False))
             .order_by(IOC.created_at.desc(), IOC.id.desc())
             .offset((page - 1) * per_page)
             .limit(per_page)
@@ -925,7 +926,7 @@ def search_ioc():
 
     if not query and country_cc:
         q = _apply_ip_country_filter(
-            IOC.query.options(joinedload(IOC.campaign)),
+            IOC.query.options(joinedload(IOC.campaign)).filter(IOC.revoked.is_(False)),
             country_cc,
         )
         total = q.count()
@@ -946,7 +947,7 @@ def search_ioc():
 
     query_lower = query.lower()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    q = IOC.query.options(joinedload(IOC.campaign))
+    q = IOC.query.options(joinedload(IOC.campaign)).filter(IOC.revoked.is_(False))
     if country_cc:
         q = _apply_ip_country_filter(q, country_cc)
     if browse_aggregate:
@@ -1233,7 +1234,7 @@ def get_all_iocs():
     country_cc = country_raw.lower()
     if country_raw and (len(country_cc) != 2 or not country_cc.isalpha()):
         return jsonify({'success': False, 'message': 'country_code must be a 2-letter ISO code'}), 400
-    base = IOC.query.filter(IOC.type != 'YARA')
+    base = IOC.query.filter(IOC.type != 'YARA', IOC.revoked.is_(False))
     base = _apply_ip_country_filter(base, country_cc)
     total = base.count()
     q = base.order_by(IOC.created_at.desc())
@@ -1292,9 +1293,11 @@ def export_iocs():
         return jsonify({'success': False, 'message': 'Invalid type'}), 400
     if fmt not in ('csv', 'json'):
         return jsonify({'success': False, 'message': 'format must be csv or json'}), 400
-    now = datetime.now()
+    # Stored timestamps are UTC-naive; compare using UTC-naive "now".
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     export_limit = min(max(1, int(request.args.get('limit', 10000))), 100000)
-    q = IOC.query.filter(IOC.type != 'YARA')
+    # Export excludes revoked IOCs (revoked are represented via history/TAXII revocation).
+    q = IOC.query.filter(IOC.type != 'YARA', IOC.revoked.is_(False))
     if ioc_type:
         q = q.filter(IOC.type == ioc_type)
     if active_only:
@@ -1349,7 +1352,7 @@ def export_iocs():
 @bp.route('/api/revoke', methods=['POST'])
 @login_required
 def revoke_ioc():
-    """Remove an IOC from the database."""
+    """Revoke an IOC (soft-delete) so TAXII/STIX clients can sync removals."""
     (
         _commit_with_retry, _log_ioc_history, _log_champs_event, audit_log,
         _capture_champs_before, _detect_champs_changes, refresh_champ_score_for_user,
@@ -1374,7 +1377,7 @@ def revoke_ioc():
         if not row:
             return jsonify({'success': False, 'message': MSG_IOC_NOT_FOUND}), 404
 
-        # Prepare outbound removal push context before deleting DB row.
+        # Prepare outbound removal push context before revoking DB row.
         remove_payload = {
             'ioc_type': row.type,
             'value': row.value,
@@ -1401,7 +1404,11 @@ def revoke_ioc():
             (row.user_id is not None and row.user_id == current_user.id)
             or (bool(ioc_analyst_un) and ioc_analyst_un == deleter_un)
         )
-        db.session.delete(row)
+        # Soft revoke (keep row.id stable so STIX id is stable)
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        row.revoked = True
+        row.revoked_at = now_utc
+        row.modified_at = now_utc
         _commit_with_retry()
         # Attribute deletion to the user who performed it (for Champs "Deletions" count)
         champs_payload = {
@@ -1665,7 +1672,7 @@ def get_recent():
     """Get the latest 50 items from both IOC and YaraRule tables, merged and sorted by date (newest first)."""
     (check_expiration_status, get_country_code) = _from_app('check_expiration_status', 'get_country_code')
     limit = int(request.args.get('limit', 50))
-    ioc_rows = IOC.query.order_by(IOC.created_at.desc()).limit(limit).all()
+    ioc_rows = IOC.query.filter(IOC.revoked.is_(False)).order_by(IOC.created_at.desc()).limit(limit).all()
     yara_rows = YaraRule.query.filter(YaraRule.status == 'approved').order_by(YaraRule.uploaded_at.desc()).limit(limit).all()
     combined = []
     for row in ioc_rows:

@@ -429,7 +429,8 @@ function _getTabFromHash() {
 
 async function switchTab(tabId, skipHash) {
     // Require login for sensitive pages
-    const requireAuthTabs = new Set(['search', 'bulk-unified', 'yara', 'champs', 'campaigns', 'playbook', 'reports']);
+    // Live Stats is intentionally public; Feed Pulse contains sensitive connection/push status.
+    const requireAuthTabs = new Set(['feed-pulse', 'search', 'bulk-unified', 'yara', 'champs', 'campaigns', 'playbook', 'reports']);
     const isAuthed = document.body.getAttribute('data-authenticated') === '1';
     if (requireAuthTabs.has(tabId) && !isAuthed) {
         try { showToast('Login required', 'warning', 2500); } catch (e) { /* ignore */ }

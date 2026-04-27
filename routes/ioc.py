@@ -460,12 +460,12 @@ def _parse_date_from_staging(date_str):
 def _staging_date_display(val):
     """Return ISO-style date string for staging 'date' field. Handles datetime or str (no strftime on str)."""
     if val is None:
-        return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        return _utcnow().strftime('%Y-%m-%dT%H:%M:%S')
     if hasattr(val, 'strftime'):
         return val.strftime('%Y-%m-%dT%H:%M:%S')
     if isinstance(val, str):
-        return val[:19] if len(val) >= 19 else (val or datetime.now().strftime('%Y-%m-%dT%H:%M:%S'))
-    return datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        return val[:19] if len(val) >= 19 else (val or _utcnow().strftime('%Y-%m-%dT%H:%M:%S'))
+    return _utcnow().strftime('%Y-%m-%dT%H:%M:%S')
 
 
 def _format_expiration_display(exp_dt):
@@ -1262,7 +1262,7 @@ def preview_csv():
                     'type': ioc_type,
                     'ticket_id': ticket_id_val or '',
                     'analyst': username,
-                    'date': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
+                    'date': _utcnow().strftime('%Y-%m-%dT%H:%M:%S'),
                     'comment': sanitize_comment(comment) or '',
                     'expiration': expiration_display,
                     'existing_permanent': existing_permanent,
@@ -1333,7 +1333,7 @@ def preview_txt():
             parsed = _parse_txt_metadata(metadata_raw)
             analyst = (parsed['analyst'] or default_analyst).lower()
             ticket_id = parsed['ticket_id'] or default_ticket
-            created_at = parsed['created_at'] or datetime.now()
+            created_at = parsed['created_at'] or _utcnow()
             comment = sanitize_comment(parsed['comment'] or default_comment or '') or ''
 
             if not extracted:
@@ -1479,7 +1479,7 @@ def preview_paste():
                 'type': ioc_type,
                 'ticket_id': default_ticket or '',
                 'analyst': default_analyst,
-                'date': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
+                'date': _utcnow().strftime('%Y-%m-%dT%H:%M:%S'),
                 'comment': sanitize_comment(default_comment or '') or '',
                 'expiration': expiration_display,
                 'existing_permanent': existing_permanent,
@@ -1583,7 +1583,7 @@ def preview_single():
             'type': ioc_type,
             'ticket_id': ticket_id or '',
             'analyst': username,
-            'date': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
+            'date': _utcnow().strftime('%Y-%m-%dT%H:%M:%S'),
             'comment': comment,
             'expiration': expiration_display,
             'existing_permanent': existing_permanent,
@@ -1681,7 +1681,7 @@ def submit_staging():
             ticket_id = (raw.get('ticket_id') or '').strip() or fallback_ticket
             comment = sanitize_comment(raw.get('comment') or '') or None
             date_str = (raw.get('date') or '').strip()
-            server_now = datetime.now()
+            server_now = _utcnow()
             created_at = _parse_date_from_staging(date_str) or server_now
             if not hasattr(created_at, 'strftime'):
                 created_at = server_now
@@ -1912,7 +1912,7 @@ def upload_txt():
             analyst_raw = (parsed['analyst'] or username).strip() or username
             resolved_txt = _resolve_analyst_to_user(analyst_raw)
             final_user = (resolved_txt[1] if resolved_txt else username)
-            final_date = parsed['created_at'] or datetime.now()
+            final_date = parsed['created_at'] or _utcnow()
             final_ticket_id = parsed['ticket_id'] or default_ticket_id
             comment_sanitized = sanitize_comment(parsed['comment'] or '')
 

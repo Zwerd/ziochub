@@ -682,7 +682,7 @@ def campaign_graph(campaign_id):
         now = datetime.now()
         active_ioc_count = sum(
             1 for ioc in iocs
-            if ioc.expiration_date is None or ioc.expiration_date > now
+            if (not bool(getattr(ioc, 'revoked', False))) and (ioc.expiration_date is None or ioc.expiration_date > now)
         )
         expired_ioc_count = len(iocs) - active_ioc_count
         yara_count = len(yara_rules)
@@ -763,11 +763,14 @@ def campaign_graph(campaign_id):
                 node['image'] = f'/static/flags/1x1/{cc}.svg' if cc else _EMOJI_SVGS['IP']
             else:
                 node['image'] = _EMOJI_SVGS.get(ioc_type, _EMOJI_SVGS['Hash'])
-            ioc_active = ioc.expiration_date is None or ioc.expiration_date > now
+            ioc_active = (not bool(getattr(ioc, 'revoked', False))) and (ioc.expiration_date is None or ioc.expiration_date > now)
             if not ioc_active:
                 node['opacity'] = 0.5
                 exp_hint = ioc.expiration_date.strftime('%Y-%m-%d') if ioc.expiration_date else ''
-                node['title'] = (node.get('title') or '') + (f"\n(Expired {exp_hint})" if exp_hint else '\n(Expired)')
+                if bool(getattr(ioc, 'revoked', False)):
+                    node['title'] = (node.get('title') or '') + '\n(Revoked)'
+                else:
+                    node['title'] = (node.get('title') or '') + (f"\n(Expired {exp_hint})" if exp_hint else '\n(Expired)')
             nodes.append(node)
             edges.append({
                 'from': camp_node_id,

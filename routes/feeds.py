@@ -76,9 +76,11 @@ def _feed_ioc_rows(ioc_type, hash_length=None, max_rows=None):
     """Return list of active (non-expired) IOC rows for the given type. Optionally filter Hash by length. Capped at max_rows (default FEED_IOC_MAX_ROWS) for efficiency."""
     if max_rows is None:
         max_rows = FEED_IOC_MAX_ROWS
-    now = datetime.now()
+    # Stored timestamps are UTC-naive (see models._utcnow). Always compare using UTC-naive "now".
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     q = IOC.query.filter(
         IOC.type == ioc_type,
+        IOC.revoked.is_(False),
         db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
     )
     rows = q.limit(max_rows).all()
@@ -220,7 +222,36 @@ def _stix_indicator_from_row(row, now=None):
         pattern = _stix_indicator_pattern(ioc_type, val)
     except ValueError:
         return None
-    created_ts = (row.created_at or now).strftime('%Y-%m-%dT%H:%M:%S.000Z') if row.created_at else now.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+    def _as_utc_naive(dt):
+        """
+        Normalize a datetime into UTC-naive.
+        - aware -> convert to UTC, drop tzinfo
+        - naive -> assume it already represents UTC (best-effort for legacy rows)
+        """
+        if dt is None:
+            return None
+        try:
+            if getattr(dt, 'tzinfo', None) is not None and dt.tzinfo is not None:
+                return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception:
+            pass
+        return dt
+
+    def _stix_ts(dt_utc_naive):
+        """Return ISO-8601 UTC with 'Z' and millisecond precision for STIX."""
+        if dt_utc_naive is None:
+            return None
+        aware = dt_utc_naive.replace(tzinfo=timezone.utc)
+        # 2026-04-27T12:34:56.789Z
+        return aware.isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+
+    created_dt = _as_utc_naive(getattr(row, 'created_at', None)) or now
+    modified_dt = _as_utc_naive(getattr(row, 'modified_at', None) or getattr(row, 'revoked_at', None)) or created_dt
+    # Guard: ensure modified never precedes created in emitted STIX.
+    if modified_dt < created_dt:
+        modified_dt = created_dt
+    created_ts = _stix_ts(created_dt)
+    modified_ts = _stix_ts(modified_dt)
     ind_id = _stix_id_for_ioc(row)
     name = f"ZIoCHub {ioc_type}: {val[:50]}" + ('...' if len(val) > 50 else '')
     comment = (row.comment or '')[:200] or None
@@ -229,7 +260,8 @@ def _stix_indicator_from_row(row, now=None):
         'spec_version': '2.1',
         'id': ind_id,
         'created': created_ts,
-        'modified': created_ts,
+        'modified': modified_ts,
+        **({'revoked': True} if bool(getattr(row, 'revoked', False)) else {}),
         'name': name,
         'description': comment,
         'pattern_type': 'stix',
@@ -260,7 +292,13 @@ def _stix_date_added_iso(dt):
     """Format datetime as TAXII timestamp (ISO 8601 with microsecond precision)."""
     if dt is None:
         return None
-    return dt.strftime('%Y-%m-%dT%H:%M:%S.000000Z') if dt.tzinfo is None else dt.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
+    # TAXII expects UTC timestamps. Stored datetimes are UTC-naive; treat naive as UTC.
+    try:
+        if getattr(dt, 'tzinfo', None) is not None and dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    except Exception:
+        pass
+    return dt.replace(tzinfo=timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
 
 
 def _feed_stix_objects_page(
@@ -270,6 +308,7 @@ def _feed_stix_objects_page(
     match_ids=None,
     match_types=None,
     match_spec_versions=None,
+    include_revoked: bool = False,
 ):
     """
     Return one page of STIX 2.1 Indicator objects for TAXII 2.1 Get Objects.
@@ -278,18 +317,29 @@ def _feed_stix_objects_page(
     first_date_added/last_date_added are ISO timestamp strings or None when no objects.
     """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    q = IOC.query.filter(
-        IOC.type != 'YARA',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    )
+    q = IOC.query.filter(IOC.type != 'YARA')
+    if include_revoked:
+        # Include revoked objects so TAXII clients can synchronize removals.
+        # Expired-but-not-revoked should not be emitted as active, so we include:
+        #   active OR revoked
+        q = q.filter(db.or_(
+            IOC.revoked.is_(True),
+            IOC.expiration_date.is_(None),
+            IOC.expiration_date > now,
+        ))
+    else:
+        q = q.filter(
+            IOC.revoked.is_(False),
+            db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now),
+        )
     if added_after is not None:
-        q = q.filter(IOC.created_at >= added_after)
+        q = q.filter(IOC.modified_at >= added_after)
     if match_types is not None and 'indicator' not in match_types:
         # We only have indicators; if client asked for other types, return empty
         return [], False, None, None
     if match_spec_versions is not None and '2.1' not in match_spec_versions:
         return [], False, None, None
-    q = q.order_by(IOC.created_at, IOC.id)
+    q = q.order_by(IOC.modified_at, IOC.id)
     if match_ids is not None and match_ids:
         want = set(match_ids)
         # Must resolve STIX id -> row; no DB column so we scan in order and filter
@@ -309,14 +359,14 @@ def _feed_stix_objects_page(
         ind = _stix_indicator_from_row(row, now)
         if ind:
             objects.append(ind)
-    first_dt = rows[0].created_at if rows else None
-    last_dt = rows[-1].created_at if rows else None
+    first_dt = (rows[0].modified_at or rows[0].created_at) if rows else None
+    last_dt = (rows[-1].modified_at or rows[-1].created_at) if rows else None
     first_ts = _stix_date_added_iso(first_dt) if first_dt else None
     last_ts = _stix_date_added_iso(last_dt) if last_dt else None
     return objects, has_more, first_ts, last_ts
 
 
-def _feed_stix_object_by_id(object_id):
+def _feed_stix_object_by_id(object_id, *, include_revoked: bool = False):
     """
     Return a single STIX 2.1 Indicator for the given TAXII/STIX object id, or None.
     Also returns date_added (ISO str) for that object for TAXII headers.
@@ -324,15 +374,25 @@ def _feed_stix_object_by_id(object_id):
     if not object_id or not isinstance(object_id, str) or not object_id.strip().startswith('indicator--'):
         return None, None
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    q = IOC.query.filter(
-        IOC.type != 'YARA',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    ).order_by(IOC.created_at, IOC.id)
+    q = IOC.query.filter(IOC.type != 'YARA')
+    if include_revoked:
+        q = q.filter(db.or_(
+            IOC.revoked.is_(True),
+            IOC.expiration_date.is_(None),
+            IOC.expiration_date > now,
+        ))
+    else:
+        q = q.filter(
+            IOC.revoked.is_(False),
+            db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now),
+        )
+    q = q.order_by(IOC.modified_at, IOC.id)
     for row in q.all():
         if _stix_id_for_ioc(row) == object_id.strip():
             ind = _stix_indicator_from_row(row, now)
             if ind:
-                ts = _stix_date_added_iso(row.created_at) if row.created_at else None
+                dt = row.modified_at or row.created_at
+                ts = _stix_date_added_iso(dt) if dt else None
                 return ind, ts
             break
     return None, None
@@ -345,6 +405,7 @@ def _feed_stix_manifest_page(
     match_ids=None,
     match_types=None,
     match_spec_versions=None,
+    include_revoked: bool = False,
 ):
     """
     Return one page of TAXII 2.1 manifest records (id, date_added, version, media_type).
@@ -353,17 +414,25 @@ def _feed_stix_manifest_page(
     """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     media_type = 'application/stix+json;version=2.1'
-    q = IOC.query.filter(
-        IOC.type != 'YARA',
-        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
-    )
+    q = IOC.query.filter(IOC.type != 'YARA')
+    if include_revoked:
+        q = q.filter(db.or_(
+            IOC.revoked.is_(True),
+            IOC.expiration_date.is_(None),
+            IOC.expiration_date > now,
+        ))
+    else:
+        q = q.filter(
+            IOC.revoked.is_(False),
+            db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now),
+        )
     if added_after is not None:
-        q = q.filter(IOC.created_at >= added_after)
+        q = q.filter(IOC.modified_at >= added_after)
     if match_types is not None and 'indicator' not in match_types:
         return [], False, None, None
     if match_spec_versions is not None and '2.1' not in match_spec_versions:
         return [], False, None, None
-    q = q.order_by(IOC.created_at, IOC.id)
+    q = q.order_by(IOC.modified_at, IOC.id)
     if match_ids is not None and match_ids:
         want = set(match_ids)
         all_rows = q.all()
@@ -379,30 +448,35 @@ def _feed_stix_manifest_page(
             rows = rows[:limit]
     manifest_objects = []
     for row in rows:
-        created_ts = (row.created_at or now).strftime('%Y-%m-%dT%H:%M:%S.000Z') if row.created_at else now.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        created_dt = _as_utc_naive(getattr(row, 'created_at', None)) or now
+        modified_dt = _as_utc_naive(getattr(row, 'modified_at', None) or getattr(row, 'revoked_at', None)) or created_dt
+        if modified_dt < created_dt:
+            modified_dt = created_dt
+        created_ts = _stix_ts(created_dt)
+        modified_ts = _stix_ts(modified_dt)
         manifest_objects.append({
             'id': _stix_id_for_ioc(row),
-            'date_added': _stix_date_added_iso(row.created_at) if row.created_at else created_ts,
-            'version': created_ts,
+            'date_added': _stix_date_added_iso(modified_dt) if modified_dt else created_ts,
+            'version': modified_ts,
             'media_type': media_type,
         })
-    first_dt = rows[0].created_at if rows else None
-    last_dt = rows[-1].created_at if rows else None
+    first_dt = (rows[0].modified_at or rows[0].created_at) if rows else None
+    last_dt = (rows[-1].modified_at or rows[-1].created_at) if rows else None
     first_ts = _stix_date_added_iso(first_dt) if first_dt else None
     last_ts = _stix_date_added_iso(last_dt) if last_dt else None
     return manifest_objects, has_more, first_ts, last_ts
 
 
-def _feed_stix_object_versions(object_id):
+def _feed_stix_object_versions(object_id, *, include_revoked: bool = False):
     """
     Return list of version entries for one object (TAXII 2.1 Get Object Versions).
     ZIoCHub has one version per IOC (created = modified). Returns (versions_list, first_date_added, last_date_added) or (None, None, None) if not found.
     """
-    ind, date_added = _feed_stix_object_by_id(object_id)
+    ind, date_added = _feed_stix_object_by_id(object_id, include_revoked=include_revoked)
     if ind is None:
         return None, None, None
-    created_ts = ind.get('created') or ind.get('modified')
-    versions = [{'id': ind['id'], 'date_added': date_added or created_ts, 'version': created_ts}]
+    version_ts = ind.get('modified') or ind.get('created')
+    versions = [{'id': ind['id'], 'date_added': date_added or version_ts, 'version': version_ts}]
     return versions, date_added, date_added
 
 
@@ -535,7 +609,7 @@ def feed_esa_email():
 
 def _epo_feed_ticket_ids():
     """Distinct ticket_ids that have at least one active Hash IOC."""
-    now = datetime.now()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     ids = set()
     for r in IOC.query.filter(
         IOC.type == 'Hash',
@@ -588,7 +662,7 @@ def feed_epo_file(ticket_id):
     cache_key = f'epo:ticket:{ticket_id.strip().lower()}'
 
     def build():
-        now = datetime.now()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(['All File Names', 'MD5 Hash', 'SHA-1 Hash', 'SHA-256 Hash'])

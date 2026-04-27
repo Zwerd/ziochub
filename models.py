@@ -88,6 +88,12 @@ class IOC(db.Model):
     comment = db.Column(db.Text, nullable=True)
     expiration_date = db.Column(db.DateTime, nullable=True)  # NULL = Permanent
     created_at = db.Column(db.DateTime, default=_utcnow)
+    # STIX/TAXII revocation support:
+    # - revoked=true indicates the indicator was removed/expired and should be emitted as STIX revoked
+    # - modified_at is the STIX modified timestamp (keep created_at stable)
+    revoked = db.Column(db.Boolean, nullable=False, default=False)
+    revoked_at = db.Column(db.DateTime, nullable=True)
+    modified_at = db.Column(db.DateTime, nullable=True, default=_utcnow, onupdate=_utcnow)
     campaign_id = db.Column(db.Integer, db.ForeignKey('campaigns.id'), nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)  # FK to users; NULL = legacy
     tags = db.Column(db.Text, nullable=True, default='[]')  # JSON array of strings
@@ -100,7 +106,9 @@ class IOC(db.Model):
     __table_args__ = (
         UniqueConstraint('type', 'value', name='u_type_value'),
         Index('ix_iocs_created_at', 'created_at'),
+        Index('ix_iocs_modified_at', 'modified_at'),
         Index('ix_iocs_expiration_date', 'expiration_date'),
+        Index('ix_iocs_revoked', 'revoked'),
         Index('ix_iocs_campaign_id', 'campaign_id'),
         Index('ix_iocs_analyst', 'analyst'),
     )

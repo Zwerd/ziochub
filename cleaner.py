@@ -2,8 +2,9 @@
 """
 ZIoCHub - Expired IOC Cleanup Script
 =====================================
-Deletes IOC rows whose expiration_date has passed from the SQLite database,
-logs each deletion to ioc_history, then runs VACUUM to reclaim disk space.
+Revokes IOC rows whose expiration_date has passed from the SQLite database,
+logs each revocation to ioc_history. The IOC row remains so TAXII/STIX clients
+can receive a revoked=true update for the same indicator id.
 
 Designed to be triggered by systemd timer (ziochub-cleaner.timer).
 All output goes to stdout/stderr so systemd captures it in the journal.
@@ -26,18 +27,32 @@ def get_db_path():
 
 def clean_expired_iocs(db_path):
     """
-    Delete IOC rows where expiration_date is non-NULL and in the past.
-    Logs each deletion to ioc_history before removing.
-    Returns the number of rows removed.
+    Revoke IOC rows where expiration_date is non-NULL and in the past (soft-delete).
+    Logs each revocation to ioc_history and updates iocs.revoked / modified_at.
+    Returns the number of rows revoked.
     """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
+        # Ensure revocation columns exist (older DBs may predate the migration).
+        try:
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(iocs)").fetchall()]
+            if "revoked" not in cols:
+                conn.execute("ALTER TABLE iocs ADD COLUMN revoked BOOLEAN NOT NULL DEFAULT 0")
+            if "revoked_at" not in cols:
+                conn.execute("ALTER TABLE iocs ADD COLUMN revoked_at DATETIME")
+            if "modified_at" not in cols:
+                conn.execute("ALTER TABLE iocs ADD COLUMN modified_at DATETIME")
+            conn.commit()
+        except Exception as e:
+            print(f"[cleaner] WARNING: could not ensure revocation columns: {e}")
+
         expired_rows = conn.execute(
-            "SELECT type, value, analyst FROM iocs "
-            "WHERE expiration_date IS NOT NULL AND expiration_date < ?",
+            "SELECT id, type, value, analyst FROM iocs "
+            "WHERE expiration_date IS NOT NULL AND expiration_date < ? "
+            "AND (revoked IS NULL OR revoked = 0)",
             (now,),
         ).fetchall()
 
@@ -70,13 +85,12 @@ def clean_expired_iocs(db_path):
             )
 
         cursor = conn.execute(
-            "DELETE FROM iocs WHERE expiration_date IS NOT NULL AND expiration_date < ?",
-            (now,),
+            "UPDATE iocs SET revoked = 1, revoked_at = ?, modified_at = ? "
+            "WHERE expiration_date IS NOT NULL AND expiration_date < ? AND (revoked IS NULL OR revoked = 0)",
+            (now, now, now),
         )
         deleted = cursor.rowcount
         conn.commit()
-
-        conn.execute("VACUUM")
         return deleted
     finally:
         conn.close()

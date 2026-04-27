@@ -5623,3 +5623,60 @@ textarea:focus-visible {
     .champs-spotlight-points-value:hover { animation: none; }
     #champsParticlesCanvas { display: none; }
 }
+
+/* =============================================================================
+   ZIoCHub: Force Champs animations even when OS disables motion
+   -----------------------------------------------------------------------------
+   Windows "Show animations" can toggle prefers-reduced-motion=reduce on reboot.
+   For Champs Analysis we intentionally keep motion/particles enabled so the
+   dashboard retains its UX.
+   ============================================================================= */
+@media (prefers-reduced-motion: reduce) {
+    /* Undo the global motion clamp (only for Champs UI). */
+    #tab-champs *, #tab-champs *::before, #tab-champs *::after {
+        animation-duration: revert !important;
+        animation-iteration-count: revert !important;
+        transition-duration: revert !important;
+    }
+
+    /* Champs effects explicitly disabled above — re-enable. */
+    #tab-champs .champs-hud-bar::before,
+    #tab-champs .champs-hud-bar::after,
+    #tab-champs .champs-ticker-live,
+    #tab-champs .champs-ticker-live::before,
+    #tab-champs .champs-medal-circle,
+    #tab-champs .champs-medal-circle::before,
+    #tab-champs .champs-medal-circle-1,
+    #tab-champs .champs-medal-circle-1::after,
+    #tab-champs .champs-tab,
+    #tab-champs .champs-tab::after,
+    #tab-champs .champs-spotlight-card,
+    #tab-champs .champs-spotlight-card::before,
+    #tab-champs .champs-spotlight-card::after,
+    #tab-champs .champs-spotlight-content,
+    #tab-champs .champs-spotlight-wrap::before,
+    #tab-champs .champs-ladder-header::after,
+    #tab-champs .champs-rank-slot::after,
+    #tab-champs .champs-trophy-item,
+    #tab-champs .champs-trophy-item .champs-trophy-symbol,
+    #tab-champs .champs-stat-card .font-mono,
+    #tab-champs .champs-ticker-kw,
+    #tab-champs .champs-spotlight-points-value:hover,
+    .champs-rankup-overlay, .champs-rankup-content {
+        animation: revert !important;
+        transition: revert !important;
+        transform: revert !important;
+        opacity: revert !important;
+        display: revert !important;
+    }
+
+    /* Ensure marquee actually scrolls (it was set to animation:none). */
+    #tab-champs .champs-ticker-scroll.champs-ticker-marquee {
+        animation: champs-ticker-marquee 70s linear infinite !important;
+    }
+
+    /* Particles canvas was hidden under reduced motion; keep it visible for Champs. */
+    #champsParticlesCanvas {
+        display: block !important;
+    }
+}

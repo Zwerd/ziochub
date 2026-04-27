@@ -344,8 +344,8 @@ def _get_report_data_impl():
     submission_methods = {(r[0] or 'single'): r[1] for r in method_rows}
 
     # Expiration policy
-    permanent = IOC.query.filter(IOC.expiration_date.is_(None), IOC.created_at >= start_dt, IOC.created_at <= end_dt).count()
-    with_expiry = IOC.query.filter(IOC.expiration_date.isnot(None), IOC.created_at >= start_dt, IOC.created_at <= end_dt).count()
+    permanent = IOC.query.filter(IOC.revoked.is_(False), IOC.expiration_date.is_(None), IOC.created_at >= start_dt, IOC.created_at <= end_dt).count()
+    with_expiry = IOC.query.filter(IOC.revoked.is_(False), IOC.expiration_date.isnot(None), IOC.created_at >= start_dt, IOC.created_at <= end_dt).count()
     expired_in_period = _count_in_range(IocHistory, IocHistory.at, start_dt, end_dt,
                                         IocHistory.event_type == 'expired')
     expiration_policy = {'permanent': permanent, 'active_expiry': with_expiry, 'expired': expired_in_period}
@@ -361,22 +361,27 @@ def _get_report_data_impl():
     # IOC quality
     total_in_period = incoming
     with_comment = db.session.query(func.count(IOC.id)).filter(
+        IOC.revoked.is_(False),
         IOC.created_at >= start_dt, IOC.created_at <= end_dt,
         IOC.comment.isnot(None), IOC.comment != '',
     ).scalar() or 0
     with_ticket = db.session.query(func.count(IOC.id)).filter(
+        IOC.revoked.is_(False),
         IOC.created_at >= start_dt, IOC.created_at <= end_dt,
         IOC.ticket_id.isnot(None), IOC.ticket_id != '',
     ).scalar() or 0
     with_campaign = db.session.query(func.count(IOC.id)).filter(
+        IOC.revoked.is_(False),
         IOC.created_at >= start_dt, IOC.created_at <= end_dt,
         IOC.campaign_id.isnot(None),
     ).scalar() or 0
     with_tags = db.session.query(func.count(IOC.id)).filter(
+        IOC.revoked.is_(False),
         IOC.created_at >= start_dt, IOC.created_at <= end_dt,
         IOC.tags.isnot(None), IOC.tags != '[]', IOC.tags != '',
     ).scalar() or 0
     avg_comment_len = db.session.query(func.avg(func.length(IOC.comment))).filter(
+        IOC.revoked.is_(False),
         IOC.created_at >= start_dt, IOC.created_at <= end_dt,
         IOC.comment.isnot(None), IOC.comment != '',
     ).scalar() or 0

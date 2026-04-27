@@ -756,6 +756,8 @@ def _create_ioc(ioc_type, value, analyst, submission_method='single', *,
         kwargs['tags'] = tags
     if created_at is not None:
         kwargs['created_at'] = created_at
+        # Keep modified aligned with created on initial insert (STIX versioning).
+        kwargs['modified_at'] = created_at
     return IOC(**kwargs)
 
 
@@ -1599,6 +1601,44 @@ def _ensure_ioc_rare_find_columns():
         print(f"[Migration] iocs rare_find columns: {e}")
 
 
+def _ensure_ioc_revocation_columns():
+    """
+    Add revocation + modified timestamps to iocs:
+    - revoked (BOOLEAN NOT NULL DEFAULT 0)
+    - revoked_at (DATETIME NULL)
+    - modified_at (DATETIME NULL)  -- STIX/TAXII versioning; keep created_at stable
+    Backfill modified_at from created_at for existing rows.
+    """
+    try:
+        result = db.session.execute(text("PRAGMA table_info(iocs)"))
+        rows = result.fetchall()
+        names = {row[1] for row in rows}
+        if 'revoked' not in names:
+            db.session.execute(text("ALTER TABLE iocs ADD COLUMN revoked BOOLEAN NOT NULL DEFAULT 0"))
+            _commit_with_retry()
+        if 'revoked_at' not in names:
+            db.session.execute(text("ALTER TABLE iocs ADD COLUMN revoked_at DATETIME"))
+            _commit_with_retry()
+        if 'modified_at' not in names:
+            db.session.execute(text("ALTER TABLE iocs ADD COLUMN modified_at DATETIME"))
+            _commit_with_retry()
+        # Backfill modified_at so STIX 'modified' is stable for old rows
+        try:
+            db.session.execute(text("UPDATE iocs SET modified_at = created_at WHERE modified_at IS NULL"))
+            _commit_with_retry()
+        except Exception:
+            db.session.rollback()
+        try:
+            db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_iocs_revoked ON iocs(revoked)"))
+            db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_iocs_modified_at ON iocs(modified_at)"))
+            _commit_with_retry()
+        except Exception:
+            db.session.rollback()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] iocs revocation columns: {e}")
+
+
 def _ensure_feed_source_last_seen_status_columns():
     """Add last_status_code and last_ok to feed_source_last_seen for Connections status view."""
     try:
@@ -1856,6 +1896,7 @@ def _init_db():
         _ensure_ioc_tags_column()
         _ensure_ioc_submission_method_column()
         _ensure_ioc_rare_find_columns()
+        _ensure_ioc_revocation_columns()
         _ensure_feed_source_last_seen_status_columns()
         _ensure_user_last_login_column()  # Must run before any User query (admin_user, etc.)
         _ensure_user_must_change_password_column()

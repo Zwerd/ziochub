@@ -47,6 +47,7 @@ def _process_newly_expired_iocs(max_items: int = 200) -> None:
         rows = (
             IOC.query.filter(
                 IOC.type != 'YARA',
+                IOC.revoked.is_(False),
                 IOC.expiration_date.isnot(None),
                 IOC.expiration_date <= now,
                 ~subq,
@@ -66,6 +67,13 @@ def _process_newly_expired_iocs(max_items: int = 200) -> None:
                 # Mark in history first so we don't double-schedule across rapid calls.
                 exp_iso = r.expiration_date.isoformat() if r.expiration_date else ''
                 _log_ioc_history(r.type, r.value, 'expired', 'system', {'expiration_date': exp_iso})
+                # Soft revoke so TAXII/STIX clients receive revoked=true with updated modified timestamp.
+                try:
+                    r.revoked = True
+                    r.revoked_at = now
+                    r.modified_at = now
+                except Exception:
+                    pass
                 schedule_outbound_ioc_event(
                     current_app._get_current_object(),
                     action='remove',
@@ -125,7 +133,7 @@ def get_stats_counts():
     _process_newly_expired_iocs(max_items=200)
     stats = {'IP': 0, 'Domain': 0, 'Hash': 0, 'Email': 0, 'URL': 0}
     now = datetime.now()
-    active_filter = db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
+    active_filter = db.and_(IOC.revoked.is_(False), db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now))
     for ioc_type in stats:
         count = IOC.query.filter(IOC.type == ioc_type, active_filter).count()
         stats[ioc_type] = count
@@ -141,7 +149,7 @@ def get_stats():
     """Active IOC count per type (non-expired). YARA rules count, weighted total, campaign stats, and Threat Intelligence aggregates (countries, TLDs, email domains) computed in DB with GROUP BY."""
     stats = {'IP': 0, 'Domain': 0, 'Hash': 0, 'Email': 0, 'URL': 0}
     now = datetime.now()
-    active_filter = db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
+    active_filter = db.and_(IOC.revoked.is_(False), db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now))
     for ioc_type in stats:
         count = IOC.query.filter(IOC.type == ioc_type, active_filter).count()
         stats[ioc_type] = count
@@ -285,6 +293,7 @@ def api_integration_connections():
 # /api/feed-pulse
 # ---------------------------------------------------------------------------
 @stats_bp.route('/api/feed-pulse', methods=['GET'])
+@login_required
 def api_feed_pulse():
     """Feed Pulse: diff view of incoming (new) vs outgoing (expired) IOCs in a time window."""
     (check_allowlist,) = _from_app('check_allowlist')

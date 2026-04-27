@@ -93,6 +93,27 @@ BADGE_INACTIVITY_DAYS_SMART = {
 }
 BADGE_INACTIVITY_SMART_DEFAULT_DAYS = 7
 
+
+def _time_decay_multiplier(age_days: int) -> float:
+    """
+    Method 5 (Time Decay) multiplier by age in days:
+    - 0-7 days:   1.00
+    - 8-30 days:  0.50
+    - 31-90 days: 0.25
+    - 91+ days:   0.00
+    """
+    try:
+        d = int(age_days)
+    except Exception:
+        d = 0
+    if d <= 7:
+        return 1.0
+    if d <= 30:
+        return 0.5
+    if d <= 90:
+        return 0.25
+    return 0.0
+
 # Level thresholds: many levels (25), harder early step, growing gaps. Level 2 ≈ 100 IOCs.
 LEVEL_THRESHOLDS = [
     0, 200, 450, 750, 1100, 1500, 2000, 2600, 3300, 4100, 5000,
@@ -154,6 +175,59 @@ def compute_ioc_points(ioc_type, campaign_id):
     if campaign_id:
         return IOC_WITH_CAMPAIGN
     return IOC_DEFAULT
+
+
+def compute_ioc_points_by_method(
+    scoring_method: str,
+    ioc_type: str,
+    campaign_id=None,
+    *,
+    comment: str | None = None,
+    tags=None,
+    ticket_id: str | None = None,
+) -> int:
+    """
+    Return per-IOC points according to scoring_method.
+
+    Method 3 (By Type) weights:
+    - IP: 3
+    - Domain: 2
+    - Hash: 4
+    - URL: 2
+    - Email: 2
+
+    Other methods: default campaign-weighted logic (2, or 3 with campaign).
+    """
+    sm = str(scoring_method or '').strip()
+    t = (ioc_type or '').strip()
+    if sm == '2':
+        # Flat: every IOC is worth 1, regardless of type/campaign/metadata.
+        return 1
+    if sm == '3':
+        weights = {'IP': 3, 'Domain': 2, 'Hash': 4, 'URL': 2, 'Email': 2}
+        return int(weights.get(t, IOC_DEFAULT))
+    if sm == '4':
+        # Campaign Focus: only campaign-linked IOCs count.
+        return IOC_WITH_CAMPAIGN if campaign_id else 0
+    if sm == '6':
+        # Quality: low base, additive curation bonuses (once per IOC row).
+        # Base = 1
+        # +1 comment length > 20 chars
+        # +1 >=2 tags
+        # +1 ticket_id present
+        pts = 1
+        c = (comment or '').strip()
+        if len(c) > 20:
+            pts += 1
+        # Tags are stored as JSON array string in DB; callers may pass list/str.
+        tag_count = _tag_count_from_row({'tags': tags})
+        if tag_count >= 2:
+            pts += 1
+        tid = (ticket_id or '').strip()
+        if tid:
+            pts += 1
+        return pts
+    return compute_ioc_points(t, campaign_id)
 
 
 SMART_COMMENT_MIN_LEN = 10
@@ -275,12 +349,19 @@ def _score_ioc_rows(ioc_rows, scoring_method, comment_counts=None):
                 tag_count=tag_count, skip_tag_bonus=skip_tag_bonus,
             )
         else:
-            pts = compute_ioc_points(r.get('type'), r.get('campaign_id'))
+            pts = compute_ioc_points_by_method(
+                scoring_method,
+                r.get('type'),
+                r.get('campaign_id'),
+                comment=r.get('comment'),
+                tags=r.get('tags'),
+                ticket_id=r.get('ticket_id'),
+            )
         results.append((analyst, d, pts, r.get('user_id')))
     return results
 
 
-def _compute_yara_points(qp, status, scoring_method):
+def _compute_yara_points(qp, status, scoring_method, campaign_id=None):
     """Return final YARA points for Champs.
 
     Policy: YARA points are credited only after admin approval.
@@ -288,6 +369,27 @@ def _compute_yara_points(qp, status, scoring_method):
     """
     if status != 'approved':
         return 0
+    sm = str(scoring_method or '').strip()
+    # Method 2 (Flat): fixed points per approved rule.
+    if sm == '2':
+        return 10
+    # Method 3 (By Type): fixed points per approved rule.
+    if sm == '3':
+        return 20
+    # Method 4 (Campaign Focus): YARA points only when linked to a campaign.
+    if sm == '4':
+        if not campaign_id:
+            return 0
+    # Method 6 (Quality): YARA points are the explicit quality_points only.
+    if sm == '6':
+        if qp is None:
+            return 0
+        try:
+            qp_int = int(qp)
+        except Exception:
+            return 0
+        # Keep within the platform's expected range.
+        return max(YARA_MIN, min(YARA_MAX, qp_int))
     pts = (qp if qp is not None else YARA_DEFAULT)
     return max(YARA_MIN, min(YARA_MAX, pts))
 
@@ -345,17 +447,76 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
         return ""
 
     params = {}
+    sm = str(scoring_method or '').strip()
+
+    # Method 5 (Time Decay): live leaderboard uses a rolling 90-day window by default.
+    if sm == '5' and start_dt is None and end_dt is None:
+        _end = datetime.now()
+        _start = _end - timedelta(days=90)
+        start_dt = _start
+        end_dt = _end + timedelta(seconds=60)
     if start_dt is not None:
         params['start_dt'] = start_dt
     if end_dt is not None:
         params['end_dt'] = end_dt
 
+    # Reference date for time-decay (and streak) calculations
+    streak_ref = end_dt.date() if end_dt else today
+
+    def _apply_decay(day_key, points) -> int:
+        if sm != '5':
+            return int(points or 0)
+        if day_key is None:
+            return 0
+        age = (streak_ref - day_key).days
+        mult = _time_decay_multiplier(age)
+        if mult <= 0:
+            return 0
+        return int(round((points or 0) * mult))
+
     # 1) IOC totals and last_created - attribute by ioc.analyst (assigned), not submitter (user_id)
     ioc_where = _dt_filter('ioc', 'created_at', params)
+    if sm == '2':
+        # Method 2 (Flat): 1 point per IOC, ignore campaign/metadata.
+        ioc_points_expr = "COUNT(*) AS ioc_points"
+    elif str(scoring_method or '').strip() == '3':
+        # Method 3 (By Type): fixed by IOC.type, ignore campaign bonus.
+        ioc_points_expr = """
+            SUM(CASE
+                WHEN ioc.type = 'IP' THEN 3
+                WHEN ioc.type = 'Hash' THEN 4
+                WHEN ioc.type IN ('Domain','URL','Email') THEN 2
+                ELSE :ioc_default
+            END) AS ioc_points
+        """
+    elif sm == '4':
+        # Method 4 (Campaign Focus): only campaign-linked IOCs count (3 points each).
+        ioc_points_expr = """
+            SUM(CASE WHEN ioc.campaign_id IS NOT NULL THEN :ioc_campaign ELSE 0 END) AS ioc_points
+        """
+    elif sm == '6':
+        # Method 6 (Quality): base=1, +comment(>20), +tags(>=2), +ticket_id.
+        # Tags are stored as JSON string; use a safe heuristic for ">=2 tags".
+        ioc_points_expr = """
+            SUM(
+                1
+                + CASE WHEN ioc.comment IS NOT NULL AND LENGTH(TRIM(ioc.comment)) > 20 THEN 1 ELSE 0 END
+                + CASE
+                    WHEN ioc.tags IS NOT NULL AND (
+                        ioc.tags LIKE '%","%' OR ioc.tags LIKE '%", "%'
+                    ) THEN 1 ELSE 0
+                  END
+                + CASE WHEN ioc.ticket_id IS NOT NULL AND TRIM(ioc.ticket_id) != '' THEN 1 ELSE 0 END
+            ) AS ioc_points
+        """
+    else:
+        ioc_points_expr = """
+            SUM(CASE WHEN ioc.campaign_id IS NOT NULL THEN :ioc_campaign ELSE :ioc_default END) AS ioc_points
+        """
     q1 = text(f"""
         SELECT LOWER(TRIM(ioc.analyst)) AS analyst,
                MAX(u.id) AS user_id,
-               SUM(CASE WHEN ioc.campaign_id IS NOT NULL THEN :ioc_campaign ELSE :ioc_default END) AS ioc_points,
+               {ioc_points_expr},
                COUNT(*) AS ioc_count,
                MAX(ioc.created_at) AS last_created
         FROM iocs ioc
@@ -380,11 +541,43 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
                 analyst_last[a] = max(prev_d, d)
         # add to daily later via query 2
 
-    # 2) IOC daily points (for streak and base score) - attribute by ioc.analyst
+    # 2) IOC daily points - attribute by ioc.analyst
+    if sm == '2':
+        ioc_day_expr = "COUNT(*) AS day_pts"
+    elif sm == '3':
+        ioc_day_expr = """
+            SUM(CASE
+                WHEN ioc.type = 'IP' THEN 3
+                WHEN ioc.type = 'Hash' THEN 4
+                WHEN ioc.type IN ('Domain','URL','Email') THEN 2
+                ELSE :ioc_default2
+            END) AS day_pts
+        """
+    elif sm == '4':
+        ioc_day_expr = """
+            SUM(CASE WHEN ioc.campaign_id IS NOT NULL THEN :ioc_campaign2 ELSE 0 END) AS day_pts
+        """
+    elif sm == '6':
+        ioc_day_expr = """
+            SUM(
+                1
+                + CASE WHEN ioc.comment IS NOT NULL AND LENGTH(TRIM(ioc.comment)) > 20 THEN 1 ELSE 0 END
+                + CASE
+                    WHEN ioc.tags IS NOT NULL AND (
+                        ioc.tags LIKE '%","%' OR ioc.tags LIKE '%", "%'
+                    ) THEN 1 ELSE 0
+                  END
+                + CASE WHEN ioc.ticket_id IS NOT NULL AND TRIM(ioc.ticket_id) != '' THEN 1 ELSE 0 END
+            ) AS day_pts
+        """
+    else:
+        ioc_day_expr = """
+            SUM(CASE WHEN ioc.campaign_id IS NOT NULL THEN :ioc_campaign2 ELSE :ioc_default2 END) AS day_pts
+        """
     q2 = text(f"""
         SELECT LOWER(TRIM(ioc.analyst)) AS analyst,
                DATE(ioc.created_at) AS d,
-               SUM(CASE WHEN ioc.campaign_id IS NOT NULL THEN :ioc_campaign2 ELSE :ioc_default2 END) AS day_pts
+               {ioc_day_expr}
         FROM iocs ioc
         WHERE ioc.analyst IS NOT NULL AND TRIM(ioc.analyst) != '' AND ioc.created_at IS NOT NULL {_dt_filter('ioc', 'created_at', params)}
         GROUP BY LOWER(TRIM(ioc.analyst)), DATE(ioc.created_at)
@@ -397,14 +590,37 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
         day_key = _ensure_date(r[1]) if r[1] else None
         if not a or day_key is None:
             continue
-        analyst_daily[a][day_key] = analyst_daily[a].get(day_key, 0) + (r[2] or 0)
+        analyst_daily[a][day_key] = analyst_daily[a].get(day_key, 0) + _apply_decay(day_key, (r[2] or 0))
 
-    # 3) YARA: totals and daily points (10-50 per rule)
+    # 3) YARA: totals and daily points
     yara_where = _dt_filter('yr', 'uploaded_at', params)
+    if sm == '2':
+        yara_points_expr = "SUM(CASE WHEN yr.status = 'approved' THEN 10 ELSE 0 END) AS yara_points"
+        yara_day_expr = "SUM(CASE WHEN yr.status = 'approved' THEN 10 ELSE 0 END) AS day_pts"
+        yara_count_expr = "SUM(CASE WHEN yr.status = 'approved' THEN 1 ELSE 0 END) AS yara_count"
+    elif sm == '3':
+        yara_points_expr = "SUM(CASE WHEN yr.status = 'approved' THEN 20 ELSE 0 END) AS yara_points"
+        yara_day_expr = "SUM(CASE WHEN yr.status = 'approved' THEN 20 ELSE 0 END) AS day_pts"
+        yara_count_expr = "SUM(CASE WHEN yr.status = 'approved' THEN 1 ELSE 0 END) AS yara_count"
+    elif sm == '4':
+        # Campaign Focus: YARA points only when approved AND linked to a campaign.
+        yara_points_expr = "SUM(CASE WHEN yr.status = 'approved' AND yr.campaign_id IS NOT NULL THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS yara_points"
+        yara_day_expr = "SUM(CASE WHEN yr.status = 'approved' AND yr.campaign_id IS NOT NULL THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS day_pts"
+        yara_count_expr = "SUM(CASE WHEN yr.status = 'approved' AND yr.campaign_id IS NOT NULL THEN 1 ELSE 0 END) AS yara_count"
+    elif sm == '6':
+        # Quality: YARA points come from quality_points only (approved only).
+        # If quality_points is NULL, contributes 0.
+        yara_points_expr = "SUM(CASE WHEN yr.status = 'approved' AND yr.quality_points IS NOT NULL THEN MIN(50, MAX(10, yr.quality_points)) ELSE 0 END) AS yara_points"
+        yara_day_expr = "SUM(CASE WHEN yr.status = 'approved' AND yr.quality_points IS NOT NULL THEN MIN(50, MAX(10, yr.quality_points)) ELSE 0 END) AS day_pts"
+        yara_count_expr = "SUM(CASE WHEN yr.status = 'approved' THEN 1 ELSE 0 END) AS yara_count"
+    else:
+        yara_points_expr = "SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS yara_points"
+        yara_day_expr = "SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS day_pts"
+        yara_count_expr = "SUM(CASE WHEN yr.status = 'approved' THEN 1 ELSE 0 END) AS yara_count"
     q3 = text(f"""
         SELECT LOWER(yr.analyst) AS analyst,
-               SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS yara_points,
-               SUM(CASE WHEN yr.status = 'approved' THEN 1 ELSE 0 END) AS yara_count,
+               {yara_points_expr},
+               {yara_count_expr},
                MAX(yr.uploaded_at) AS last_yara
         FROM yara_rules yr
         WHERE 1=1 {yara_where}
@@ -423,11 +639,11 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
                 prev_d = _ensure_date(prev) if prev is not None else d
                 analyst_last[a] = max(prev_d, d)
 
-    # 3b) YARA daily (for streak and base score)
+    # 3b) YARA daily
     q3b = text(f"""
         SELECT LOWER(yr.analyst) AS analyst,
                DATE(yr.uploaded_at) AS d,
-               SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS day_pts
+               {yara_day_expr}
         FROM yara_rules yr
         WHERE yr.uploaded_at IS NOT NULL {yara_where}
         GROUP BY LOWER(yr.analyst), DATE(yr.uploaded_at)
@@ -438,7 +654,7 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
         day_key = _ensure_date(r[1]) if r[1] else None
         if not a or day_key is None:
             continue
-        analyst_daily[a][day_key] = analyst_daily[a].get(day_key, 0) + (r[2] or 0)
+        analyst_daily[a][day_key] = analyst_daily[a].get(day_key, 0) + _apply_decay(day_key, (r[2] or 0))
 
     # 4) Deletions: deleter gets +1 per deletion (any); expired count kept for display/badges
     del_where = _dt_filter('ae', 'created_at', params)
@@ -472,29 +688,33 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
         uid, a, d, payload = r[0], (r[1] or '').strip().lower(), _ensure_date(r[2]) if r[2] else None, r[3]
         if not a or not d:
             continue
-        if _deletion_event_adds_score(payload):
-            analyst_daily[a][d] = analyst_daily[a].get(d, 0) + DELETION
+        # Method 2 (Flat): no scoring from deletions (dry IOC/YARA only).
+        if sm != '2' and _deletion_event_adds_score(payload):
+            analyst_daily[a][d] = analyst_daily[a].get(d, 0) + _apply_decay(d, DELETION)
         prev_last = analyst_last.get(a)
         analyst_last[a] = max(prev_last, d) if prev_last else d
         analyst_user_id[a] = uid
 
-    # 5) Campaign create + IOC campaign link: 1 pt each (so creator/linker gets points in all scoring methods)
-    evt_where = _dt_filter('ae', 'created_at', params)
-    q5 = text(f"""
-        SELECT ae.user_id, LOWER(TRIM(u.username)) AS analyst, DATE(ae.created_at) AS d
-        FROM activity_events ae
-        JOIN users u ON ae.user_id = u.id
-        WHERE ae.event_type IN ('campaign_create', 'ioc_campaign_link') {evt_where}
-    """)
-    rows5 = db.session.execute(q5, params).fetchall()
-    for r in rows5:
-        uid, a, d = r[0], (r[1] or '').strip().lower(), _ensure_date(r[2]) if r[2] else None
-        if not a or not d:
-            continue
-        analyst_daily[a][d] = analyst_daily[a].get(d, 0) + 1
-        prev_last = analyst_last.get(a)
-        analyst_last[a] = max(prev_last, d) if prev_last else d
-        analyst_user_id[a] = uid
+    # 5) Campaign create + IOC campaign link: 1 pt each.
+    # Method 2 (Flat): no extra bonuses/events.
+    # Method 3 is strictly "By Type" (no extra campaign/link bonuses).
+    if sm not in ('2', '3'):
+        evt_where = _dt_filter('ae', 'created_at', params)
+        q5 = text(f"""
+            SELECT ae.user_id, LOWER(TRIM(u.username)) AS analyst, DATE(ae.created_at) AS d
+            FROM activity_events ae
+            JOIN users u ON ae.user_id = u.id
+            WHERE ae.event_type IN ('campaign_create', 'ioc_campaign_link') {evt_where}
+        """)
+        rows5 = db.session.execute(q5, params).fetchall()
+        for r in rows5:
+            uid, a, d = r[0], (r[1] or '').strip().lower(), _ensure_date(r[2]) if r[2] else None
+            if not a or not d:
+                continue
+            analyst_daily[a][d] = analyst_daily[a].get(d, 0) + _apply_decay(d, 1)
+            prev_last = analyst_last.get(a)
+            analyst_last[a] = max(prev_last, d) if prev_last else d
+            analyst_user_id[a] = uid
 
     # Build result list (same format as compute_analyst_scores)
     user_id_map = {u.username.lower(): u.id for u in User.query.all() if u.username}
@@ -505,7 +725,6 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
         if a not in analyst_user_id and a in user_id_map:
             analyst_user_id[a] = user_id_map[a]
 
-    streak_ref = end_dt.date() if end_dt else today
     result = []
     all_analysts = set(analyst_daily.keys()) | set(analyst_deletions.keys()) | set(analyst_deletions_total.keys()) | set(analyst_iocs.keys()) | set(analyst_yara.keys())
     if _excluded:
@@ -521,7 +740,13 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
                 d = d - timedelta(days=1)
             else:
                 break
-        streak_bonus = int(base_score * STREAK_BONUS_PERCENT / 100) if streak >= STREAK_DAYS else 0
+        # Method 2: no streak bonus (flat, dry counting).
+        # Method 3: no streak bonus (avoid mixing method bonuses).
+        # Method 5: no streak bonus (decay already biases toward current activity).
+        if sm in ('2', '3', '5'):
+            streak_bonus = 0
+        else:
+            streak_bonus = int(base_score * STREAK_BONUS_PERCENT / 100) if streak >= STREAK_DAYS else 0
         total_score = base_score + streak_bonus
         last_d = analyst_last.get(analyst)
         last_str = _format_date_display(last_d)
@@ -552,8 +777,10 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
     start_dt, end_dt: optional datetime range to filter IOCs/YARA by created_at/uploaded_at (for period reports).
     For 1M+ IOCs: uses DB aggregation (no full load) when method != 8 and no date filter; Smart (#8) limited to last SMART_EFFORT_DAYS_LIMIT days when no date filter.
     """
-    # Use aggregated path (no full table load) for non-Smart when no date range
-    if scoring_method != SCORING_SMART and start_dt is None and end_dt is None:
+    # Use aggregated path (no full table load) for non-Smart when no date range.
+    # Method 7 (Goal-Based) needs per-item goal matching, so we keep it in the non-aggregated path.
+    sm = str(scoring_method or '').strip()
+    if scoring_method != SCORING_SMART and sm != '7' and start_dt is None and end_dt is None:
         return compute_analyst_scores_aggregated(
             db, IOC, YaraRule, User, ActivityEvent,
             scoring_method=scoring_method, exclude_usernames=exclude_usernames,
@@ -565,6 +792,22 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
     if scoring_method == SCORING_SMART and start_dt is None and end_dt is None:
         _end = datetime.now()
         _start = _end - timedelta(days=SMART_EFFORT_DAYS_LIMIT)
+        start_dt = _start
+        end_dt = _end + timedelta(seconds=60)
+
+    # Method 5 (Time Decay): if this code path is used with no explicit range,
+    # limit to last 90 days for correctness and performance.
+    if sm == '5' and start_dt is None and end_dt is None:
+        _end = datetime.now()
+        _start = _end - timedelta(days=90)
+        start_dt = _start
+        end_dt = _end + timedelta(seconds=60)
+
+    # Method 7 (Goal-Based): evaluate against active goals. Default to a rolling 90-day window
+    # when no explicit range is given, to keep runtime bounded.
+    if sm == '7' and start_dt is None and end_dt is None:
+        _end = datetime.now()
+        _start = _end - timedelta(days=90)
         start_dt = _start
         end_dt = _end + timedelta(seconds=60)
 
@@ -581,9 +824,46 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
     # IOC points - attribute by assigned analyst (ioc.analyst), not submitter (user_id)
     username_to_id = {(u.username or '').strip().lower(): u.id for u in User.query.all() if (u.username or '').strip()}
     smart = scoring_method == SCORING_SMART
+    goal_based = sm == '7'
+
+    active_goals = []
+    if goal_based:
+        try:
+            # Lazy import to avoid circular imports and to keep this module standalone.
+            from models import TeamGoal
+            active_goals = TeamGoal.query.filter_by(is_active=True).all()
+        except Exception:
+            active_goals = []
+
+    def _goal_matches_ioc(goal, ioc_row_dict) -> bool:
+        """
+        Minimal goal matching based on existing DB schema.
+        Currently TeamGoal supports goal_type only (ioc_add | yara_add | deletion),
+        without structured filters like campaign_id/tag/type.
+        """
+        try:
+            gt = (getattr(goal, 'goal_type', '') or '').strip().lower()
+        except Exception:
+            gt = ''
+        if gt != 'ioc_add':
+            return False
+        # If goal_type is ioc_add, any IOC qualifies (no filters available yet).
+        return True
+
+    def _goal_matches_yara(goal, yara_row) -> bool:
+        try:
+            gt = (getattr(goal, 'goal_type', '') or '').strip().lower()
+        except Exception:
+            gt = ''
+        if gt != 'yara_add':
+            return False
+        return True
     ioc_cols = [IOC.analyst, IOC.type, IOC.campaign_id, IOC.user_id, IOC.created_at]
     if smart:
         ioc_cols += [IOC.comment, IOC.submission_method, IOC.tags]
+    elif str(scoring_method or '').strip() == '6':
+        # Quality method needs these fields for per-IOC bonuses.
+        ioc_cols += [IOC.comment, IOC.tags, IOC.ticket_id]
     ioc_q = db.session.query(*ioc_cols)
     if start_dt is not None:
         ioc_q = ioc_q.filter(IOC.created_at >= start_dt)
@@ -593,6 +873,8 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
     col_names = ['analyst', 'type', 'campaign_id', 'user_id', 'created_at']
     if smart:
         col_names += ['comment', 'submission_method', 'tags']
+    elif str(scoring_method or '').strip() == '6':
+        col_names += ['comment', 'tags', 'ticket_id']
     ioc_dicts = [dict(zip(col_names, r)) for r in raw_rows]
 
     # Use assigned analyst (ioc.analyst) for attribution; resolve to user_id for display
@@ -604,10 +886,34 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
     comment_counts = _build_smart_comment_counts(ioc_dicts) if smart else {}
     scored = _score_ioc_rows(ioc_dicts, scoring_method, comment_counts)
 
+    streak_ref = end_dt.date() if end_dt else today
+    def _apply_decay(day_key, points) -> int:
+        if sm != '5':
+            return int(points or 0)
+        if day_key is None:
+            return 0
+        age = (streak_ref - day_key).days
+        mult = _time_decay_multiplier(age)
+        if mult <= 0:
+            return 0
+        return int(round((points or 0) * mult))
+
+    # Method 7 (Goal-Based): override per-IOC scoring based on active goals.
+    if goal_based and ioc_dicts:
+        scored = []
+        for r in ioc_dicts:
+            analyst = (r.get('analyst') or 'unknown').lower()
+            d = _to_date(r['created_at'])
+            day_key = (_ensure_date(d) if d is not None else None) or today
+            # 10 points if matches any active goal, else 1 point.
+            matches = any(_goal_matches_ioc(g, r) for g in (active_goals or []))
+            pts = 10 if matches else 1
+            scored.append((analyst, d, pts, r.get('user_id')))
+
     for analyst, d, pts, uid in scored:
         # Normalize to date (SQLite may return string); fallback to today so points always count
         day_key = (_ensure_date(d) if d is not None else None) or today
-        analyst_daily[analyst][day_key] = analyst_daily[analyst].get(day_key, 0) + pts
+        analyst_daily[analyst][day_key] = analyst_daily[analyst].get(day_key, 0) + _apply_decay(day_key, pts)
         analyst_last[analyst] = max(analyst_last.get(analyst, day_key), day_key) if analyst_last.get(analyst) else day_key
         analyst_iocs[analyst] += 1
         if uid:
@@ -631,19 +937,27 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
                 analyst_last[a] = max(analyst_last.get(a, day_key), day_key) if analyst_last.get(a) else day_key
 
     # YARA points (per-rule quality 10-50, or YARA_DEFAULT if not set)
-    yara_q = db.session.query(YaraRule.analyst, YaraRule.uploaded_at, YaraRule.quality_points, YaraRule.status)
+    yara_q = db.session.query(YaraRule.analyst, YaraRule.uploaded_at, YaraRule.quality_points, YaraRule.status, YaraRule.campaign_id)
     if start_dt is not None:
         yara_q = yara_q.filter(YaraRule.uploaded_at >= start_dt)
     if end_dt is not None:
         yara_q = yara_q.filter(YaraRule.uploaded_at <= end_dt)
     yara_rows = yara_q.all()
-    for analyst, uploaded_at, qp, status in yara_rows:
+    for analyst, uploaded_at, qp, status, campaign_id in yara_rows:
         a = (analyst or 'unknown').lower()
-        pts = _compute_yara_points(qp, status, scoring_method)
+        if goal_based:
+            # Goal-Based: points are 10 if matches an active YARA goal, else 1.
+            # Still require admin approval to count as a valid contribution.
+            if status != 'approved':
+                pts = 0
+            else:
+                matches = any(_goal_matches_yara(g, {'campaign_id': campaign_id, 'quality_points': qp, 'status': status}) for g in (active_goals or []))
+                pts = 10 if matches else 1
+        else:
+            pts = _compute_yara_points(qp, status, scoring_method, campaign_id=campaign_id)
         d = _to_date(uploaded_at)
-        if status == 'approved':
-            if d:
-                analyst_daily[a][d] = analyst_daily[a].get(d, 0) + pts
+        if pts > 0 and d:
+            analyst_daily[a][d] = analyst_daily[a].get(d, 0) + _apply_decay(d, pts)
             analyst_last[a] = max(analyst_last.get(a, d), d) if analyst_last.get(a) else d
             analyst_yara[a] = analyst_yara[a] + 1
 
@@ -678,8 +992,9 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
                 analyst_deletions[a] = analyst_deletions.get(a, 0) + 1
             d = _to_date(created_at)
             if d:
-                if _deletion_event_adds_score(payload):
-                    analyst_daily[a][d] = analyst_daily[a].get(d, 0) + DELETION
+                # Method 2 (Flat): no scoring from deletions (dry IOC/YARA only).
+                if sm != '2' and _deletion_event_adds_score(payload):
+                    analyst_daily[a][d] = analyst_daily[a].get(d, 0) + _apply_decay(d, DELETION)
                 analyst_last[a] = max(analyst_last.get(a, d), d) if analyst_last.get(a) else d
             if uid:
                 analyst_user_id[a] = uid
@@ -727,7 +1042,9 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
                 pts_extra = int(p.get('added_count') or 0)
 
             if pts_extra and d:
-                analyst_daily[a][d] = analyst_daily[a].get(d, 0) + pts_extra
+                # Method 2 (Flat): no extra bonuses/events.
+                if sm != '2':
+                    analyst_daily[a][d] = analyst_daily[a].get(d, 0) + _apply_decay(d, pts_extra)
                 analyst_last[a] = max(analyst_last.get(a, d), d) if analyst_last.get(a) else d
             if uid:
                 analyst_user_id[a] = uid
@@ -763,7 +1080,10 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
             else:
                 break
         # Smart Effort (#8): no streak bonus (per CHAMPS_SCORING_METHODS.md)
-        if scoring_method == SCORING_SMART:
+        # Flat (#2): no streak bonus
+        # Time Decay (#5): no streak bonus (decay already biases toward recency)
+        # Goal-Based (#7): no streak bonus (score is tied to goal contributions)
+        if scoring_method == SCORING_SMART or sm in ('2', '5', '7'):
             streak_bonus = 0
         else:
             streak_bonus = int(base_score * STREAK_BONUS_PERCENT / 100) if streak >= STREAK_DAYS else 0

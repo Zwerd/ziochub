@@ -201,6 +201,7 @@ def get_objects(collection_id):
         match_ids=match['match_ids'],
         match_types=match['match_types'],
         match_spec_versions=match['match_spec_versions'],
+        include_revoked=True,
     )
 
     envelope = {'objects': objects, 'more': has_more}
@@ -222,7 +223,7 @@ def get_object(collection_id, object_id):
         return _taxii_json_response({'error': 'Accept must include application/taxii+json'}, status=406)
 
     from routes.feeds import _feed_stix_object_by_id
-    ind, date_added = _feed_stix_object_by_id(object_id.strip().rstrip('/'))
+    ind, date_added = _feed_stix_object_by_id(object_id.strip().rstrip('/'), include_revoked=True)
     if ind is None:
         return _taxii_json_response({'error': 'Object not found'}, status=404)
     envelope = {'objects': [ind]}
@@ -265,6 +266,7 @@ def get_manifest(collection_id):
         match_ids=match['match_ids'],
         match_types=match['match_types'],
         match_spec_versions=match['match_spec_versions'],
+        include_revoked=True,
     )
     payload = {'more': has_more}
     if manifest_objects:
@@ -287,7 +289,7 @@ def get_object_versions(collection_id, object_id):
         return _taxii_json_response({'error': 'Accept must include application/taxii+json'}, status=406)
 
     from routes.feeds import _feed_stix_object_versions
-    versions, first_ts, last_ts = _feed_stix_object_versions(object_id.strip().rstrip('/'))
+    versions, first_ts, last_ts = _feed_stix_object_versions(object_id.strip().rstrip('/'), include_revoked=True)
     if versions is None:
         return _taxii_json_response({'error': 'Object not found'}, status=404)
     payload = {'versions': versions}

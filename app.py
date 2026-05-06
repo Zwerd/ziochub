@@ -680,9 +680,58 @@ def calculate_expiration_date(ttl):
     return None
 
 
+def ioc_row_is_active(row):
+    """True if this IOC row is effective intelligence (not revoked, not past expiration)."""
+    if row is None:
+        return False
+    if getattr(row, 'revoked', False):
+        return False
+    now = _utcnow()
+    exp = getattr(row, 'expiration_date', None)
+    if exp is not None and exp <= now:
+        return False
+    return True
+
+
 def check_ioc_exists(ioc_type, value):
-    """Check if an IOC already exists in DB (case-insensitive)."""
-    return IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.strip().lower()).first() is not None
+    """True if an active IOC already exists (same type + value, case-insensitive). Revoked/expired rows do not count."""
+    row = IOC.query.filter(
+        IOC.type == ioc_type,
+        func.lower(IOC.value) == value.strip().lower(),
+    ).first()
+    return ioc_row_is_active(row)
+
+
+def apply_ioc_submission_to_existing_row(row, ioc_type, value, analyst, submission_method='single', *,
+                                         ticket_id=None, comment=None, expiration_date=None,
+                                         campaign_id=None, user_id=None, tags=None, rare=None):
+    """
+    Reactivate a revoked or expired IOC row, or refresh metadata on resubmission.
+    Preserves created_at and stable id for STIX; updates modified_at.
+    """
+    now = _utcnow()
+    val = value.strip() if value else value
+    row.type = ioc_type
+    row.value = val
+    row.analyst = analyst
+    row.ticket_id = ticket_id or None
+    row.comment = comment or None
+    row.expiration_date = expiration_date
+    row.revoked = False
+    row.revoked_at = None
+    row.modified_at = now
+    row.submission_method = submission_method
+    if campaign_id is not None:
+        row.campaign_id = campaign_id
+    if user_id is not None:
+        row.user_id = user_id
+    if tags is not None:
+        row.tags = tags
+    r = rare or {}
+    row.country_code = r.get('country_code')
+    row.tld = r.get('tld')
+    row.email_domain = r.get('email_domain')
+    row.rare_find_type = r.get('rare_find_type')
 
 
 def _compute_rare_find_fields(ioc_type, value):

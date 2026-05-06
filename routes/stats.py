@@ -312,8 +312,12 @@ def api_feed_pulse():
     if ioc_type != 'all':
         type_filter = db.and_(type_filter, IOC.type == ioc_type)
 
-    # Incoming: created in last X hours, still active
+    # Revoked IOCs stay in the table for STIX/id stability; exclude from "active" feeds and anomaly scan.
+    not_revoked = IOC.revoked.is_(False)
+
+    # Incoming: created in last X hours, still active (not revoked)
     incoming_q = IOC.query.filter(type_filter).filter(
+        not_revoked,
         IOC.created_at >= cutoff,
         db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
     )
@@ -340,8 +344,9 @@ def api_feed_pulse():
         IocHistory.at >= cutoff
     ).order_by(IocHistory.at.desc()).all()
 
-    # Total active (filtered by type)
+    # Total active (filtered by type; excludes revoked)
     total_active = IOC.query.filter(type_filter).filter(
+        not_revoked,
         db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
     ).count()
 
@@ -432,9 +437,10 @@ def api_feed_pulse():
     incoming_keys = {(d['type'], (d.get('value') or '').lower()) for d in incoming}
     outgoing = [o for o in outgoing if (o.get('type'), (o.get('value') or '').lower()) not in incoming_keys]
 
-    # Anomaly scan: only IOCs still in the system (incoming + active). Exclude outgoing/deleted
-    # so that after an IOC is deleted, its warning no longer appears in Feed Pulse.
+    # Anomaly scan: only IOCs still active (not revoked, not expired). Revoked rows remain in DB
+    # for STIX history — exclude them so sanity alerts disappear after revoke/delete.
     active_rows = IOC.query.filter(type_filter).filter(
+        not_revoked,
         db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
     ).limit(3000).all()
     active_list = [_row_to_dict(r) for r in active_rows]

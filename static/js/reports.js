@@ -807,6 +807,12 @@
 
     // ── PDF Export ─────────────────────────────────────────────────
     var _pdfLibsLoaded = false;
+    var _pdfFontLoaded = false;
+    // Preferred enterprise font: Arial Unicode (TTF must be shipped under /static/fonts/)
+    // Common filenames seen in the wild: ArialUnicodeMS.ttf, Arial Unicode MS.ttf, arialuni.ttf
+    var _pdfHebrewFontName = 'ArialUnicodeMS';
+    var _pdfHebrewFontFiles = ['ArialUnicodeMS.ttf', 'Arial Unicode MS.ttf', 'arialuni.ttf'];
+    var _pdfFontVfs = null; // { filename, b64 }
 
     function _loadPdfLibs() {
         if (_pdfLibsLoaded) return Promise.resolve();
@@ -823,12 +829,298 @@
         })).then(function () { _pdfLibsLoaded = true; });
     }
 
+    function _arrayBufferToBase64(buf) {
+        // jsPDF expects base64 TTF in VFS. Convert in chunks to avoid call-stack issues.
+        var bytes = new Uint8Array(buf);
+        var chunkSize = 0x8000;
+        var binary = '';
+        for (var i = 0; i < bytes.length; i += chunkSize) {
+            var chunk = bytes.subarray(i, i + chunkSize);
+            binary += String.fromCharCode.apply(null, Array.prototype.slice.call(chunk));
+        }
+        return btoa(binary);
+    }
+
+    function _loadPdfHebrewFontIfAvailable() {
+        if (_pdfFontLoaded) return Promise.resolve(true);
+        // Optional: place a Unicode font under static/fonts/ to enable Hebrew in PDF.
+        // Without this, jsPDF uses built-in ASCII-ish fonts and Hebrew will render as gibberish.
+        var candidates = Array.isArray(_pdfHebrewFontFiles) && _pdfHebrewFontFiles.length
+            ? _pdfHebrewFontFiles.slice()
+            : [];
+        function tryNext() {
+            if (!candidates.length) return Promise.resolve(null);
+            var name = candidates.shift();
+            return fetch('/static/fonts/' + name).then(function (r) {
+                if (!r.ok) throw new Error('Font not found');
+                return r.arrayBuffer().then(function (buf) { return { filename: name, buf: buf }; });
+            }).catch(function () { return tryNext(); });
+        }
+        return tryNext().then(function (found) {
+            if (!found) throw new Error('Font not found');
+            try {
+                var b64 = _arrayBufferToBase64(found.buf);
+                // Store base64 so we can register on the actual PDF instance later.
+                _pdfFontVfs = { filename: found.filename, b64: b64 };
+                _pdfFontLoaded = true;
+                return true;
+            } catch (e) {
+                console.warn('PDF font registration failed:', e);
+                _pdfFontLoaded = false;
+                _pdfFontVfs = null;
+                return false;
+            }
+        }).catch(function () {
+            _pdfFontLoaded = false;
+            _pdfFontVfs = null;
+            return false;
+        });
+    }
+
+    function _containsHebrew(s) {
+        // Hebrew block: U+0590–U+05FF. Also covers punctuation marks in the block.
+        return /[\u0590-\u05FF]/.test(String(s || ''));
+    }
+
+    function _rtlVisual(s) {
+        /**
+         * Best-effort RTL rendering for jsPDF (which is LTR-first).
+         *
+         * jsPDF draws text left-to-right. To display Hebrew in a readable RTL visual order we:
+         * - Split the string into runs of Hebrew vs non-Hebrew characters.
+         * - Reverse the *order* of the runs (RTL visual ordering).
+         * - Reverse characters *within* Hebrew runs (so the letters read correctly when drawn LTR).
+         *
+         * We also preserve common leading bullet prefixes ("• ", "- ") so the bullet can remain at the left
+         * while the Hebrew content is rendered RTL.
+         *
+         * This is not a full BiDi implementation, but it improves readability for mixed Hebrew/Latin lines.
+         */
+        var text = String(s || '');
+        // Keep a common bullet prefix on the left (user preference).
+        var prefix = '';
+        var m = text.match(/^\s*(?:[•\-\u2022]\s+)/);
+        if (m && m[0]) {
+            prefix = m[0];
+            text = text.slice(prefix.length);
+        }
+
+        // Split into runs: Hebrew block vs everything else (including spaces/punctuation).
+        var parts = text.match(/[\u0590-\u05FF]+|[^\u0590-\u05FF]+/g) || [text];
+
+        // Reverse order of runs for RTL visual flow.
+        parts.reverse();
+
+        // Reverse characters inside Hebrew runs only.
+        for (var i = 0; i < parts.length; i++) {
+            if (_containsHebrew(parts[i])) {
+                parts[i] = parts[i].split('').reverse().join('');
+            }
+        }
+
+        return prefix + parts.join('');
+    }
+
+    var _canvasHebrewFontLoaded = false;
+
+    function _loadCanvasHebrewFontIfAvailable() {
+        // This is independent of jsPDF embedding. We use it to render RTL text to a canvas as an image.
+        if (_canvasHebrewFontLoaded) return Promise.resolve(true);
+        try {
+            if (typeof FontFace === 'undefined' || !document || !document.fonts || !document.fonts.add) {
+                return Promise.resolve(false);
+            }
+        } catch (e) {
+            return Promise.resolve(false);
+        }
+        // Try a few common filenames; prefer the one the user added.
+        var candidates = ['ArialUnicodeMS.ttf', 'Arial Unicode MS.ttf', 'arialuni.ttf'];
+        function tryNext() {
+            if (!candidates.length) return Promise.resolve(false);
+            var f = candidates.shift();
+            try {
+                var face = new FontFace(_pdfHebrewFontName, 'url(/static/fonts/' + f + ')');
+                return face.load().then(function (loaded) {
+                    document.fonts.add(loaded);
+                    _canvasHebrewFontLoaded = true;
+                    return true;
+                }).catch(function () {
+                    return tryNext();
+                });
+            } catch (e) {
+                return tryNext();
+            }
+        }
+        return tryNext();
+    }
+
+    function _wrapTextByWidth(ctx, text, maxWidth) {
+        // Greedy wrap by spaces; fallback to char wrap if a token is too long.
+        var s = String(text || '');
+        if (!s) return [''];
+        var words = s.split(/\s+/);
+        var lines = [];
+        var line = '';
+        function pushLine(l) {
+            if (l != null) lines.push(l);
+        }
+        for (var i = 0; i < words.length; i++) {
+            var w = words[i];
+            if (!w) continue;
+            var test = line ? (line + ' ' + w) : w;
+            if (ctx.measureText(test).width <= maxWidth) {
+                line = test;
+                continue;
+            }
+            if (line) pushLine(line);
+            // If single word is too wide, char-wrap it.
+            if (ctx.measureText(w).width > maxWidth) {
+                var chunk = '';
+                for (var j = 0; j < w.length; j++) {
+                    var t = chunk + w[j];
+                    if (ctx.measureText(t).width > maxWidth && chunk) {
+                        pushLine(chunk);
+                        chunk = w[j];
+                    } else {
+                        chunk = t;
+                    }
+                }
+                if (chunk) pushLine(chunk);
+                line = '';
+            } else {
+                line = w;
+            }
+        }
+        if (line) pushLine(line);
+        return lines.length ? lines : [''];
+    }
+
+    function _pdfTextHebrewAsImage(pdf, text, x, y, opts) {
+        // Render RTL text using Canvas (browser BiDi) and embed as PNG in PDF.
+        var s = String(text == null ? '' : text);
+        var o = opts || {};
+        var pageW = (typeof window.__ziochubPdfPageW === 'number') ? window.__ziochubPdfPageW : 210;
+        var margin = (typeof window.__ziochubPdfMargin === 'number') ? window.__ziochubPdfMargin : 18;
+        // jsPDF font size is in "points" (pt). Canvas uses pixels.
+        // Convert pt -> px using CSS pixel ratio: 1pt = 1/72in, 1px = 1/96in => px = pt * 96/72.
+        var fontSizePt = (typeof o.fontSize === 'number') ? o.fontSize : (pdf.getFontSize ? pdf.getFontSize() : 10);
+        var maxWidthMm = (typeof o.maxWidthMm === 'number') ? o.maxWidthMm : (pageW - margin * 2);
+        var align = (o.align || 'right');
+        // If caller gave a left x, override to right margin for RTL.
+        if (align === 'right') {
+            x = pageW - margin;
+        }
+
+        // Canvas setup (use higher scale for sharper text).
+        var scale = 2;
+        var canvas = document.createElement('canvas');
+        var ctx = canvas.getContext('2d');
+        // Approximate mm -> px at 96dpi: 1in=25.4mm => 96/25.4 px per mm
+        var pxPerMm = 96 / 25.4;
+        var maxWidthPx = Math.max(1, Math.floor(maxWidthMm * pxPerMm * scale));
+        var fontPx = Math.max(8, Math.round(fontSizePt * (96 / 72) * scale));
+        var fontFamily = _pdfHebrewFontName + ', Arial, sans-serif';
+        ctx.font = fontPx + 'px ' + fontFamily;
+        ctx.direction = 'rtl';
+        ctx.textAlign = (align === 'center') ? 'center' : (align === 'left' ? 'left' : 'right');
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = (o.colorCss || '#000');
+
+        var lines = _wrapTextByWidth(ctx, s, maxWidthPx);
+        var lineHpx = Math.floor(fontPx * 1.25);
+        // Avoid scaling the rendered text: size canvas to the actual max line width we will draw.
+        var maxLineW = 1;
+        for (var mi = 0; mi < lines.length; mi++) {
+            try {
+                var w = ctx.measureText(lines[mi]).width;
+                if (w > maxLineW) maxLineW = w;
+            } catch (e) {}
+        }
+        // Clamp to max width but keep tight to reduce image scaling differences.
+        var canvasW = Math.min(maxWidthPx, Math.ceil(maxLineW) + 6);
+        canvas.width = Math.max(1, canvasW);
+        canvas.height = Math.max(1, lines.length * lineHpx + 4);
+
+        // Re-apply after resize
+        ctx = canvas.getContext('2d');
+        ctx.font = fontPx + 'px ' + fontFamily;
+        ctx.direction = 'rtl';
+        ctx.textAlign = (align === 'center') ? 'center' : (align === 'left' ? 'left' : 'right');
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = (o.colorCss || '#000');
+        // Transparent background (PDF white behind).
+
+        var tx = (ctx.textAlign === 'right') ? (canvas.width - 3) : (ctx.textAlign === 'center' ? canvas.width / 2 : 3);
+        for (var i = 0; i < lines.length; i++) {
+            ctx.fillText(lines[i], tx, i * lineHpx);
+        }
+        try {
+            var img = canvas.toDataURL('image/png');
+            // Convert drawn pixel height -> mm height
+            var hMm = (canvas.height / (pxPerMm * scale));
+            var wMm = (canvas.width / (pxPerMm * scale));
+            var drawX;
+            if (align === 'right') {
+                drawX = x - wMm;
+            } else if (align === 'center') {
+                drawX = x - (wMm / 2);
+            } else {
+                drawX = x;
+            }
+            pdf.addImage(img, 'PNG', drawX, y - 0.6, wMm, hMm);
+            return { yNext: y + (hMm * 0.95) };
+        } catch (e) {
+            // Fallback: last resort (may look wrong, but avoids crash)
+            pdf.text(_rtlVisual(s), x, y, { align: 'right' });
+            return { yNext: y + 5 };
+        }
+    }
+
+    function _pdfSetFontSmart(pdf, isBold) {
+        try {
+            if (_pdfFontLoaded) {
+                pdf.setFont(_pdfHebrewFontName, isBold ? 'bold' : 'normal');
+                return;
+            }
+        } catch (e) {}
+        pdf.setFont(undefined, isBold ? 'bold' : 'normal');
+    }
+
+    function _pdfTextSmart(pdf, text, x, y, opts) {
+        // Main fix for Hebrew is Unicode font embedding. We intentionally avoid forcing RTL alignment here
+        // because many calls use left-margin x; switching to align:right without moving x would clip text.
+        var s = String(text == null ? '' : text);
+        var o = opts || {};
+        if (_containsHebrew(s)) {
+            // For Hebrew/mixed RTL, render via Canvas->PNG for correct visual order (jsPDF lacks BiDi).
+            var fontSize = (pdf.getFontSize ? pdf.getFontSize() : 10);
+            var res = _pdfTextHebrewAsImage(pdf, s, x, y, {
+                align: o.align || 'right',
+                fontSize: fontSize,
+                // Use full text width by default; callers can pass {maxWidthMm} in opts if needed later.
+                maxWidthMm: (typeof o.maxWidthMm === 'number') ? o.maxWidthMm : undefined,
+                colorCss: (o.colorCss || '#000')
+            });
+            return res ? res.yNext : (y + 5);
+        }
+        return pdf.text(s, x, y, o), y;
+    }
+
     window.exportReportPDF = function () {
         if (!currentReportData) {
             if (window.showToast) window.showToast('No report loaded', 'error');
             return;
         }
         _loadPdfLibs().then(function () {
+            return _loadPdfHebrewFontIfAvailable();
+        }).then(function (fontOk) {
+            // Also load the same font into browser font engine for canvas rendering (RTL-as-image).
+            return _loadCanvasHebrewFontIfAvailable().then(function () { return fontOk; });
+        }).then(function (fontOk) {
+            if (!fontOk && window.showToast) {
+                // Non-blocking: PDF still exports, but Hebrew will likely not render correctly without a Unicode font.
+                window.showToast('PDF export: Hebrew requires a Unicode font under /static/fonts/', 'warning');
+            }
             return _loadLogoImage();
         }).then(function (logos) {
             _generatePDF(currentReportData, logos);
@@ -872,12 +1164,32 @@
         var headerLogo = (logos && logos.header) || logos || null;
         var jsPDF = (window.jspdf && window.jspdf.jsPDF) || jspdf.jsPDF;
         var pdf = new jsPDF('p', 'mm', 'a4');
+        // Register Unicode font on this PDF instance (required for Hebrew).
+        try {
+            if (_pdfFontLoaded && _pdfFontVfs && typeof pdf.addFileToVFS === 'function' && typeof pdf.addFont === 'function') {
+                pdf.addFileToVFS(_pdfFontVfs.filename, _pdfFontVfs.b64);
+                pdf.addFont(_pdfFontVfs.filename, _pdfHebrewFontName, 'normal');
+                pdf.addFont(_pdfFontVfs.filename, _pdfHebrewFontName, 'bold');
+                // Set default font immediately so all subsequent pdf.text() calls support Hebrew.
+                pdf.setFont(_pdfHebrewFontName, 'normal');
+            }
+        } catch (e) {
+            // Non-fatal: PDF can still export, but Hebrew may not render.
+            console.warn('PDF font attach failed:', e);
+        }
         var pageW = 210;
         var pageH = 297;
         var margin = 18;
         var yMax = pageH - 25;
         var lineH = 6;
         var tocEntries = [];
+
+        // Expose page geometry so _pdfTextSmart can apply RTL default alignment safely.
+        // (Kept as window-level to avoid refactoring every call signature.)
+        try {
+            window.__ziochubPdfPageW = pageW;
+            window.__ziochubPdfMargin = margin;
+        } catch (e) {}
 
         function _addPageWithHeader(logo) {
             pdf.addPage();
@@ -888,12 +1200,12 @@
             }
             pdf.setFontSize(10);
             pdf.setTextColor(0, 102, 204);
-            pdf.setFont(undefined, 'bold');
-            pdf.text('ZIoCHub', margin + 14, 14);
-            pdf.setFont(undefined, 'normal');
+            _pdfSetFontSmart(pdf, true);
+            _pdfTextSmart(pdf, 'ZIoCHub', margin + 14, 14);
+            _pdfSetFontSmart(pdf, false);
             pdf.setFontSize(9);
             pdf.setTextColor(100, 100, 100);
-            pdf.text('IOC & YARA Management', pageW - margin, 14, { align: 'right' });
+            _pdfTextSmart(pdf, 'IOC & YARA Management', pageW - margin, 14, { align: 'right' });
             pdf.setDrawColor(200, 200, 200);
             pdf.setLineWidth(0.2);
             pdf.line(margin, 20, pageW - margin, 20);
@@ -906,12 +1218,12 @@
             }
             pdf.setFontSize(10);
             pdf.setTextColor(0, 102, 204);
-            pdf.setFont(undefined, 'bold');
-            pdf.text('ZIoCHub', margin + 14, 14);
-            pdf.setFont(undefined, 'normal');
+            _pdfSetFontSmart(pdf, true);
+            _pdfTextSmart(pdf, 'ZIoCHub', margin + 14, 14);
+            _pdfSetFontSmart(pdf, false);
             pdf.setFontSize(9);
             pdf.setTextColor(100, 100, 100);
-            pdf.text('IOC & YARA Management', pageW - margin, 14, { align: 'right' });
+            _pdfTextSmart(pdf, 'IOC & YARA Management', pageW - margin, 14, { align: 'right' });
             pdf.setDrawColor(200, 200, 200);
             pdf.setLineWidth(0.2);
             pdf.line(margin, 20, pageW - margin, 20);
@@ -923,18 +1235,18 @@
                 pdf.setPage(i);
                 pdf.setFontSize(8);
                 pdf.setTextColor(120, 120, 120);
-                pdf.text('Page ' + i + ' of ' + totalPages, pageW / 2, pageH - 10, { align: 'center' });
-                pdf.text('Confidential', margin, pageH - 10);
-                pdf.text(new Date().toISOString().split('T')[0], pageW - margin, pageH - 10, { align: 'right' });
+                _pdfTextSmart(pdf, 'Page ' + i + ' of ' + totalPages, pageW / 2, pageH - 10, { align: 'center' });
+                _pdfTextSmart(pdf, 'Confidential', margin, pageH - 10);
+                _pdfTextSmart(pdf, new Date().toISOString().split('T')[0], pageW - margin, pageH - 10, { align: 'right' });
             }
         }
 
         function _sectionTitle(pdf, margin, y, title) {
             pdf.setFontSize(12);
             pdf.setTextColor(0, 0, 0);
-            pdf.setFont(undefined, 'bold');
-            pdf.text(title, margin, y);
-            pdf.setFont(undefined, 'normal');
+            _pdfSetFontSmart(pdf, true);
+            _pdfTextSmart(pdf, title, margin, y);
+            _pdfSetFontSmart(pdf, false);
             return y + lineH;
         }
 
@@ -944,7 +1256,7 @@
             var lines = pdf.splitTextToSize(desc, pageW - margin * 2);
             lines.forEach(function (line) {
                 if (y > yMax) { pdf.addPage(); pdf.setFillColor(255,255,255); pdf.rect(0,0,pageW,pageH,'F'); _pdfHeader(headerLogo); y = 28; }
-                pdf.text(line, margin, y);
+                _pdfTextSmart(pdf, line, margin, y);
                 y += lineH - 1;
             });
             return y + 3;
@@ -981,27 +1293,27 @@
         }
         pdf.setFontSize(22);
         pdf.setTextColor(0, 102, 204);
-        pdf.setFont(undefined, 'bold');
-        pdf.text('ZIoCHub', pageW / 2, coverLogo ? 110 : 50, { align: 'center' });
-        pdf.setFont(undefined, 'normal');
+        _pdfSetFontSmart(pdf, true);
+        _pdfTextSmart(pdf, 'ZIoCHub', pageW / 2, coverLogo ? 110 : 50, { align: 'center' });
+        _pdfSetFontSmart(pdf, false);
         pdf.setFontSize(10);
         pdf.setTextColor(100, 100, 100);
-        pdf.text('Intelligence Operations Platform', pageW / 2, (coverLogo ? 118 : 58), { align: 'center' });
+        _pdfTextSmart(pdf, 'Intelligence Operations Platform', pageW / 2, (coverLogo ? 118 : 58), { align: 'center' });
         pdf.setFontSize(14);
         pdf.setTextColor(0, 0, 0);
-        pdf.setFont(undefined, 'bold');
+        _pdfSetFontSmart(pdf, true);
         var reportName = data.report_name || 'Intelligence Report';
         var reportLines = pdf.splitTextToSize(reportName, pageW - 40);
         var reportY = (coverLogo ? 135 : 75);
         reportLines.forEach(function (line) {
-            pdf.text(line, pageW / 2, reportY, { align: 'center' });
+            _pdfTextSmart(pdf, line, pageW / 2, reportY, { align: 'center' });
             reportY += 8;
         });
-        pdf.setFont(undefined, 'normal');
+        _pdfSetFontSmart(pdf, false);
         pdf.setFontSize(10);
         pdf.setTextColor(80, 80, 80);
-        pdf.text('Period: ' + data.start_date + ' - ' + data.end_date, pageW / 2, reportY + 10, { align: 'center' });
-        pdf.text('Generated: ' + new Date().toISOString().split('T')[0], pageW / 2, reportY + 18, { align: 'center' });
+        _pdfTextSmart(pdf, 'Period: ' + data.start_date + ' - ' + data.end_date, pageW / 2, reportY + 10, { align: 'center' });
+        _pdfTextSmart(pdf, 'Generated: ' + new Date().toISOString().split('T')[0], pageW / 2, reportY + 18, { align: 'center' });
 
         // ── Page 2: Table of Contents ─────────────────────────────
         pdf.addPage();
@@ -1010,18 +1322,18 @@
         if (headerLogo) pdf.addImage(headerLogo, 'PNG', margin, 8, 12, 12);
         pdf.setFontSize(10);
         pdf.setTextColor(0, 102, 204);
-        pdf.setFont(undefined, 'bold');
-        pdf.text('ZIoCHub', margin + 14, 14);
-        pdf.setFont(undefined, 'normal');
+        _pdfSetFontSmart(pdf, true);
+        _pdfTextSmart(pdf, 'ZIoCHub', margin + 14, 14);
+        _pdfSetFontSmart(pdf, false);
         pdf.setFontSize(9);
         pdf.setTextColor(100, 100, 100);
-        pdf.text('IOC & YARA Management', pageW - margin, 14, { align: 'right' });
+        _pdfTextSmart(pdf, 'IOC & YARA Management', pageW - margin, 14, { align: 'right' });
         pdf.line(margin, 20, pageW - margin, 20);
         var tocY = 35;
         pdf.setFontSize(14);
         pdf.setTextColor(0, 0, 0);
-        pdf.setFont(undefined, 'bold');
-        pdf.text('Table of Contents', margin, tocY);
+        _pdfSetFontSmart(pdf, true);
+        _pdfTextSmart(pdf, 'Table of Contents', margin, tocY);
         tocY += 12;
         var tocItems = [
             '1. Executive Dashboard',
@@ -1039,11 +1351,11 @@
             '13. Rare Finds',
             '14. Analyst Spotlight'
         ];
-        pdf.setFont(undefined, 'normal');
+        _pdfSetFontSmart(pdf, false);
         pdf.setFontSize(10);
         tocItems.forEach(function (item) {
-            pdf.text(item, margin, tocY);
-            pdf.text('...', pageW - margin - 25, tocY);
+            _pdfTextSmart(pdf, item, margin, tocY);
+            _pdfTextSmart(pdf, '...', pageW - margin - 25, tocY);
             tocY += 7;
         });
 
@@ -1066,10 +1378,10 @@
         pdf.setTextColor(0, 0, 0);
         kpis.forEach(function (row) {
             y = _checkPage(pdf, y, headerLogo);
-            pdf.text(row[0] + ': ' + _formatNum(row[1]), margin, y);
+            _pdfTextSmart(pdf, row[0] + ': ' + _formatNum(row[1]), margin, y);
             pdf.setTextColor(100, 100, 100);
             pdf.setFontSize(8);
-            pdf.text(' - ' + row[2], margin + 55, y);
+            _pdfTextSmart(pdf, ' - ' + row[2], margin + 55, y);
             pdf.setFontSize(9);
             pdf.setTextColor(0, 0, 0);
             y += lineH;
@@ -1082,7 +1394,7 @@
         if (summary) {
             pdf.splitTextToSize(summary, pageW - margin * 2).forEach(function (line) {
                 y = _checkPage(pdf, y, headerLogo);
-                pdf.text(line, margin, y);
+                _pdfTextSmart(pdf, line, margin, y);
                 y += lineH - 1;
             });
         }
@@ -1103,7 +1415,7 @@
             Object.entries(ops.type_distribution).forEach(function (kv) {
                 y = _checkPage(pdf, y, headerLogo);
                 pdf.setFontSize(9);
-                pdf.text('  ' + kv[0] + ': ' + kv[1], margin, y);
+                _pdfTextSmart(pdf, '  ' + kv[0] + ': ' + kv[1], margin, y);
                 y += lineH - 1;
             });
         }
@@ -1130,7 +1442,7 @@
             ops.top_countries.slice(0, 10).forEach(function (c) {
                 y = _checkPage(pdf, y, headerLogo);
                 pdf.setFontSize(9);
-                pdf.text('  ' + (c.code || '').toUpperCase() + ' (' + getCountryName(c.code || '') + '): ' + c.count, margin, y);
+                _pdfTextSmart(pdf, '  ' + (c.code || '').toUpperCase() + ' (' + getCountryName(c.code || '') + '): ' + c.count, margin, y);
                 y += lineH - 1;
             });
         }
@@ -1147,7 +1459,7 @@
             ops.top_campaigns.slice(0, 10).forEach(function (c) {
                 y = _checkPage(pdf, y, headerLogo);
                 pdf.setFontSize(9);
-                pdf.text('  ' + (c.name || '') + ': ' + c.ioc_count + ' IOCs, ' + (c.yara_count || 0) + ' YARA', margin, y);
+                _pdfTextSmart(pdf, '  ' + (c.name || '') + ': ' + c.ioc_count + ' IOCs, ' + (c.yara_count || 0) + ' YARA', margin, y);
                 y += lineH - 1;
             });
         }
@@ -1165,17 +1477,23 @@
             campaignsByAnalyst.forEach(function (analyst) {
                 y = _checkPage(pdf, y, headerLogo);
                 pdf.setFontSize(10);
-                pdf.setFont(undefined, 'bold');
                 pdf.setTextColor(0, 102, 204);
-                pdf.text((analyst.display_name || analyst.analyst || ''), margin, y);
-                pdf.setFont(undefined, 'normal');
+                _pdfSetFontSmart(pdf, true);
+                _pdfTextSmart(pdf, (analyst.display_name || analyst.analyst || ''), margin, y);
+                _pdfSetFontSmart(pdf, false);
                 pdf.setTextColor(0, 0, 0);
                 y += lineH;
                 (analyst.campaigns || []).forEach(function (c) {
                     y = _checkPage(pdf, y, headerLogo);
                     pdf.setFontSize(9);
                     var typesStr = Object.entries(c.ioc_types || {}).map(function (kv) { return kv[0] + ': ' + kv[1]; }).join(', ') || '-';
-                    pdf.text('  • ' + (c.name || '') + ' - ' + (c.ioc_count || 0) + ' IOCs (' + typesStr + ')', margin + 5, y);
+                    var line = '  • ' + (c.name || '') + ' - ' + (c.ioc_count || 0) + ' IOCs (' + typesStr + ')';
+                    // If Hebrew exists in the campaign name/line, render RTL and right-align to page margin.
+                    if (_containsHebrew(line)) {
+                        _pdfTextSmart(pdf, line, pageW - margin, y, { align: 'right' });
+                    } else {
+                        _pdfTextSmart(pdf, line, margin + 5, y);
+                    }
                     y += lineH - 1;
                 });
                 y += 2;
@@ -1183,7 +1501,7 @@
         } else {
             pdf.setFontSize(9);
             pdf.setTextColor(100, 100, 100);
-            pdf.text('  No campaigns created in this period.', margin, y);
+            _pdfTextSmart(pdf, '  No campaigns created in this period.', margin, y);
             y += lineH;
         }
 
@@ -1200,7 +1518,7 @@
                 y = _checkPage(pdf, y, headerLogo);
                 pdf.setFontSize(9);
                 var methodLabel = { single: 'Single (Manual)', csv_upload: 'CSV Upload', txt_upload: 'TXT Upload', paste: 'Paste', misp_sync: 'MISP Sync' }[kv[0]] || kv[0];
-                pdf.text('  ' + methodLabel + ': ' + kv[1], margin, y);
+                _pdfTextSmart(pdf, '  ' + methodLabel + ': ' + kv[1], margin, y);
                 y += lineH - 1;
             });
         }
@@ -1215,11 +1533,11 @@
         y = _checkPage(pdf, y, headerLogo);
         if (ops.expiration_policy) {
             pdf.setFontSize(9);
-            pdf.text('  Permanent: ' + (ops.expiration_policy.permanent || 0), margin, y);
+            _pdfTextSmart(pdf, '  Permanent: ' + (ops.expiration_policy.permanent || 0), margin, y);
             y += lineH - 1;
-            pdf.text('  Active (with expiry): ' + (ops.expiration_policy.active_expiry || 0), margin, y);
+            _pdfTextSmart(pdf, '  Active (with expiry): ' + (ops.expiration_policy.active_expiry || 0), margin, y);
             y += lineH - 1;
-            pdf.text('  Expired: ' + (ops.expiration_policy.expired || 0), margin, y);
+            _pdfTextSmart(pdf, '  Expired: ' + (ops.expiration_policy.expired || 0), margin, y);
         }
 
         // ── Section 9: TLD Intelligence ───────────────────────────
@@ -1235,7 +1553,7 @@
             ops.top_tlds.slice(0, 10).forEach(function (t) {
                 y = _checkPage(pdf, y, headerLogo);
                 pdf.setFontSize(9);
-                pdf.text('  .' + (t.tld || '') + ': ' + t.count, margin, y);
+                _pdfTextSmart(pdf, '  .' + (t.tld || '') + ': ' + t.count, margin, y);
                 y += lineH - 1;
             });
         }
@@ -1259,7 +1577,7 @@
             ].forEach(function (row) {
                 y = _checkPage(pdf, y, headerLogo);
                 pdf.setFontSize(9);
-                pdf.text('  ' + row[0] + ': ' + row[1], margin, y);
+                _pdfTextSmart(pdf, '  ' + row[0] + ': ' + row[1], margin, y);
                 y += lineH - 1;
             });
         }
@@ -1277,7 +1595,7 @@
                 y = _checkPage(pdf, y, headerLogo);
                 var label = anomalyTypeLabels[a.type] || a.type;
                 pdf.setFontSize(9);
-                pdf.text('  ' + label + ': ' + a.count, margin, y);
+                _pdfTextSmart(pdf, '  ' + label + ': ' + a.count, margin, y);
                 y += lineH - 1;
             });
         }
@@ -1295,7 +1613,7 @@
         if (Object.keys(yq).length > 0) {
             pdf.setFontSize(9);
             y = _checkPage(pdf, y, headerLogo);
-            pdf.text('  Approved: ' + (yq.total_approved || 0) + ', Pending: ' + (yq.pending || 0) + ', Avg Score: ' + (yq.avg_quality || 0), margin, y);
+            _pdfTextSmart(pdf, '  Approved: ' + (yq.total_approved || 0) + ', Pending: ' + (yq.pending || 0) + ', Avg Score: ' + (yq.avg_quality || 0), margin, y);
             y += lineH;
         }
 
@@ -1312,7 +1630,7 @@
                 y = _checkPage(pdf, y, headerLogo);
                 var detail = r.type === 'country' && r.detail ? getCountryName(r.detail) : (r.detail || r.value);
                 pdf.setFontSize(9);
-                pdf.text('  ' + r.type + ': ' + detail + ' (' + (r.value || '').substring(0, 35) + '...) by ' + (r.discoverer || ''), margin, y);
+                _pdfTextSmart(pdf, '  ' + r.type + ': ' + detail + ' (' + (r.value || '').substring(0, 35) + '...) by ' + (r.discoverer || ''), margin, y);
                 y += lineH - 1;
             });
         }
@@ -1331,7 +1649,7 @@
             pdf.setFontSize(9);
             leaderboard.slice(0, 15).forEach(function (a, i) {
                 y = _checkPage(pdf, y, headerLogo);
-                pdf.text('#' + (i + 1) + ' ' + (a.display_name || a.analyst || '') + ' - ' + a.total_iocs + ' IOCs, ' + (a.yara_count || 0) + ' YARA, Score: ' + (a.score || 0), margin, y);
+                _pdfTextSmart(pdf, '#' + (i + 1) + ' ' + (a.display_name || a.analyst || '') + ' - ' + a.total_iocs + ' IOCs, ' + (a.yara_count || 0) + ' YARA, Score: ' + (a.score || 0), margin, y);
                 y += lineH - 1;
             });
         }
@@ -1343,7 +1661,7 @@
         tocY = 47;
         tocItems.forEach(function (item) {
             var p = pageMap[item] || '-';
-            pdf.text(String(p), pageW - margin - 15, tocY, { align: 'right' });
+            _pdfTextSmart(pdf, String(p), pageW - margin - 15, tocY, { align: 'right' });
             tocY += 7;
         });
 

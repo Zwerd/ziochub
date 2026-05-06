@@ -1822,17 +1822,24 @@ tbody tr:hover {
     flex-shrink: 0;
 }
 .toast-progress {
+    display: block;
     position: absolute;
     bottom: 0;
     left: 0;
-    height: 3px;
+    right: 0;
+    width: 100%;
+    height: 4px;
     border-radius: 0 0 12px 12px;
-    background: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.85);
+    box-shadow: 0 -1px 6px rgba(0,0,0,0.25);
+    pointer-events: none;
+    z-index: 2;
+    transform-origin: right center;
     animation: toastProgress 3s linear forwards;
 }
 @keyframes toastProgress {
-    from { width: 100%; }
-    to   { width: 0%; }
+    from { transform: scaleX(1); }
+    to   { transform: scaleX(0); }
 }
 
 /* YARA Submit: clickable for feedback toast; visually locked until Check syntax passes */
@@ -2818,11 +2825,6 @@ textarea:focus-visible {
     95%  { box-shadow: 0 0 10px currentColor, inset 0 0 6px rgba(255,255,255,0.03); filter: brightness(0.94); }
     100% { box-shadow: 0 0 8px currentColor, inset 0 0 5px rgba(255,255,255,0.02); filter: brightness(0.92); }
 }
-@media (prefers-reduced-motion: reduce) {
-    .champs-trophy-item .champs-trophy-symbol {
-        animation: none;
-    }
-}
 .champs-trophy-item .champs-trophy-label {
     font-weight: 700;
     font-size: 0.7rem;
@@ -3134,9 +3136,11 @@ textarea:focus-visible {
     color: var(--accent-blue) !important;
 }
 
-/* Reduced motion support */
+/* Reduced motion support — exclude Champs & Live Stats tabs so real durations apply */
 @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after {
+    *:not(#tab-champs):not(#tab-champs *):not(#tab-live-stats):not(#tab-live-stats *),
+    *:not(#tab-champs):not(#tab-champs *):not(#tab-live-stats):not(#tab-live-stats *)::before,
+    *:not(#tab-champs):not(#tab-champs *):not(#tab-live-stats):not(#tab-live-stats *)::after {
         animation-duration: 0.01ms !important;
         animation-iteration-count: 1 !important;
         transition-duration: 0.01ms !important;
@@ -5632,11 +5636,11 @@ textarea:focus-visible {
    dashboard retains its UX.
    ============================================================================= */
 @media (prefers-reduced-motion: reduce) {
-    /* Undo the global motion clamp (only for Champs UI). */
-    #tab-champs *, #tab-champs *::before, #tab-champs *::after {
-        animation-duration: revert !important;
-        animation-iteration-count: revert !important;
-        transition-duration: revert !important;
+    /* Global clamp no longer applies inside #tab-champs (see "Reduced motion support" above). */
+
+    /* Section 44 sets animation:none on rows — restore row-enter / rank FX */
+    #tab-champs .champs-ladder-row {
+        animation: revert !important;
     }
 
     /* Champs effects explicitly disabled above — re-enable. */
@@ -5665,9 +5669,42 @@ textarea:focus-visible {
     .champs-rankup-overlay, .champs-rankup-content {
         animation: revert !important;
         transition: revert !important;
-        transform: revert !important;
+        /* Do NOT set transform/opacity/display to revert here — !important would
+           override keyframe animations (medals, crown, trophy unlock, row enter). */
+    }
+
+    /* Spotlight points hero — reduced-motion block ~2672 sets animation:none */
+    #tab-champs .champs-spotlight-points-hero,
+    #tab-champs .champs-spotlight-points-hero::after,
+    #tab-champs .champs-spotlight-points-value {
+        animation: revert !important;
+    }
+    [data-theme="light"] #tab-champs .champs-spotlight-points-hero,
+    [data-theme="light"] #tab-champs .champs-spotlight-points-value {
+        animation: revert !important;
+    }
+    /* Light theme disables spotlight card pulse — restore inside Champs tab only */
+    [data-theme="light"] #tab-champs .champs-spotlight-card {
+        animation: revert !important;
+    }
+
+    /* Section 44 hides these with display:none — restore so neon border / beam / stat shine work */
+    #tab-champs .champs-spotlight-card::before,
+    #tab-champs .champs-spotlight-card::after,
+    #tab-champs .champs-stat-card::before,
+    #tab-champs .champs-spotlight-wrap::before {
+        display: block !important;
+    }
+
+    /* Section 44 zeroes scanline opacity + hover transforms */
+    #tab-champs .champs-tab::after {
         opacity: revert !important;
-        display: revert !important;
+    }
+    #tab-champs .champs-ladder-row:hover {
+        transform: revert !important;
+    }
+    #tab-champs .champs-stat-card:hover {
+        transform: revert !important;
     }
 
     /* Ensure marquee actually scrolls (it was set to animation:none). */
@@ -5684,16 +5721,10 @@ textarea:focus-visible {
 /* =============================================================================
    ZIoCHub: Force Live Stats "Live Updating" pulse when OS disables motion
    -----------------------------------------------------------------------------
-   Same rationale as Champs — undo global motion clamp only inside this tab so
-   the live indicator stays visibly animated.
+   The global reduced-motion clamp excludes #tab-live-stats; these rules override
+   the older tab-specific overrides (see ~612) so the pulse keeps working.
    ============================================================================= */
 @media (prefers-reduced-motion: reduce) {
-    #tab-live-stats *, #tab-live-stats *::before, #tab-live-stats *::after {
-        animation-duration: revert !important;
-        animation-iteration-count: revert !important;
-        transition-duration: revert !important;
-    }
-
     #tab-live-stats #liveIndicator {
         animation: live-block-pulse 2s ease-in-out infinite !important;
         will-change: opacity;

@@ -1,0 +1,4 @@
+# Offline copy of IANA root-zone TLD labels (lowercase, one per line).
+# Replace this file periodically from an air-gapped copy of:
+#   https://data.iana.org/TLD/tlds-alpha-by-domain.txt
+# (strip comments; lowercase each line). Until replaced, bundled code includes a fallback set.

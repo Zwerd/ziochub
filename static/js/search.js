@@ -158,6 +158,7 @@
     function performSearch() {
         const query = searchInput.value.trim();
         const filter = document.getElementById('searchFilter').value || 'all';
+        _searchLastFilter = filter || 'all';
         var browseRaw = '';
         var browseEl = document.getElementById('searchBrowseSelect');
         if (browseEl) browseRaw = browseEl.value || '';
@@ -221,6 +222,7 @@
     let _searchPage = 1;
     let _searchSortBy = null;
     let _searchSortDir = 'asc';
+    let _searchLastFilter = 'all';
 
     function _getSortValue(result, key) {
         const v = result[key];
@@ -267,9 +269,10 @@
         const start = (_searchPage - 1) * pageSize;
         const pageResults = _searchAllResults.slice(start, start + pageSize);
         const query = (searchInput && searchInput.value) ? searchInput.value.trim() : '';
+        const filter = _searchLastFilter || (document.getElementById('searchFilter')?.value || 'all');
         resultsTableBody.innerHTML = '';
         pageResults.forEach((result, index) => {
-            _renderSearchRow(result, query);
+            _renderSearchRow(result, query, filter);
         });
         _bindSearchRowActions();
         const prevBtn = document.getElementById('searchPrevPage');
@@ -307,7 +310,7 @@
         });
     });
 
-    function _renderSearchRow(result, query) {
+    function _renderSearchRow(result, query, filter) {
         const isYara = result.file_type === 'YARA';
         const isCampaign = result.file_type === 'Campaign';
         const row = document.createElement('tr');
@@ -330,9 +333,18 @@
         );
 
         const icon = getIocTypeIcon(result.file_type, result.ioc, result.country_code);
-        const iocDisplay = highlightMatch(result.ioc || '', query);
-        const userDisplay = highlightMatch(result.user || 'N/A', query);
-        const commentDisplay = highlightMatch(result.comment || 'N/A', query);
+        const f = (filter || 'all');
+        const shouldHlAll = (f === 'all');
+        const shouldHlIoc = shouldHlAll || f === 'ioc_value';
+        const shouldHlUser = shouldHlAll || f === 'user';
+        const shouldHlComment = shouldHlAll || f === 'comment';
+        const shouldHlTicket = shouldHlAll || f === 'ticket_id';
+        const shouldHlCampaign = shouldHlAll || f === 'campaign';
+        const shouldHlTags = shouldHlAll || f === 'tag';
+
+        const iocDisplay = shouldHlIoc ? highlightMatch(result.ioc || '', query) : escapeHtml(result.ioc || '');
+        const userDisplay = shouldHlUser ? highlightMatch(result.user || 'N/A', query) : escapeHtml(result.user || 'N/A');
+        const commentDisplay = shouldHlComment ? highlightMatch(result.comment || 'N/A', query) : escapeHtml(result.comment || 'N/A');
         const iocAttr = escapeAttr(result.ioc || '');
         const typeCellClass = isYara
             ? 'border border-white/10 px-4 py-2 font-mono text-sm text-amber-400'
@@ -369,10 +381,16 @@
                 </div>
                </td>`;
 
-        const ticketDisplay = escapeHtml(result.ref || '');
-        const campaignDisplay = escapeHtml(result.campaign_name || '');
+        const ticketDisplay = shouldHlTicket ? highlightMatch(result.ref || '', query) : escapeHtml(result.ref || '');
+        const campaignDisplay = shouldHlCampaign ? highlightMatch(result.campaign_name || '', query) : escapeHtml(result.campaign_name || '');
         const tagsArr = Array.isArray(result.tags) ? result.tags : [];
-        const tagsDisplay = tagsArr.length ? tagsArr.map(t => '<span class="inline-block bg-white/10 text-xs px-2 py-0.5 rounded mr-1">' + escapeHtml(String(t)) + '</span>').join('') : '<span class="text-secondary">-</span>';
+        const tagsDisplay = tagsArr.length
+            ? tagsArr.map(t => {
+                const tagText = String(t);
+                const inner = shouldHlTags ? highlightMatch(tagText, query) : escapeHtml(tagText);
+                return '<span class="inline-block bg-white/10 text-xs px-2 py-0.5 rounded mr-1">' + inner + '</span>';
+            }).join('')
+            : '<span class="text-secondary">-</span>';
 
         row.innerHTML = `
             <td class="${typeCellClass}">${icon} ${result.file_type}</td>

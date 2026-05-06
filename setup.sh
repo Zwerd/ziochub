@@ -18,6 +18,7 @@
 #  HTTPS port: 8443 (default), or 443 / custom. Port 443 requires setcap; see security note in installer.
 #
 #  Updated: 2026-04-13 — --check/--preflight; venv preflight uses real test create.
+#  Offline domain sanity: utils/offline_domain_checks.py (import verified below).
 # ============================================================================
 set -euo pipefail
 
@@ -681,7 +682,7 @@ if [[ ${#MISSING_MODULES[@]} -gt 0 ]]; then
 fi
 
 # Verify utils submodules (Reports, Admin Settings, CEF logging, etc.)
-REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "mentorship" "ambition")
+REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "offline_domain_checks" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "mentorship" "ambition")
 MISSING_UTILS=()
 
 for util in "${REQUIRED_UTILS[@]}"; do

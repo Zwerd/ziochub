@@ -8,7 +8,7 @@
     <!-- Fonts: system fallbacks only (no external requests). See style.css for Inter/JetBrains Mono fallbacks. -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/flag-icons.min.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind-built.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ version|urlencode }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/prism-tomorrow.min.css') }}">
     <script src="{{ url_for('static', filename='js/chart.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/vis-network.min.js') }}"></script>
@@ -2200,7 +2200,7 @@
     };
     </script>
     <script src="{{ url_for('static', filename='js/tags-autocomplete.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}?v={{ version|urlencode }}"></script>
     <script src="{{ url_for('static', filename='js/playbook.js') }}"></script>
     <script src="{{ url_for('static', filename='js/submit.js') }}"></script>
     <script src="{{ url_for('static', filename='js/profile.js') }}"></script>

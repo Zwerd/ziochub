@@ -564,10 +564,13 @@ window.addEventListener('hashchange', () => {
 // ---------------------------------------------------------------------------
 // Toast notification system
 // ---------------------------------------------------------------------------
-function showToast(message, type = 'success', durationMs = 3000) {
+function showToast(message, type = 'success', durationMs = 10000) {
     const icons = { success: '\u2713', error: '\u2717', warning: '\u26A0' };
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
+    // Ensure the progress bar is visible even if CSS is stale/overridden.
+    // Also clips the bar to the toast rounded corners.
+    toast.style.overflow = 'hidden';
     const iconSpan = document.createElement('span');
     iconSpan.className = 'toast-icon';
     iconSpan.textContent = icons[type] || '';
@@ -578,6 +581,16 @@ function showToast(message, type = 'success', durationMs = 3000) {
     }
     const progressSpan = document.createElement('span');
     progressSpan.className = 'toast-progress';
+    // Inline fallback styles (CSS should still apply; this just guarantees visibility).
+    progressSpan.style.display = 'block';
+    progressSpan.style.position = 'absolute';
+    progressSpan.style.left = '0';
+    progressSpan.style.right = '0';
+    progressSpan.style.bottom = '0';
+    progressSpan.style.height = '4px';
+    progressSpan.style.background = 'rgba(255, 255, 255, 0.75)';
+    progressSpan.style.boxShadow = '0 -1px 6px rgba(0,0,0,0.25)';
+    progressSpan.style.transformOrigin = 'right center';
     progressSpan.style.animation = `toastProgress ${durationMs}ms linear forwards`;
     toast.appendChild(iconSpan);
     toast.appendChild(msgSpan);

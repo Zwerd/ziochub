@@ -3,7 +3,8 @@ Sanity checks for IOC submission - Critical (block) and Warnings (allow with ale
 Critical: TLD-only, Critical infra IPs. (Organization domains / protected assets: use Admin → Allowlist.)
 Warnings: Short domain, Hash mismatch, Whitespace, URL with hash,
           Bogon IPs, Popular domains, Cloud providers, Punycode/IDN, DGA-like,
-          URL credentials, URL raw IP, Deep subdomains, Free email providers, Stale IOCs.
+          URL credentials, URL raw IP, Deep subdomains, Free email providers, Stale IOCs,
+          Offline filename-as-domain and unknown-TLD snapshot checks.
 """
 from __future__ import annotations
 
@@ -13,6 +14,8 @@ import os
 import ipaddress
 from datetime import datetime, timedelta
 from urllib.parse import urlparse
+
+from utils.offline_domain_checks import offline_domain_warning_messages, offline_domain_feed_anomalies
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -408,6 +411,8 @@ def get_sanity_warnings(value: str, ioc_type: str) -> list[str]:
         if depth >= 4:
             warnings.append(f'Excessive subdomain depth ({depth} levels). May indicate DNS tunneling or C2.')
 
+        warnings.extend(offline_domain_warning_messages(val))
+
     if ioc_type == 'URL':
         if _url_has_credentials(val):
             warnings.append('URL contains embedded credentials (user:pass@). Security risk in feed data.')
@@ -645,6 +650,10 @@ def get_feed_pulse_anomalies(items: list[dict]) -> list[dict]:
                     'message': f'Excessive subdomain depth ({depth} levels). May indicate DNS tunneling, DGA, or C2 beaconing.',
                     'ioc_type': ioc_type
                 })
+
+        # ── Offline: filename-like domain / unknown TLD vs bundled snapshot ──
+        if ioc_type == 'Domain':
+            anomalies.extend(offline_domain_feed_anomalies(val))
 
         # ── NEW: URL with embedded credentials ──
         if ioc_type == 'URL' and _url_has_credentials(val):

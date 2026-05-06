@@ -591,6 +591,7 @@ def submit_ioc():
     (
         _api_error, _api_ok, _commit_with_retry, audit_log, _log_ioc_history,
         check_allowlist, get_country_code, calculate_expiration_date, check_ioc_exists,
+        apply_ioc_submission_to_existing_row,
         _create_ioc, _compute_rare_find_fields,
         _resolve_analyst_to_user, _auto_ticket_id,
         _capture_champs_before, _detect_champs_changes,
@@ -598,6 +599,7 @@ def submit_ioc():
     ) = _from_app(
         '_api_error', '_api_ok', '_commit_with_retry', 'audit_log', '_log_ioc_history',
         'check_allowlist', 'get_country_code', 'calculate_expiration_date', 'check_ioc_exists',
+        'apply_ioc_submission_to_existing_row',
         '_create_ioc', '_compute_rare_find_fields',
         '_resolve_analyst_to_user', '_auto_ticket_id',
         '_capture_champs_before', '_detect_champs_changes',
@@ -664,21 +666,44 @@ def submit_ioc():
                 'message': f'⛔ Allowlist: Block Prevented! {reason}'
             }), 403
         
-        # Prevent duplicate IOCs (case-insensitive)
+        # Block only if the same type+value is already an active IOC (revoked/expired rows are reactivated below).
         if check_ioc_exists(ioc_type, value):
             return jsonify({'success': False, 'message': MSG_IOC_EXISTS}), 409
 
         rare = _compute_rare_find_fields(ioc_type, value)
         exp_date = calculate_expiration_date(ttl)
         champs_before = _capture_champs_before(user_id, username)
+        reactivated = False
         try:
-            db.session.add(_create_ioc(
-                ioc_type, value, username, 'single',
-                ticket_id=ticket_id, comment=sanitize_comment(comment),
-                expiration_date=exp_date, campaign_id=campaign_id,
-                user_id=user_id, tags=tags_json, rare=rare,
-            ))
-            _commit_with_retry()
+            existing = IOC.query.filter(
+                IOC.type == ioc_type,
+                func.lower(IOC.value) == value.strip().lower(),
+            ).first()
+            if existing:
+                apply_ioc_submission_to_existing_row(
+                    existing,
+                    ioc_type,
+                    value,
+                    username,
+                    'single',
+                    ticket_id=ticket_id,
+                    comment=sanitize_comment(comment),
+                    expiration_date=exp_date,
+                    campaign_id=campaign_id,
+                    user_id=user_id,
+                    tags=tags_json,
+                    rare=rare,
+                )
+                reactivated = True
+                _commit_with_retry()
+            else:
+                db.session.add(_create_ioc(
+                    ioc_type, value, username, 'single',
+                    ticket_id=ticket_id, comment=sanitize_comment(comment),
+                    expiration_date=exp_date, campaign_id=campaign_id,
+                    user_id=user_id, tags=tags_json, rare=rare,
+                ))
+                _commit_with_retry()
         except IntegrityError:
             db.session.rollback()
             return _api_error(MSG_IOC_EXISTS, 409)
@@ -691,6 +716,8 @@ def submit_ioc():
         }
         if exp_date:
             payload_hist['expiration_date'] = exp_date.isoformat()
+        if reactivated:
+            payload_hist['reactivated'] = True
         _log_ioc_history(ioc_type, value, 'created', username, payload_hist)
         _log_sanity_warning_history(
             _log_ioc_history,
@@ -789,10 +816,12 @@ def ingest_ioc():
     """External API endpoint for programmatic IOC ingestion (e.g., MISP integration)."""
     (
         _commit_with_retry, audit_log, check_allowlist, calculate_expiration_date, check_ioc_exists,
+        apply_ioc_submission_to_existing_row,
         _create_ioc, _compute_rare_find_fields,
         _resolve_analyst_to_user, _log_ioc_history,
     ) = _from_app(
         '_commit_with_retry', 'audit_log', 'check_allowlist', 'calculate_expiration_date', 'check_ioc_exists',
+        'apply_ioc_submission_to_existing_row',
         '_create_ioc', '_compute_rare_find_fields',
         '_resolve_analyst_to_user', '_log_ioc_history',
     )
@@ -847,12 +876,34 @@ def ingest_ioc():
             except ValueError:
                 return jsonify({'success': False, 'message': 'Invalid expiration date format. Use YYYY-MM-DD or "Permanent"'}), 400
         rare = _compute_rare_find_fields(ioc_type, value)
+        reactivated_ingest = False
         try:
-            db.session.add(_create_ioc(
-                ioc_type, value, username, 'import',
-                ticket_id=ticket_id, comment=comment,
-                expiration_date=exp_dt, user_id=user_id_ingest, rare=rare,
-            ))
+            existing = IOC.query.filter(
+                IOC.type == ioc_type,
+                func.lower(IOC.value) == value.strip().lower(),
+            ).first()
+            if existing:
+                apply_ioc_submission_to_existing_row(
+                    existing,
+                    ioc_type,
+                    value,
+                    username,
+                    'import',
+                    ticket_id=ticket_id,
+                    comment=comment,
+                    expiration_date=exp_dt,
+                    campaign_id=None,
+                    user_id=user_id_ingest,
+                    tags='[]',
+                    rare=rare,
+                )
+                reactivated_ingest = True
+            else:
+                db.session.add(_create_ioc(
+                    ioc_type, value, username, 'import',
+                    ticket_id=ticket_id, comment=comment,
+                    expiration_date=exp_dt, user_id=user_id_ingest, rare=rare,
+                ))
             _commit_with_retry()
             entered_by = current_user.username if (current_user and current_user.is_authenticated) else 'API'
             payload_hist = {
@@ -861,6 +912,8 @@ def ingest_ioc():
             }
             if exp_dt:
                 payload_hist['expiration_date'] = exp_dt.isoformat()
+            if reactivated_ingest:
+                payload_hist['reactivated'] = True
             _log_ioc_history(ioc_type, value, 'created', username, payload_hist)
             _commit_with_retry()
             cmt = (comment or '').strip()[:80]
@@ -937,11 +990,13 @@ def bulk_csv():
     (
         _commit_with_retry, audit_log, _log_ioc_history,
         check_allowlist, calculate_expiration_date,
+        apply_ioc_submission_to_existing_row,
         _create_ioc, _compute_rare_find_fields,
         _auto_ticket_id, _data_dir, _get_setting,
     ) = _from_app(
         '_commit_with_retry', 'audit_log', '_log_ioc_history',
         'check_allowlist', 'calculate_expiration_date',
+        'apply_ioc_submission_to_existing_row',
         '_create_ioc', '_compute_rare_find_fields',
         '_auto_ticket_id', '_data_dir', '_get_setting',
     )
@@ -1056,13 +1111,21 @@ def bulk_csv():
                 ticket_id_val = (ticket_id.strip() if ticket_id else None) or csv_fallback_ticket
                 existing = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.lower()).first()
                 if existing:
-                    existing.comment = comment
-                    existing.expiration_date = exp_date
-                    existing.ticket_id = ticket_id_val or existing.ticket_id
-                    if campaign_id is not None:
-                        existing.campaign_id = campaign_id
-                    if tags_list:
-                        existing.tags = tags_json
+                    rare = _compute_rare_find_fields(ioc_type, value)
+                    apply_ioc_submission_to_existing_row(
+                        existing,
+                        ioc_type,
+                        value,
+                        username,
+                        'csv',
+                        ticket_id=ticket_id_val,
+                        comment=comment,
+                        expiration_date=exp_date,
+                        campaign_id=campaign_id,
+                        user_id=current_user.id if current_user.is_authenticated else None,
+                        tags=tags_json if tags_list else None,
+                        rare=rare,
+                    )
                     updated_count += 1
                 else:
                     rare = _compute_rare_find_fields(ioc_type, value)
@@ -1161,15 +1224,17 @@ def preview_csv():
     """
     Parse CSV using same logic as bulk_csv; return JSON items for staging (no DB write).
     Accepts: file, ttl, comment, optional ticket_id, optional assign_to (analyst username; empty = submitter).
-    For each IOC: existing_permanent=True if DB row exists (any expiration); UI disables Approve and shows "Already exists".
+    For each IOC: existing_permanent=True only if an active IOC exists (not revoked, not expired).
     Per-cell IOC extraction matches Paste (URL before bare domain, deduped within the cell).
     """
     (
         check_allowlist, calculate_expiration_date,
         _auto_ticket_id, _data_dir, _get_setting,
+        ioc_row_is_active,
     ) = _from_app(
         'check_allowlist', 'calculate_expiration_date',
         '_auto_ticket_id', '_data_dir', '_get_setting',
+        'ioc_row_is_active',
     )
     try:
         sanity_mode = _get_setting('sanity_check_mode', 'block_non_admin')
@@ -1252,7 +1317,7 @@ def preview_csv():
                     func.lower(IOC.value) == value.lower()
                 ).first()
                 if existing_row:
-                    existing_permanent = True
+                    existing_permanent = ioc_row_is_active(existing_row)
                     existing_analyst = (existing_row.analyst or '')
                     existing_comment = (existing_row.comment or '')
 
@@ -1286,9 +1351,11 @@ def preview_txt():
     (
         check_allowlist, calculate_expiration_date,
         _auto_ticket_id, _data_dir, _get_setting,
+        ioc_row_is_active,
     ) = _from_app(
         'check_allowlist', 'calculate_expiration_date',
         '_auto_ticket_id', '_data_dir', '_get_setting',
+        'ioc_row_is_active',
     )
     try:
         sanity_mode = _get_setting('sanity_check_mode', 'block_non_admin')
@@ -1375,7 +1442,7 @@ def preview_txt():
                     func.lower(IOC.value) == ioc_cleaned.lower()
                 ).first()
                 if existing_row:
-                    existing_permanent = True
+                    existing_permanent = ioc_row_is_active(existing_row)
                     existing_analyst = (existing_row.analyst or '')
                     existing_comment = (existing_row.comment or '')
 
@@ -1413,9 +1480,11 @@ def preview_paste():
     (
         check_allowlist, calculate_expiration_date,
         _auto_ticket_id, _data_dir, _get_setting,
+        ioc_row_is_active,
     ) = _from_app(
         'check_allowlist', 'calculate_expiration_date',
         '_auto_ticket_id', '_data_dir', '_get_setting',
+        'ioc_row_is_active',
     )
     try:
         sanity_mode = _get_setting('sanity_check_mode', 'block_non_admin')
@@ -1467,7 +1536,7 @@ def preview_paste():
                 func.lower(IOC.value) == ioc_cleaned.lower()
             ).first()
             if existing_row:
-                existing_permanent = True
+                existing_permanent = ioc_row_is_active(existing_row)
                 existing_analyst = (existing_row.analyst or '')
                 existing_comment = (existing_row.comment or '')
 
@@ -1498,15 +1567,17 @@ def preview_paste():
 def preview_single():
     """
     Preview a single IOC for the Single staging table. Returns one item with existing_permanent
-    so the UI can show "Already exists" and disable Approve when the IOC is already in the DB.
+    when an active IOC exists (not revoked, not expired).
     JSON body: { type, value, ticket_id?, ttl?, comment? }.
     """
     (
         check_allowlist, calculate_expiration_date,
         _auto_ticket_id, _data_dir, _get_setting,
+        ioc_row_is_active,
     ) = _from_app(
         'check_allowlist', 'calculate_expiration_date',
         '_auto_ticket_id', '_data_dir', '_get_setting',
+        'ioc_row_is_active',
     )
     try:
         sanity_mode = _get_setting('sanity_check_mode', 'block_non_admin')
@@ -1575,7 +1646,7 @@ def preview_single():
             func.lower(IOC.value) == value.lower()
         ).first()
         if existing_row:
-            existing_permanent = True
+            existing_permanent = ioc_row_is_active(existing_row)
             existing_analyst = (existing_row.analyst or '')
             existing_comment = (existing_row.comment or '')
         item = {
@@ -1607,6 +1678,7 @@ def submit_staging():
     (
         _commit_with_retry, _log_ioc_history, audit_log,
         check_allowlist, calculate_expiration_date,
+        apply_ioc_submission_to_existing_row,
         _create_ioc, _compute_rare_find_fields,
         _resolve_analyst_to_user, _auto_ticket_id,
         _capture_champs_before, _detect_champs_changes,
@@ -1614,6 +1686,7 @@ def submit_staging():
     ) = _from_app(
         '_commit_with_retry', '_log_ioc_history', 'audit_log',
         'check_allowlist', 'calculate_expiration_date',
+        'apply_ioc_submission_to_existing_row',
         '_create_ioc', '_compute_rare_find_fields',
         '_resolve_analyst_to_user', '_auto_ticket_id',
         '_capture_champs_before', '_detect_champs_changes',
@@ -1714,15 +1787,21 @@ def submit_staging():
 
             existing = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == ioc_value.lower()).first()
             if existing:
-                existing.comment = comment
-                existing.expiration_date = exp_date
-                existing.ticket_id = ticket_id or existing.ticket_id
-                existing.analyst = analyst
-                existing.user_id = user_id
-                if campaign_id is not None:
-                    existing.campaign_id = campaign_id
-                if item_tags_list:
-                    existing.tags = item_tags_json
+                rare = _compute_rare_find_fields(ioc_type, ioc_value)
+                apply_ioc_submission_to_existing_row(
+                    existing,
+                    ioc_type,
+                    ioc_value,
+                    analyst,
+                    submission_source,
+                    ticket_id=ticket_id,
+                    comment=comment,
+                    expiration_date=exp_date,
+                    campaign_id=campaign_id,
+                    user_id=user_id,
+                    tags=item_tags_json,
+                    rare=rare,
+                )
                 total_updated += 1
                 summary[ioc_type] = summary.get(ioc_type, {'updated': 0, 'new': 0})
                 summary[ioc_type]['updated'] += 1
@@ -1852,12 +1931,14 @@ def upload_txt():
     (
         _commit_with_retry, audit_log, _log_ioc_history,
         check_allowlist, calculate_expiration_date,
+        apply_ioc_submission_to_existing_row,
         _create_ioc, _compute_rare_find_fields,
         _resolve_analyst_to_user, _auto_ticket_id,
         _capture_champs_before, _detect_champs_changes,
     ) = _from_app(
         '_commit_with_retry', 'audit_log', '_log_ioc_history',
         'check_allowlist', 'calculate_expiration_date',
+        'apply_ioc_submission_to_existing_row',
         '_create_ioc', '_compute_rare_find_fields',
         '_resolve_analyst_to_user', '_auto_ticket_id',
         '_capture_champs_before', '_detect_champs_changes',
@@ -1961,13 +2042,29 @@ def upload_txt():
             for value, meta in ioc_dict.items():
                 existing = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.lower()).first()
                 if existing:
-                    existing.comment = meta['comment']
-                    existing.expiration_date = exp_date
-                    existing.ticket_id = meta['ticket_id'] or existing.ticket_id
-                    if campaign_id is not None:
-                        existing.campaign_id = campaign_id
-                    if tags_list:
-                        existing.tags = tags_json
+                    u = meta['user']
+                    analyst_from_file = meta.get('analyst_raw')
+                    resolved_bulk_txt = _resolve_analyst_to_user(u)
+                    if resolved_bulk_txt:
+                        store_user_id, store_analyst = resolved_bulk_txt
+                    else:
+                        store_analyst = (analyst_from_file or current_user.username or '').strip().lower() or current_user.username.lower()
+                        store_user_id = current_user.id if current_user.is_authenticated else None
+                    rare = _compute_rare_find_fields(ioc_type, value)
+                    apply_ioc_submission_to_existing_row(
+                        existing,
+                        ioc_type,
+                        value,
+                        store_analyst,
+                        'txt',
+                        ticket_id=meta['ticket_id'],
+                        comment=meta['comment'],
+                        expiration_date=exp_date,
+                        campaign_id=campaign_id,
+                        user_id=store_user_id,
+                        tags=tags_json if tags_list else None,
+                        rare=rare,
+                    )
                     updated_count += 1
                 else:
                     rare = _compute_rare_find_fields(ioc_type, value)

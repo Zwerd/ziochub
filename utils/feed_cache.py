@@ -59,6 +59,14 @@ def clear_all_feed_cache():
             pass
 
 
+def invalidate_feed_cache_after_ioc_change():
+    """
+    Call after IOC rows change membership of public text/STIX feeds (revoke, auto-expire, etc.).
+    Cached /feed/* responses would otherwise serve stale indicators until TTL expires.
+    """
+    clear_all_feed_cache()
+
+
 def get_cached_feed_response(cache_key: str):
     """
     Return a Flask Response if cache hit and fresh; else None.

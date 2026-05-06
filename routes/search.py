@@ -1410,6 +1410,11 @@ def revoke_ioc():
         row.revoked_at = now_utc
         row.modified_at = now_utc
         _commit_with_retry()
+        try:
+            from utils.feed_cache import invalidate_feed_cache_after_ioc_change
+            invalidate_feed_cache_after_ioc_change()
+        except Exception:
+            pass
         # Attribute deletion to the user who performed it (for Champs "Deletions" count)
         champs_payload = {
             'was_expired': was_expired,

@@ -89,6 +89,29 @@ def _feed_ioc_rows(ioc_type, hash_length=None, max_rows=None):
     return rows
 
 
+def _feed_ioc_rows_for_stix_bundle(ioc_type, hash_length=None, max_rows=None):
+    """
+    IOC rows for /feed/stix bundles — same membership as TAXII 2.1 Get Objects (include_revoked=True):
+    include revoked rows, or non-revoked rows that are unexpired (null expiration or expiration > now).
+    Excludes only non-revoked rows that are past expiration.
+    """
+    if max_rows is None:
+        max_rows = FEED_IOC_MAX_ROWS
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    q = IOC.query.filter(
+        IOC.type == ioc_type,
+        db.or_(
+            IOC.revoked.is_(True),
+            IOC.expiration_date.is_(None),
+            IOC.expiration_date > now,
+        ),
+    ).order_by(IOC.modified_at, IOC.id)
+    rows = q.limit(max_rows).all()
+    if hash_length is not None:
+        rows = [r for r in rows if len((r.value or '').strip()) == hash_length]
+    return rows
+
+
 def _feed_ioc_plain(ioc_type, hash_length=None):
     """Return list of IOC value strings for the given type (and optional hash length)."""
     rows = _feed_ioc_rows(ioc_type, hash_length)
@@ -272,14 +295,14 @@ def _stix_indicator_from_row(row, now=None):
 
 
 def _feed_stix_bundle(ioc_type_filter=None, hash_length=None):
-    """Build STIX 2.1 Bundle (JSON) of Indicator objects for active IOCs."""
+    """Build STIX 2.1 Bundle (JSON) aligned with TAXII (revoked indicators included with revoked: true)."""
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     types_to_fetch = [ioc_type_filter] if ioc_type_filter else [t for t in IOC_FILES if t != 'YARA']
     objects = []
     for ioc_type in types_to_fetch:
         if ioc_type not in IOC_FILES or ioc_type == 'YARA':
             continue
-        rows = _feed_ioc_rows(ioc_type, hash_length=hash_length)
+        rows = _feed_ioc_rows_for_stix_bundle(ioc_type, hash_length=hash_length)
         for row in rows:
             ind = _stix_indicator_from_row(row, now)
             if ind:
@@ -529,7 +552,7 @@ def feed_yara_content(filename):
 @bp.route('/stix', methods=['GET'])
 @bp.route('/stix/<ioc_type>', methods=['GET'])
 def feed_stix(ioc_type=None):
-    """STIX 2.1 JSON bundle of active IOCs. /feed/stix = all types; /feed/stix/ip = IP only, etc."""
+    """STIX 2.1 JSON bundle — same indicator set as TAXII (includes revoked with revoked: true). /feed/stix = all types."""
     hash_length = None
     path_suffix = 'all'
     if ioc_type:

@@ -93,6 +93,11 @@ def _process_newly_expired_iocs(max_items: int = 200) -> None:
             except Exception:
                 continue
         _commit_with_retry()
+        try:
+            from utils.feed_cache import invalidate_feed_cache_after_ioc_change
+            invalidate_feed_cache_after_ioc_change()
+        except Exception:
+            pass
         # push is already scheduled per IOC above (best-effort); nothing else to do
     except Exception:
         try:

@@ -412,14 +412,16 @@ _SETTINGS_DEFAULTS = {
     'trellix_ex_targets': '[]',
     'trellix_ex_enabled': 'false',
     'trellix_ex_base_url': '',
-    'trellix_ex_login_path': '/ex/login',
+    'trellix_ex_login_path': '/login/login',
     'trellix_ex_upload_path': '/ex/yara_rules_ng/upload_yara',
     'trellix_ex_username': '',
     'trellix_ex_password': '',
     'trellix_ex_manual_cookie': '',
     'trellix_ex_verify_ssl': 'true',
     'trellix_ex_f_type': 'common',
-    'trellix_ex_content_type': 'all',
+    'trellix_ex_content_type': 'base',
+    'trellix_ex_csrf_param': '',
+    'trellix_ex_csrf_token': '',
     'sanity_check_mode': 'block_non_admin',
     'search_comment_rtl_by_script': 'true',  # In search results: if comment has more Hebrew/Arabic than other text, show RTL
     # Tags governance (admin-controlled taxonomy)
@@ -570,14 +572,16 @@ def _trellix_ex_targets_json_for_form(get_setting_fn) -> str:
             rows = [{
                 'name': 'Trellix EX',
                 'base_url': base,
-                'login_path': (get_setting_fn('trellix_ex_login_path', '') or '/ex/login').strip(),
+                'login_path': (get_setting_fn('trellix_ex_login_path', '') or '/login/login').strip(),
                 'upload_path': (get_setting_fn('trellix_ex_upload_path', '') or '/ex/yara_rules_ng/upload_yara').strip(),
                 'username': (get_setting_fn('trellix_ex_username', '') or '').strip(),
                 'password': (get_setting_fn('trellix_ex_password', '') or ''),
                 'manual_cookie': (get_setting_fn('trellix_ex_manual_cookie', '') or '').strip(),
                 'verify_ssl': (get_setting_fn('trellix_ex_verify_ssl', 'true') or 'true').lower() in ('true', '1', 'yes'),
                 'f_type': (get_setting_fn('trellix_ex_f_type', 'common') or 'common').strip(),
-                'content_type': (get_setting_fn('trellix_ex_content_type', 'all') or 'all').strip(),
+                'content_type': (get_setting_fn('trellix_ex_content_type', 'base') or 'base').strip(),
+                'csrf_param': (get_setting_fn('trellix_ex_csrf_param', '') or '').strip(),
+                'csrf_token': (get_setting_fn('trellix_ex_csrf_token', '') or '').strip(),
             }]
     return json.dumps(rows, ensure_ascii=False)
 
@@ -632,8 +636,14 @@ def _normalize_trellix_ex_targets_for_save(val, _get_setting) -> str:
         else:
             verify_ssl = bool(vs)
         ft = str(item.get('f_type') or '').strip()[:64] or 'common'
-        ct = str(item.get('content_type') or '').strip()[:64] or 'all'
-        out.append({
+        ct = str(item.get('content_type') or '').strip()[:64] or 'base'
+        csrf_p = str(item.get('csrf_param') or '').strip()[:128]
+        csrf_t = str(item.get('csrf_token') or '').strip()[:8192]
+        del_p = str(item.get('delete_path') or '').strip()[:512]
+        edm = str(item.get('ex_delete_name_mode') or 'same').strip().lower()
+        if edm not in ('same', 'yar_txt'):
+            edm = 'same'
+        row_out: dict = {
             'name': name,
             'base_url': base.rstrip('/'),
             'login_path': lp,
@@ -644,7 +654,16 @@ def _normalize_trellix_ex_targets_for_save(val, _get_setting) -> str:
             'verify_ssl': verify_ssl,
             'f_type': ft,
             'content_type': ct,
-        })
+        }
+        if csrf_p:
+            row_out['csrf_param'] = csrf_p
+        if csrf_t:
+            row_out['csrf_token'] = csrf_t
+        if del_p:
+            row_out['delete_path'] = del_p
+        if edm != 'same':
+            row_out['ex_delete_name_mode'] = edm
+        out.append(row_out)
     return json.dumps(out, ensure_ascii=False)
 
 
@@ -1728,14 +1747,16 @@ def _build_admin_settings_form_context():
         'trellix_ex_enabled': _get_setting('trellix_ex_enabled', 'false'),
         'trellix_ex_targets': _trellix_ex_targets_json_for_form(_get_setting),
         'trellix_ex_base_url': _get_setting('trellix_ex_base_url', ''),
-        'trellix_ex_login_path': _get_setting('trellix_ex_login_path', '/ex/login'),
+        'trellix_ex_login_path': _get_setting('trellix_ex_login_path', '/login/login'),
         'trellix_ex_upload_path': _get_setting('trellix_ex_upload_path', '/ex/yara_rules_ng/upload_yara'),
         'trellix_ex_username': _get_setting('trellix_ex_username', ''),
         'trellix_ex_password': _get_setting('trellix_ex_password', ''),
         'trellix_ex_manual_cookie': _get_setting('trellix_ex_manual_cookie', ''),
         'trellix_ex_verify_ssl': _get_setting('trellix_ex_verify_ssl', 'true'),
         'trellix_ex_f_type': _get_setting('trellix_ex_f_type', 'common'),
-        'trellix_ex_content_type': _get_setting('trellix_ex_content_type', 'all'),
+        'trellix_ex_content_type': _get_setting('trellix_ex_content_type', 'base'),
+        'trellix_ex_csrf_param': _get_setting('trellix_ex_csrf_param', ''),
+        'trellix_ex_csrf_token': _get_setting('trellix_ex_csrf_token', ''),
         'ioc_push_enabled': _get_setting('ioc_push_enabled', 'false'),
         'ioc_push_ignore_ssl': _get_setting('ioc_push_ignore_ssl', 'false'),
         'ioc_push_targets': _get_setting('ioc_push_targets', '[]'),

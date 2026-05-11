@@ -1,7 +1,7 @@
 """
 Merge YARA automation: optional Trellix NX presets + generic HTTP targets.
 
-NX rows are expanded in ``utils.trellix_nx``. Generic targets use the historical setting key
+NX **wsapis** rows are expanded in ``utils.trellix_nx``; **wmps** rows use session push there and are not merged here. Generic targets use the historical setting key
 ``automation_fireeye_appliances`` (vendor-neutral HTTP list; name kept for DB compatibility).
 """
 

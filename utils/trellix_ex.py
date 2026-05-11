@@ -1,13 +1,23 @@
 """
-Trellix Email Security (EX): YARA upload via session cookie after JSON password auth.
+Trellix Email Security (EX): YARA upload/delete via session cookie after JSON password auth.
 
-Upload (multipart POST):
-  yara_file (binary), f_type, content_type (defaults: common / all)
+Upload (multipart POST): yara_file, f_type, content_type — **default** path
+``/ex/yara_rules_ng/upload_yara`` (Email Security web UI).
 
-Auth (JSON POST to configurable path):
-  {"auth_method": "password", "data": {"username": "...", "password": "..."}}
+Delete: POST ``application/x-www-form-urlencoded`` to ``…/yara_rules_ng/delete_yara_files``
+(derived from upload path unless ``delete_path`` is set per target).
 
-Optional: skip login when admin sets a manual Cookie value (e.g. existing session_id).
+Session-style push/delete for additional targets reuse ``push_yara_session_targets`` /
+``delete_yara_session_targets`` (used by Trellix NX ``api_style: wmps`` in ``utils.trellix_nx``).
+
+Auth (JSON POST): ``{"auth_method": "password", "data": {"username", "password"}}``
+to configurable ``login_path`` (default ``/login/login``).
+
+After login, parses JSON for CSRF and sends X-CSRF-Token, X-CSRF-Param, X-Requested-With,
+Accept ``application/json, text/plain, */*``, and Referer ``{prefix}/settings/yara_rules``.
+
+Optional manual Cookie; optional per-target csrf_*; ``ex_delete_name_mode: yar_txt`` maps
+``rule.yar`` → ``rule.yar.txt`` for delete payloads when EX stores that suffix.
 """
 
 from __future__ import annotations
@@ -19,11 +29,68 @@ import ssl
 import string
 import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 from typing import Any, Callable, List, Optional
 
 from utils.yara_http_push import _evaluate_http_response_body, _truncate_msg
 
 _MAX_RESPONSE_BODY_BYTES = 256 * 1024
+
+# Defaults aligned with current Trellix EX UI (paths / form values may differ on older appliances).
+_DEFAULT_EX_LOGIN_PATH = '/login/login'
+_DEFAULT_EX_CONTENT_TYPE = 'base'
+# EX (Email Security) web UI — NX IPS uses /wmps/… (see utils.trellix_nx, api_style wmps).
+_DEFAULT_EX_UPLOAD_PATH = '/ex/yara_rules_ng/upload_yara'
+_EX_ACCEPT = 'application/json, text/plain, */*'
+
+
+def _extract_csrf_from_login_body(body_bytes: bytes) -> tuple[Optional[str], Optional[str]]:
+    """
+    Parse login JSON for (csrf_param, csrf_token) used as X-CSRF-Param / X-CSRF-Token on upload.
+    Returns (None, None) if not found.
+    """
+    if not body_bytes:
+        return None, None
+    try:
+        text = body_bytes.decode('utf-8', errors='replace').strip()
+    except Exception:
+        return None, None
+    if not text:
+        return None, None
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+
+    def _from_dict(d: dict) -> tuple[Optional[str], Optional[str]]:
+        if not isinstance(d, dict):
+            return None, None
+        if isinstance(d.get('authenticity_token'), str) and d['authenticity_token'].strip():
+            return 'authenticity_token', d['authenticity_token'].strip()
+        if isinstance(d.get('csrf_token'), str) and d['csrf_token'].strip():
+            return 'authenticity_token', d['csrf_token'].strip()
+        if isinstance(d.get('csrfToken'), str) and d['csrfToken'].strip():
+            return 'authenticity_token', d['csrfToken'].strip()
+        return None, None
+
+    p, t = _from_dict(data)
+    if t:
+        return p, t
+    inner = data.get('data')
+    if isinstance(inner, dict):
+        p, t = _from_dict(inner)
+        if t:
+            return p, t
+    meta = data.get('meta')
+    if isinstance(meta, dict):
+        t = meta.get('csrf_token') or meta.get('authenticity_token')
+        p = meta.get('csrf_param') or meta.get('csrf-param')
+        if isinstance(t, str) and t.strip():
+            pp = p.strip() if isinstance(p, str) and p.strip() else 'authenticity_token'
+            return pp, t.strip()
+    return None, None
 
 
 def parse_trellix_ex_targets_json(raw: str | None) -> List[dict]:
@@ -44,14 +111,16 @@ def _legacy_flat_ex_target(get_setting: Callable[[str, str], str]) -> dict:
     return {
         'name': 'Trellix EX',
         'base_url': (get_setting('trellix_ex_base_url', '') or '').strip().rstrip('/'),
-        'login_path': (get_setting('trellix_ex_login_path', '/ex/login') or '/ex/login').strip(),
-        'upload_path': (get_setting('trellix_ex_upload_path', '/ex/yara_rules_ng/upload_yara') or '').strip(),
+        'login_path': (get_setting('trellix_ex_login_path', _DEFAULT_EX_LOGIN_PATH) or _DEFAULT_EX_LOGIN_PATH).strip(),
+        'upload_path': (get_setting('trellix_ex_upload_path', _DEFAULT_EX_UPLOAD_PATH) or '').strip(),
         'username': (get_setting('trellix_ex_username', '') or '').strip(),
         'password': get_setting('trellix_ex_password', '') or '',
         'manual_cookie': (get_setting('trellix_ex_manual_cookie', '') or '').strip(),
         'verify_ssl': _verify_ssl_from_settings(get_setting),
         'f_type': (get_setting('trellix_ex_f_type', 'common') or 'common').strip(),
-        'content_type': (get_setting('trellix_ex_content_type', 'all') or 'all').strip(),
+        'content_type': (get_setting('trellix_ex_content_type', _DEFAULT_EX_CONTENT_TYPE) or _DEFAULT_EX_CONTENT_TYPE).strip(),
+        'csrf_param': (get_setting('trellix_ex_csrf_param', '') or '').strip(),
+        'csrf_token': (get_setting('trellix_ex_csrf_token', '') or '').strip(),
     }
 
 
@@ -67,9 +136,11 @@ def normalize_ex_target_row(r: dict, get_setting: Callable[[str, str], str]) -> 
     """One resolved target dict for login/upload (defaults from legacy keys when a field is empty)."""
     name = (r.get('name') or '').strip() or 'Trellix EX'
     base_url = (r.get('base_url') or '').strip().rstrip('/')
-    login_path = (r.get('login_path') or '').strip() or (get_setting('trellix_ex_login_path', '/ex/login') or '/ex/login').strip()
+    login_path = (r.get('login_path') or '').strip() or (
+        get_setting('trellix_ex_login_path', _DEFAULT_EX_LOGIN_PATH) or _DEFAULT_EX_LOGIN_PATH
+    ).strip()
     upload_path = (r.get('upload_path') or '').strip() or (
-        get_setting('trellix_ex_upload_path', '/ex/yara_rules_ng/upload_yara') or ''
+        get_setting('trellix_ex_upload_path', _DEFAULT_EX_UPLOAD_PATH) or ''
     ).strip()
     if upload_path and not upload_path.startswith('/'):
         upload_path = '/' + upload_path
@@ -79,7 +150,15 @@ def normalize_ex_target_row(r: dict, get_setting: Callable[[str, str], str]) -> 
     manual_cookie = (manual_raw if isinstance(manual_raw, str) else str(manual_raw or '')).strip()
     verify_ssl = _coerce_verify_ssl(r.get('verify_ssl'), _verify_ssl_from_settings(get_setting))
     f_type = (r.get('f_type') or '').strip() or (get_setting('trellix_ex_f_type', 'common') or 'common').strip() or 'common'
-    ct = (r.get('content_type') or '').strip() or (get_setting('trellix_ex_content_type', 'all') or 'all').strip() or 'all'
+    ct = (r.get('content_type') or '').strip() or (
+        get_setting('trellix_ex_content_type', _DEFAULT_EX_CONTENT_TYPE) or _DEFAULT_EX_CONTENT_TYPE
+    ).strip() or _DEFAULT_EX_CONTENT_TYPE
+    csrf_param = (r.get('csrf_param') or '').strip()
+    csrf_token = (r.get('csrf_token') or '').strip()
+    delete_path = (r.get('delete_path') or '').strip()
+    ex_delete_name_mode = (r.get('ex_delete_name_mode') or 'same').strip().lower()
+    if ex_delete_name_mode not in ('same', 'yar_txt'):
+        ex_delete_name_mode = 'same'
     return {
         'name': name,
         'base_url': base_url,
@@ -91,6 +170,10 @@ def normalize_ex_target_row(r: dict, get_setting: Callable[[str, str], str]) -> 
         'verify_ssl': verify_ssl,
         'f_type': f_type,
         'content_type': ct,
+        'csrf_param': csrf_param,
+        'csrf_token': csrf_token,
+        'delete_path': delete_path,
+        'ex_delete_name_mode': ex_delete_name_mode,
     }
 
 
@@ -116,10 +199,57 @@ def trellix_ex_upload_url_for_target(target: dict) -> str:
     return _join_url(base, up) if base else ''
 
 
+def trellix_ex_referer_path(upload_path: str) -> str:
+    """Settings page path for Referer header (must match UI prefix: wmps, ex, …)."""
+    up = (upload_path or '').strip()
+    if '/yara_rules_ng/' in up:
+        prefix = up.split('/yara_rules_ng/')[0].strip() or '/ex'
+        if not prefix.startswith('/'):
+            prefix = '/' + prefix
+        return prefix + '/settings/yara_rules'
+    if up.startswith('/wmps'):
+        return '/wmps/settings/yara_rules'
+    return '/ex/settings/yara_rules'
+
+
+def trellix_ex_delete_path_from_upload(upload_path: str) -> str:
+    """Derive delete_yara_files path from upload_yara path."""
+    up = (upload_path or '').strip()
+    if 'upload_yara' in up:
+        return up.replace('upload_yara', 'delete_yara_files', 1)
+    if '/yara_rules_ng/' in up:
+        return up.rstrip('/').rsplit('/', 1)[0] + '/delete_yara_files'
+    return '/ex/yara_rules_ng/delete_yara_files'
+
+
+def trellix_ex_delete_url_for_target(target: dict) -> str:
+    base = (target.get('base_url') or '').strip().rstrip('/')
+    if not base:
+        return ''
+    explicit = (target.get('delete_path') or '').strip()
+    if explicit:
+        if not explicit.startswith('/'):
+            explicit = '/' + explicit
+        return _join_url(base, explicit)
+    up = (target.get('upload_path') or '').strip()
+    del_rel = trellix_ex_delete_path_from_upload(up)
+    return _join_url(base, del_rel)
+
+
 def list_trellix_ex_upload_urls(get_setting: Callable[[str, str], str]) -> List[str]:
     out: List[str] = []
     for t in list_trellix_ex_targets(get_setting):
         u = trellix_ex_upload_url_for_target(t)
+        if u:
+            out.append(u)
+    return out
+
+
+def list_trellix_ex_delete_urls(get_setting: Callable[[str, str], str]) -> List[str]:
+    """Delete API URLs for retry / telemetry matching."""
+    out: List[str] = []
+    for t in list_trellix_ex_targets(get_setting):
+        u = trellix_ex_delete_url_for_target(t)
         if u:
             out.append(u)
     return out
@@ -152,7 +282,7 @@ def trellix_ex_upload_url(get_setting: Callable[[str, str], str]) -> str:
     if tgts:
         return trellix_ex_upload_url_for_target(tgts[0])
     base = (get_setting("trellix_ex_base_url", "") or "").strip().rstrip("/")
-    up = (get_setting("trellix_ex_upload_path", "/ex/yara_rules_ng/upload_yara") or "").strip()
+    up = (get_setting("trellix_ex_upload_path", _DEFAULT_EX_UPLOAD_PATH) or "").strip()
     if not up.startswith("/"):
         up = "/" + up
     return _join_url(base, up) if base else ""
@@ -201,29 +331,56 @@ def _normalize_manual_cookie(raw: str) -> str:
     return s
 
 
+def _csrf_from_target_only(target: dict) -> tuple[Optional[str], Optional[str]]:
+    """Optional static CSRF from target row (e.g. with manual Cookie)."""
+    tp = (target.get("csrf_param") or "").strip() or None
+    tt = (target.get("csrf_token") or "").strip() or None
+    if tt and not tp:
+        tp = "authenticity_token"
+    return tp, tt
+
+
+def _merge_csrf_after_login(target: dict, body_bytes: bytes) -> tuple[Optional[str], Optional[str]]:
+    """Prefer token/param from target JSON if set; else parse login body; default param for Rails."""
+    ep, et = _extract_csrf_from_login_body(body_bytes)
+    tp = (target.get("csrf_param") or "").strip()
+    tt = (target.get("csrf_token") or "").strip()
+    if tt:
+        et = tt
+    if tp:
+        ep = tp
+    if et and not ep:
+        ep = "authenticity_token"
+    return ep, et
+
+
 def trellix_ex_login_for_target(
     target: dict,
     *,
     verify_ssl: Optional[bool] = None,
-) -> tuple[bool, str, str]:
+) -> tuple[bool, str, str, tuple[Optional[str], Optional[str]]]:
     """
-    JSON password login for one resolved target dict. Returns (ok, cookie_header_or_empty, message).
+    JSON password login for one resolved target dict.
+
+    Returns (ok, cookie_header_or_empty, message, (csrf_param, csrf_token)).
     """
+    no_csrf: tuple[Optional[str], Optional[str]] = (None, None)
     manual = _normalize_manual_cookie(target.get("manual_cookie") or "")
     if manual:
-        return True, manual, "Using manual Cookie (login skipped)"
+        cp, ct = _csrf_from_target_only(target)
+        return True, manual, "Using manual Cookie (login skipped)", (cp, ct)
 
     base = (target.get("base_url") or "").strip().rstrip("/")
     if not base:
-        return False, "", "Missing Trellix EX base URL"
-    login_path = (target.get("login_path") or "/ex/login").strip()
+        return False, "", "Missing Trellix EX base URL", no_csrf
+    login_path = (target.get("login_path") or _DEFAULT_EX_LOGIN_PATH).strip()
     url = _join_url(base, login_path)
     user = (target.get("username") or "").strip()
     password = str(target.get("password") or "")
     if not user:
-        return False, "", "Missing Trellix EX username"
+        return False, "", "Missing Trellix EX username", no_csrf
     if not (password or "").strip():
-        return False, "", "Missing Trellix EX password (or set a manual Cookie)"
+        return False, "", "Missing Trellix EX password (or set a manual Cookie)", no_csrf
 
     if verify_ssl is None:
         verify_ssl = bool(target.get("verify_ssl", True))
@@ -244,13 +401,14 @@ def trellix_ex_login_for_target(
             except Exception:
                 pass
             if not (200 <= code < 300):
-                return False, "", f"Login HTTP {code}"
+                return False, "", f"Login HTTP {code}", no_csrf
             logical_ok, detail = _evaluate_http_response_body(code, body_bytes)
             if not logical_ok:
-                return False, cookie, detail or f"Login HTTP {code} rejected"
+                return False, cookie, detail or f"Login HTTP {code} rejected", no_csrf
             if not cookie:
                 logging.warning("Trellix EX login: no Set-Cookie in response; upload may fail without manual Cookie")
-            return True, cookie, detail or "Login OK"
+            csrf_p, csrf_t = _merge_csrf_after_login(target, body_bytes)
+            return True, cookie, detail or "Login OK", (csrf_p, csrf_t)
     except urllib.error.HTTPError as e:
         err_body = ""
         try:
@@ -259,23 +417,23 @@ def trellix_ex_login_for_target(
                 err_body = eb.decode("utf-8", errors="replace")[:2000]
         except Exception:
             pass
-        return False, "", _truncate_msg(f"Login HTTP {e.code} {e.reason}; {err_body}")
+        return False, "", _truncate_msg(f"Login HTTP {e.code} {e.reason}; {err_body}"), no_csrf
     except urllib.error.URLError as e:
-        return False, "", str(e.reason or e)
+        return False, "", str(e.reason or e), no_csrf
     except Exception as e:
         logging.exception("Trellix EX login")
-        return False, "", str(e)
+        return False, "", str(e), no_csrf
 
 
 def trellix_ex_login(
     get_setting: Callable[[str, str], str],
     *,
     verify_ssl: Optional[bool] = None,
-) -> tuple[bool, str, str]:
-    """Login for the first configured target (backward compatible)."""
+) -> tuple[bool, str, str, tuple[Optional[str], Optional[str]]]:
+    """Login for the first configured target."""
     tgts = list_trellix_ex_targets(get_setting)
     if not tgts:
-        return False, "", "No Trellix EX targets configured"
+        return False, "", "No Trellix EX targets configured", (None, None)
     t0 = tgts[0]
     vs = verify_ssl if verify_ssl is not None else bool(t0.get("verify_ssl", True))
     return trellix_ex_login_for_target(t0, verify_ssl=vs)
@@ -340,24 +498,36 @@ def _push_yara_trellix_ex_one(
         logging.warning("Trellix EX YARA push (%s): TLS certificate verification is disabled", name)
 
     f_type = (target.get("f_type") or "common").strip() or "common"
-    ct_val = (target.get("content_type") or "all").strip() or "all"
+    ct_val = (target.get("content_type") or _DEFAULT_EX_CONTENT_TYPE).strip() or _DEFAULT_EX_CONTENT_TYPE
 
+    csrf_p: Optional[str] = None
+    csrf_t: Optional[str] = None
     cookie = (cookie_header or "").strip()
     if not cookie:
-        ok_login, cookie, login_msg = trellix_ex_login_for_target(target, verify_ssl=vs)
+        ok_login, cookie, login_msg, (csrf_p, csrf_t) = trellix_ex_login_for_target(target, verify_ssl=vs)
         if not ok_login:
             audit_log_fn("yara_push_fail", f"file={filename} target=EX name={name} login={login_msg[:300]}")
             return {
                 "overall_success": False,
                 "results": [{"name": name, "url": upload_url, "success": False, "message": login_msg}],
             }
+    else:
+        csrf_p, csrf_t = _csrf_from_target_only(target)
 
     boundary, body = _multipart_body(filename, content, f_type, ct_val)
     ctx = _ssl_context(vs)
     req = urllib.request.Request(upload_url, data=body, method="POST")
     req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
     req.add_header("Cookie", cookie)
-    req.add_header("Accept", "*/*")
+    req.add_header("Accept", _EX_ACCEPT)
+    req.add_header("X-Requested-With", "XMLHttpRequest")
+    if csrf_t:
+        req.add_header("X-CSRF-Token", csrf_t)
+        req.add_header("X-CSRF-Param", csrf_p or "authenticity_token")
+    base_ref = (target.get("base_url") or "").strip().rstrip("/")
+    up_path = (target.get("upload_path") or "").strip()
+    if base_ref:
+        req.add_header("Referer", _join_url(base_ref, trellix_ex_referer_path(up_path)))
 
     try:
         with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
@@ -408,6 +578,241 @@ def _push_yara_trellix_ex_one(
         return {"overall_success": False, "results": [{"name": name, "url": upload_url, "success": False, "message": str(e)}]}
 
 
+def _ex_delete_remote_filename(filename: str, target: dict) -> str:
+    """
+    EX delete API expects files[0][name] as stored on appliance.
+    Mode yar_txt: rule.yar -> rule.yar.txt (matches common EX UI naming).
+    """
+    mode = (target.get("ex_delete_name_mode") or "same").strip().lower()
+    fn = (filename or "").strip()
+    if mode == "yar_txt" and fn.lower().endswith(".yar"):
+        return fn + ".txt"
+    return fn
+
+
+def _delete_yara_trellix_ex_one(
+    filename: str,
+    target: dict,
+    audit_log_fn,
+    *,
+    verify_ssl: Optional[bool] = None,
+    cookie_header: Optional[str] = None,
+) -> dict[str, Any]:
+    """POST application/x-www-form-urlencoded to delete_yara_files (Trellix EX web UI API)."""
+    name = ((target.get("name") or "Trellix EX").strip() or "Trellix EX")
+    delete_url = trellix_ex_delete_url_for_target(target)
+    if not delete_url:
+        audit_log_fn("yara_delete_skip", f"target=EX name={name} reason=missing_base_url")
+        return {
+            "overall_success": False,
+            "results": [{"name": name, "url": "", "success": False, "message": "Missing Trellix EX base URL"}],
+        }
+
+    vs = verify_ssl if verify_ssl is not None else bool(target.get("verify_ssl", True))
+    if not vs:
+        logging.warning("Trellix EX YARA delete (%s): TLS certificate verification is disabled", name)
+
+    f_type = (target.get("f_type") or "common").strip() or "common"
+    ct_val = (target.get("content_type") or _DEFAULT_EX_CONTENT_TYPE).strip() or _DEFAULT_EX_CONTENT_TYPE
+    remote_name = _ex_delete_remote_filename(filename, target)
+
+    csrf_p: Optional[str] = None
+    csrf_t: Optional[str] = None
+    cookie = (cookie_header or "").strip()
+    if not cookie:
+        ok_login, cookie, login_msg, (csrf_p, csrf_t) = trellix_ex_login_for_target(target, verify_ssl=vs)
+        if not ok_login:
+            audit_log_fn("yara_delete_fail", f"file={filename} target=EX name={name} login={login_msg[:300]}")
+            return {
+                "overall_success": False,
+                "results": [{"name": name, "url": delete_url, "success": False, "message": login_msg}],
+            }
+    else:
+        csrf_p, csrf_t = _csrf_from_target_only(target)
+
+    body = urlencode(
+        [
+            ("files[0][name]", remote_name),
+            ("files[0][c_type]", ct_val),
+            ("files[0][type]", f_type),
+        ]
+    ).encode("utf-8")
+    ctx = _ssl_context(vs)
+    req = urllib.request.Request(delete_url, data=body, method="POST")
+    req.add_header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+    req.add_header("Cookie", cookie)
+    req.add_header("Accept", _EX_ACCEPT)
+    req.add_header("X-Requested-With", "XMLHttpRequest")
+    if csrf_t:
+        req.add_header("X-CSRF-Token", csrf_t)
+        req.add_header("X-CSRF-Param", csrf_p or "authenticity_token")
+    base_ref = (target.get("base_url") or "").strip().rstrip("/")
+    up_path = (target.get("upload_path") or "").strip()
+    if base_ref:
+        req.add_header("Referer", _join_url(base_ref, trellix_ex_referer_path(up_path)))
+
+    try:
+        with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+            code = resp.getcode()
+            body_bytes = b""
+            try:
+                body_bytes = resp.read(_MAX_RESPONSE_BODY_BYTES)
+            except Exception:
+                pass
+            if 200 <= code < 300:
+                logical_ok, detail_msg = _evaluate_http_response_body(code, body_bytes)
+                if logical_ok:
+                    audit_log_fn(
+                        "yara_delete_ok",
+                        f"file={filename} remote={remote_name!r} target=EX name={name} code={code}",
+                    )
+                else:
+                    audit_log_fn(
+                        "yara_delete_fail",
+                        f"file={filename} target=EX name={name} code={code} detail={detail_msg[:500]}",
+                    )
+                return {
+                    "overall_success": logical_ok,
+                    "results": [{"name": name, "url": delete_url, "success": logical_ok, "message": detail_msg}],
+                }
+            audit_log_fn("yara_delete_fail", f"file={filename} target=EX name={name} code={code}")
+            return {
+                "overall_success": False,
+                "results": [{"name": name, "url": delete_url, "success": False, "message": f"HTTP {code}"}],
+            }
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            audit_log_fn("yara_delete_ok", f"file={filename} remote={remote_name!r} target=EX name={name} code=404")
+            return {
+                "overall_success": True,
+                "results": [{"name": name, "url": delete_url, "success": True, "message": "HTTP 404 (already absent)"}],
+            }
+        err_body = ""
+        try:
+            eb = e.read()
+            if eb:
+                err_body = eb.decode("utf-8", errors="replace")[:2000]
+        except Exception:
+            pass
+        msg = _truncate_msg(f"HTTP {e.code} {e.reason}; {err_body}")
+        audit_log_fn("yara_delete_fail", f"file={filename} target=EX name={name} code={e.code}")
+        return {"overall_success": False, "results": [{"name": name, "url": delete_url, "success": False, "message": msg}]}
+    except urllib.error.URLError as e:
+        audit_log_fn("yara_delete_fail", f"file={filename} target=EX name={name} error={e.reason}")
+        return {
+            "overall_success": False,
+            "results": [{"name": name, "url": delete_url, "success": False, "message": str(e.reason or e)}],
+        }
+    except Exception as e:
+        logging.exception("Trellix EX YARA delete")
+        audit_log_fn("yara_delete_fail", f"file={filename} target=EX name={name} error={e}")
+        return {"overall_success": False, "results": [{"name": name, "url": delete_url, "success": False, "message": str(e)}]}
+
+
+def delete_yara_session_targets(
+    filename: str,
+    targets: List[dict],
+    audit_log_fn,
+    *,
+    verify_ssl: Optional[bool] = None,
+    cookie_header: Optional[str] = None,
+    empty_skip_log: str = "yara_delete_skip",
+    empty_log_detail: str = "reason=no_targets",
+    empty_result_name: str = "—",
+    empty_message: str = "No targets configured",
+) -> dict[str, Any]:
+    """Run session-cookie YARA delete for each target dict (EX or NX wmps — same HTTP shape)."""
+    if not audit_log_fn:
+        def _noop(*_a, **_k):
+            pass
+
+        audit_log_fn = _noop
+
+    if not targets:
+        audit_log_fn(empty_skip_log, empty_log_detail)
+        return {
+            "overall_success": False,
+            "results": [{"name": empty_result_name, "url": "", "success": False, "message": empty_message}],
+        }
+
+    results: list[dict[str, Any]] = []
+    overall = True
+    shared = (cookie_header or "").strip()
+    n = len(targets)
+    for _i, t in enumerate(targets):
+        ck = shared if (shared and n == 1) else None
+        one = _delete_yara_trellix_ex_one(filename, t, audit_log_fn, verify_ssl=verify_ssl, cookie_header=ck)
+        row = (one.get("results") or [{}])[0]
+        results.append(row)
+        overall = overall and bool(one.get("overall_success"))
+
+    return {"overall_success": overall, "results": results}
+
+
+def push_yara_session_targets(
+    content: str,
+    filename: str,
+    targets: List[dict],
+    audit_log_fn,
+    *,
+    verify_ssl: Optional[bool] = None,
+    cookie_header: Optional[str] = None,
+    empty_skip_log: str = "yara_push_skip",
+    empty_log_detail: str = "reason=no_targets",
+    empty_result_name: str = "—",
+    empty_message: str = "No targets configured",
+) -> dict[str, Any]:
+    """Run session-cookie YARA multipart upload for each target dict (EX or NX wmps)."""
+    if not audit_log_fn:
+        def _noop(*_a, **_k):
+            pass
+
+        audit_log_fn = _noop
+
+    if not targets:
+        audit_log_fn(empty_skip_log, empty_log_detail)
+        return {
+            "overall_success": False,
+            "results": [{"name": empty_result_name, "url": "", "success": False, "message": empty_message}],
+        }
+
+    results: list[dict[str, Any]] = []
+    overall = True
+    shared = (cookie_header or "").strip()
+    n = len(targets)
+    for _i, t in enumerate(targets):
+        ck = shared if (shared and n == 1) else None
+        one = _push_yara_trellix_ex_one(content, filename, t, audit_log_fn, verify_ssl=verify_ssl, cookie_header=ck)
+        row = (one.get("results") or [{}])[0]
+        results.append(row)
+        overall = overall and bool(one.get("overall_success"))
+
+    return {"overall_success": overall, "results": results}
+
+
+def delete_yara_trellix_ex(
+    filename: str,
+    get_setting: Callable[[str, str], str],
+    audit_log_fn=None,
+    *,
+    verify_ssl: Optional[bool] = None,
+    cookie_header: Optional[str] = None,
+) -> dict[str, Any]:
+    """Remove YARA from each configured EX target (same result shape as delete_yara_from_appliances)."""
+    targets = list_trellix_ex_targets(get_setting)
+    return delete_yara_session_targets(
+        filename,
+        targets,
+        audit_log_fn,
+        verify_ssl=verify_ssl,
+        cookie_header=cookie_header,
+        empty_skip_log="yara_delete_skip",
+        empty_log_detail="target=EX reason=no_targets",
+        empty_result_name="Trellix EX",
+        empty_message="No Trellix EX targets configured",
+    )
+
+
 def push_yara_trellix_ex(
     content: str,
     filename: str,
@@ -421,34 +826,19 @@ def push_yara_trellix_ex(
     For each configured EX target: login (unless manual cookie / optional shared cookie for single target),
     then multipart POST. Returns aggregate shape matching ``push_yara_to_appliances``.
     """
-    if not audit_log_fn:
-        def _noop(*_a, **_k):
-            pass
-
-        audit_log_fn = _noop
-
     targets = list_trellix_ex_targets(get_setting)
-    if not targets:
-        audit_log_fn("yara_push_skip", "target=Trellix_EX reason=no_targets")
-        return {
-            "overall_success": False,
-            "results": [{"name": "Trellix EX", "url": "", "success": False, "message": "No Trellix EX targets configured"}],
-        }
-
-    results: list[dict[str, Any]] = []
-    overall = True
-    shared = (cookie_header or "").strip()
-    n = len(targets)
-    for i, t in enumerate(targets):
-        ck = shared if (shared and n == 1) else None
-        one = _push_yara_trellix_ex_one(
-            content, filename, t, audit_log_fn, verify_ssl=verify_ssl, cookie_header=ck
-        )
-        row = (one.get("results") or [{}])[0]
-        results.append(row)
-        overall = overall and bool(one.get("overall_success"))
-
-    return {"overall_success": overall, "results": results}
+    return push_yara_session_targets(
+        content,
+        filename,
+        targets,
+        audit_log_fn,
+        verify_ssl=verify_ssl,
+        cookie_header=cookie_header,
+        empty_skip_log="yara_push_skip",
+        empty_log_detail="target=Trellix_EX reason=no_targets",
+        empty_result_name="Trellix EX",
+        empty_message="No Trellix EX targets configured",
+    )
 
 
 def test_trellix_ex_connection(get_setting: Callable[[str, str], str], *, verify_ssl: Optional[bool] = None) -> dict[str, Any]:

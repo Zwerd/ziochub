@@ -363,47 +363,79 @@ def delete_yara():
             except Exception as e:
                 logging.warning('YARA delete: refresh_champ_score for owner failed: %s', e)
         _get_setting = _from_app('_get_setting')[0]
-        if _get_setting('automation_fireeye_enabled', 'false').lower() == 'true':
+        fe_on = _get_setting('automation_fireeye_enabled', 'false').lower() == 'true'
+        try:
+            from utils.trellix_ex import delete_yara_trellix_ex, trellix_ex_enabled as _trellix_ex_on_delete
+            tx_on = _trellix_ex_on_delete(_get_setting)
+        except Exception:
+            tx_on = False
+        try:
+            from utils.trellix_nx import delete_yara_nx_wmps, trellix_nx_wmps_enabled as _nx_wmps_on_delete
+
+            nx_wmps_on = _nx_wmps_on_delete(_get_setting)
+        except Exception:
+            nx_wmps_on = False
+        appliances = []
+        if fe_on:
             try:
                 from utils.yara_push_targets import merged_yara_automation_appliances
                 appliances = merged_yara_automation_appliances(_get_setting)
-                if isinstance(appliances, list) and appliances:
-                    from utils.yara_http_push import delete_yara_from_appliances
-                    app_obj = current_app._get_current_object()
-                    verify_ssl = _get_setting('automation_fireeye_ignore_ssl', 'false').lower() != 'true'
-
-                    def _auto_delete():
-                        with app_obj.app_context():
-                            try:
-                                result = delete_yara_from_appliances(safe, appliances, audit_log, verify_ssl=verify_ssl)
-                                try:
-                                    from utils.integration_telemetry import record_yara_automation_results
-                                    record_yara_automation_results(
-                                        result, kind='delete', context={'filename': safe}
-                                    )
-                                except Exception:
-                                    logging.debug('record_yara_automation_results delete failed', exc_info=True)
-                            except Exception as e:
-                                logging.exception('Automation YARA delete failed for %s', safe)
-                                try:
-                                    from utils.integration_telemetry import record_yara_automation_results
-                                    record_yara_automation_results(
-                                        {
-                                            'overall_success': False,
-                                            'results': [
-                                                {'name': '—', 'url': '', 'success': False, 'message': str(e)}
-                                            ],
-                                        },
-                                        kind='delete',
-                                        context={'filename': safe},
-                                    )
-                                except Exception:
-                                    pass
-                                audit_log('yara_automation_delete_fail', f'file={safe} error={e}')
-
-                    threading.Thread(target=_auto_delete, daemon=True).start()
+                if not isinstance(appliances, list):
+                    appliances = []
             except Exception as e:
-                logging.warning('YARA delete: automation setup failed: %s', e)
+                logging.warning('YARA delete: appliance list failed: %s', e)
+                appliances = []
+        has_fe = fe_on and bool(appliances)
+        if has_fe or tx_on or nx_wmps_on:
+            from utils.yara_http_push import delete_yara_from_appliances
+            app_obj = current_app._get_current_object()
+            verify_fe = _get_setting('automation_fireeye_ignore_ssl', 'false').lower() != 'true'
+            verify_tx = (_get_setting('trellix_ex_verify_ssl', 'true') or 'true').lower() in ('true', '1', 'yes')
+
+            def _auto_delete():
+                with app_obj.app_context():
+                    try:
+                        combined_results: list = []
+                        overall = True
+                        if has_fe:
+                            result_fe = delete_yara_from_appliances(safe, appliances, audit_log, verify_ssl=verify_fe)
+                            combined_results.extend(result_fe.get('results', []))
+                            overall = overall and bool(result_fe.get('overall_success'))
+                        if tx_on:
+                            result_tx = delete_yara_trellix_ex(
+                                safe, _get_setting, audit_log, verify_ssl=verify_tx
+                            )
+                            combined_results.extend(result_tx.get('results', []))
+                            overall = overall and bool(result_tx.get('overall_success'))
+                        if nx_wmps_on:
+                            result_nxw = delete_yara_nx_wmps(safe, _get_setting, audit_log, verify_ssl=None)
+                            combined_results.extend(result_nxw.get('results', []))
+                            overall = overall and bool(result_nxw.get('overall_success'))
+                        result = {'overall_success': overall, 'results': combined_results}
+                        try:
+                            from utils.integration_telemetry import record_yara_automation_results
+
+                            record_yara_automation_results(result, kind='delete', context={'filename': safe})
+                        except Exception:
+                            logging.debug('record_yara_automation_results delete failed', exc_info=True)
+                    except Exception as e:
+                        logging.exception('Automation YARA delete failed for %s', safe)
+                        try:
+                            from utils.integration_telemetry import record_yara_automation_results
+
+                            record_yara_automation_results(
+                                {
+                                    'overall_success': False,
+                                    'results': [{'name': '—', 'url': '', 'success': False, 'message': str(e)}],
+                                },
+                                kind='delete',
+                                context={'filename': safe},
+                            )
+                        except Exception:
+                            pass
+                        audit_log('yara_automation_delete_fail', f'file={safe} error={e}')
+
+            threading.Thread(target=_auto_delete, daemon=True).start()
         return jsonify({'success': True, 'message': f'Deleted {safe}'})
     except OSError as e:
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -718,17 +750,19 @@ def approve_yara():
         _get_setting = _from_app('_get_setting')[0]
         try:
             from utils.trellix_ex import trellix_ex_enabled as _trellix_ex_on
+            from utils.trellix_nx import trellix_nx_wmps_enabled as _nx_wmps_on
             from utils.yara_push_targets import merged_yara_automation_appliances
 
             fe_on = _get_setting('automation_fireeye_enabled', 'false').lower() == 'true'
             tx_on = _trellix_ex_on(_get_setting)
+            nx_wmps_on = _nx_wmps_on(_get_setting)
             appliances = []
             if fe_on:
                 appliances = merged_yara_automation_appliances(_get_setting)
                 if not isinstance(appliances, list):
                     appliances = []
             has_fe_targets = fe_on and len(appliances) > 0
-            if has_fe_targets or tx_on:
+            if has_fe_targets or tx_on or nx_wmps_on:
                 from utils.yara_http_push import push_yara_to_appliances, set_fireeye_status
 
                 app_obj = current_app._get_current_object()
@@ -759,6 +793,14 @@ def approve_yara():
                                 )
                                 combined_results.extend(result_tx.get('results', []))
                                 overall = overall and bool(result_tx.get('overall_success'))
+                            if nx_wmps_on:
+                                from utils.trellix_nx import push_yara_nx_wmps
+
+                                result_nxw = push_yara_nx_wmps(
+                                    content, rule.filename, _get_setting, audit_log, verify_ssl=None
+                                )
+                                combined_results.extend(result_nxw.get('results', []))
+                                overall = overall and bool(result_nxw.get('overall_success'))
                             result = {'overall_success': overall, 'results': combined_results}
                             try:
                                 from utils.integration_telemetry import record_yara_automation_results

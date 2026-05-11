@@ -90,7 +90,20 @@ def retry_last_failed_yara_automation(
     if not failed_urls:
         return {'retried': 0, 'results': last.get('results') or []}, 'No failed targets to retry.'
 
-    from utils.trellix_ex import list_trellix_ex_upload_urls, push_yara_trellix_ex, trellix_ex_enabled
+    from utils.trellix_ex import (
+        delete_yara_trellix_ex,
+        list_trellix_ex_delete_urls,
+        list_trellix_ex_upload_urls,
+        push_yara_trellix_ex,
+        trellix_ex_enabled,
+    )
+    from utils.trellix_nx import (
+        delete_yara_nx_wmps,
+        list_nx_wmps_delete_urls,
+        list_nx_wmps_upload_urls,
+        push_yara_nx_wmps,
+        trellix_nx_wmps_enabled,
+    )
     from utils.yara_push_targets import merged_yara_automation_appliances
     appliances = merged_yara_automation_appliances(get_setting)
     if not isinstance(appliances, list):
@@ -113,15 +126,47 @@ def retry_last_failed_yara_automation(
             if (tu or '').strip() and (tu or '').strip() in failed_urls:
                 needs_trellix = True
                 break
+    if kind_l == 'delete' and trellix_ex_enabled(get_setting):
+        for tu in list_trellix_ex_delete_urls(get_setting):
+            if (tu or '').strip() and (tu or '').strip() in failed_urls:
+                needs_trellix = True
+                break
 
-    if not targets and not needs_trellix:
+    needs_nx_wmps = False
+    if kind_l == 'push' and trellix_nx_wmps_enabled(get_setting):
+        for tu in list_nx_wmps_upload_urls(get_setting):
+            if (tu or '').strip() and (tu or '').strip() in failed_urls:
+                needs_nx_wmps = True
+                break
+    if kind_l == 'delete' and trellix_nx_wmps_enabled(get_setting):
+        for tu in list_nx_wmps_delete_urls(get_setting):
+            if (tu or '').strip() and (tu or '').strip() in failed_urls:
+                needs_nx_wmps = True
+                break
+
+    if not targets and not needs_trellix and not needs_nx_wmps:
         raise NoMatchingTargetsError('No matching targets found (URLs changed?)')
 
     verify_ssl = (get_setting('automation_fireeye_ignore_ssl', 'false') or 'false').lower() != 'true'
     verify_tx = (get_setting('trellix_ex_verify_ssl', 'true') or 'true').lower() in ('true', '1', 'yes')
 
     if kind_l == 'delete':
-        res = delete_yara_from_appliances(filename, targets, audit_log_fn, verify_ssl=verify_ssl)
+        if targets:
+            res = delete_yara_from_appliances(filename, targets, audit_log_fn, verify_ssl=verify_ssl)
+        else:
+            res = {'overall_success': True, 'results': []}
+        if needs_trellix:
+            res_tx = delete_yara_trellix_ex(filename, get_setting, audit_log_fn, verify_ssl=verify_tx)
+            res = {
+                'overall_success': bool(res.get('overall_success')) and bool(res_tx.get('overall_success')),
+                'results': (res.get('results') or []) + (res_tx.get('results') or []),
+            }
+        if needs_nx_wmps:
+            res_nx = delete_yara_nx_wmps(filename, get_setting, audit_log_fn, verify_ssl=None)
+            res = {
+                'overall_success': bool(res.get('overall_success')) and bool(res_nx.get('overall_success')),
+                'results': (res.get('results') or []) + (res_nx.get('results') or []),
+            }
     else:
         import os
 
@@ -142,6 +187,10 @@ def retry_last_failed_yara_automation(
             )
             combined_results.extend(res_tx.get('results', []))
             overall = overall and bool(res_tx.get('overall_success'))
+        if needs_nx_wmps:
+            res_nx = push_yara_nx_wmps(content, filename, get_setting, audit_log_fn, verify_ssl=None)
+            combined_results.extend(res_nx.get('results', []))
+            overall = overall and bool(res_nx.get('overall_success'))
         res = {'overall_success': overall, 'results': combined_results}
 
     record_yara_automation_results(res, kind=kind_l, context=ctx)

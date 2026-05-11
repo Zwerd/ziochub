@@ -26,8 +26,8 @@
 
         <div id="trellix-exnx-sub-ex" class="trellix-exnx-subpane space-y-3">
             <h4 class="text-sm font-semibold text-primary">Email Security (EX)</h4>
-            <p class="text-secondary text-sm mb-2">Push approved YARA rules to Trellix Email Security using the product UI flow: JSON password login, then <code class="px-0.5 rounded bg-white/10 text-xs">multipart/form-data</code> POST to <code class="px-0.5 rounded bg-white/10 text-xs">/ex/yara_rules_ng/upload_yara</code> with fields <code class="px-0.5 rounded bg-white/10 text-xs">yara_file</code>, <code class="px-0.5 rounded bg-white/10 text-xs">f_type</code>, <code class="px-0.5 rounded bg-white/10 text-xs">content_type</code>.</p>
-            <p class="text-secondary text-xs mb-4">If you already have a session cookie from the browser, paste it into <strong class="text-primary">Manual Cookie</strong> to skip login. Otherwise set username and password (login body: <code class="px-0.5 rounded bg-white/10 text-xs">{"auth_method":"password","data":{"username","password"}}</code>). Login path may differ by version - adjust if the default fails.</p>
+            <p class="text-secondary text-sm mb-2">Push approved YARA rules to Trellix Email Security (EX): JSON password login to <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code>, then <code class="px-0.5 rounded bg-white/10 text-xs">multipart/form-data</code> POST (default upload path <code class="px-0.5 rounded bg-white/10 text-xs">/ex/yara_rules_ng/upload_yara</code>). Network Security (NX) web YARA uses <code class="px-0.5 rounded bg-white/10 text-xs">/wmps/yara_rules_ng/upload_yara</code> — configure that under <strong class="text-primary">Network (NX)</strong> with API style <code class="px-0.5 rounded bg-white/10 text-xs">wmps</code>. On ZIoCHub YARA delete, matching <code class="px-0.5 rounded bg-white/10 text-xs">delete_yara_files</code> POSTs run when the integration is enabled. Fields: <code class="px-0.5 rounded bg-white/10 text-xs">yara_file</code>, <code class="px-0.5 rounded bg-white/10 text-xs">f_type</code>, <code class="px-0.5 rounded bg-white/10 text-xs">content_type</code>.</p>
+            <p class="text-secondary text-xs mb-4">If you already have a session cookie from the browser, paste it into <strong class="text-primary">Manual Cookie</strong> to skip login. Otherwise set username and password (login body: <code class="px-0.5 rounded bg-white/10 text-xs">{"auth_method":"password","data":{"username","password"}}</code>). Default login path is <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code> (newer UI); use <code class="px-0.5 rounded bg-white/10 text-xs">/ex/login</code> if your appliance still uses it. Optional: paste <strong class="text-primary">CSRF token</strong> from DevTools when using manual cookie if upload is rejected.</p>
 
             <form id="trellixExForm" class="space-y-4 max-w-3xl">
                 <div>
@@ -59,6 +59,7 @@
 
         <div id="trellix-exnx-sub-nx" class="trellix-exnx-subpane hidden space-y-3 pt-2 border-t border-white/10 mt-4">
             <h4 class="text-sm font-semibold text-primary">Network Security (NX)</h4>
+            <p class="text-secondary text-xs mb-2">Per appliance: <strong class="text-primary">wsapis</strong> = REST API key targets (same as Automations YARA push). <strong class="text-primary">wmps</strong> = browser-style session login + multipart upload to <code class="px-0.5 rounded bg-white/10 text-xs">/wmps/yara_rules_ng/upload_yara</code> (and delete via ZIoCHub when NX automation is enabled).</p>
             <p class="text-secondary text-sm mb-4">Appliance HTTPS root and wsapis version. Paths follow Trellix docs (add/remove; remove uses POST). These rows are expanded to generic HTTP targets and merged with your custom YARA list under <a href="{{ url_for('admin_pages.admin_automations') }}" class="text-cyan-400 hover:underline">Automations → YARA push</a> when automation runs.</p>
 
         <form id="trellixNxForm" class="space-y-4">
@@ -560,14 +561,18 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
         return {
             name: '',
             base_url: '',
-            login_path: '/ex/login',
+            login_path: '/login/login',
             upload_path: '/ex/yara_rules_ng/upload_yara',
             username: '',
             password: '',
             manual_cookie: '',
             verify_ssl: true,
             f_type: 'common',
-            content_type: 'all'
+            content_type: 'base',
+            csrf_param: '',
+            csrf_token: '',
+            delete_path: '',
+            ex_delete_name_mode: 'same'
         };
     }
 
@@ -577,10 +582,15 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
         exTargets.forEach(function(a, idx) {
             var row = document.createElement('div');
             row.className = 'trellix-ex-row space-y-2 p-3 rounded-lg border border-white/10 bg-black/20';
-            var lp = (a.login_path || '/ex/login').trim() || '/ex/login';
+            var lp = (a.login_path || '/login/login').trim() || '/login/login';
             var up = (a.upload_path || '/ex/yara_rules_ng/upload_yara').trim() || '/ex/yara_rules_ng/upload_yara';
+            var delp = (a.delete_path || '').trim();
+            var edm = (a.ex_delete_name_mode || 'same').trim().toLowerCase();
+            if (edm !== 'yar_txt') edm = 'same';
             var ft = (a.f_type || 'common').trim() || 'common';
-            var ct = (a.content_type || 'all').trim() || 'all';
+            var ct = (a.content_type || 'base').trim() || 'base';
+            var csp = (a.csrf_param || '').trim();
+            var cst = (a.csrf_token || '').trim();
             var vs = a.verify_ssl === false || a.verify_ssl === 'false' ? 'false' : 'true';
             row.innerHTML =
                 '<div class="flex flex-wrap items-center gap-2">' +
@@ -612,6 +622,21 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                     '<input type="text" class="trellix-ex-f_type w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(ft) + '" autocomplete="off"></div>' +
                     '<div><label class="block text-xs text-secondary mb-0.5">content_type</label>' +
                     '<input type="text" class="trellix-ex-content_type w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(ct) + '" autocomplete="off"></div>' +
+                '</div>' +
+                '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">CSRF param (optional)</label>' +
+                    '<input type="text" class="trellix-ex-csrf_param w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(csp) + '" placeholder="authenticity_token" autocomplete="off"></div>' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">CSRF token (optional)</label>' +
+                    '<input type="text" class="trellix-ex-csrf_token w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(cst) + '" placeholder="Paste X-CSRF-Token from DevTools if needed" autocomplete="off"></div>' +
+                '</div>' +
+                '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">Delete POST path (optional)</label>' +
+                    '<input type="text" class="trellix-ex-delete_path w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(delp) + '" placeholder="auto: …/yara_rules_ng/delete_yara_files" autocomplete="off"></div>' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">Delete name on EX</label>' +
+                    '<select class="trellix-ex-ex_delete_name_mode w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm">' +
+                        '<option value="same"' + (edm === 'same' ? ' selected' : '') + '>Same as ZIoCHub file name</option>' +
+                        '<option value="yar_txt"' + (edm === 'yar_txt' ? ' selected' : '') + '>rule.yar → rule.yar.txt</option>' +
+                    '</select></div>' +
                 '</div>';
             exListEl.appendChild(row);
         });
@@ -647,8 +672,12 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             var vs = row.querySelector('.trellix-ex-verify_ssl');
             var ft = row.querySelector('.trellix-ex-f_type');
             var ct = row.querySelector('.trellix-ex-content_type');
+            var csp = row.querySelector('.trellix-ex-csrf_param');
+            var cst = row.querySelector('.trellix-ex-csrf_token');
+            var delpEl = row.querySelector('.trellix-ex-delete_path');
+            var edmEl = row.querySelector('.trellix-ex-ex_delete_name_mode');
             if (n && u && lp && up && user && pwd && ft && ct) {
-                collected.push({
+                var o = {
                     name: (n.value || '').trim(),
                     base_url: (u.value || '').trim(),
                     login_path: (lp.value || '').trim(),
@@ -659,7 +688,12 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                     verify_ssl: vs ? vs.value === 'true' : true,
                     f_type: (ft.value || '').trim(),
                     content_type: (ct.value || '').trim()
-                });
+                };
+                if (csp && (csp.value || '').trim()) o.csrf_param = (csp.value || '').trim();
+                if (cst && (cst.value || '').trim()) o.csrf_token = (cst.value || '').trim();
+                if (delpEl && (delpEl.value || '').trim()) o.delete_path = (delpEl.value || '').trim();
+                if (edmEl && edmEl.value === 'yar_txt') o.ex_delete_name_mode = 'yar_txt';
+                collected.push(o);
             }
         });
         return collected;
@@ -770,6 +804,12 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             .replace(/"/g, '&quot;')
             .replace(/</g, '&lt;');
     }
+    function escHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+    }
 
     var nxListEl = document.getElementById('trellixNxTargetsList');
     var nxTargets = [];
@@ -780,6 +820,17 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
         } catch (e) {
             nxTargets = [];
         }
+    }
+    if (nxListEl) {
+        nxListEl.addEventListener('change', function(e) {
+            if (e.target && e.target.classList.contains('trellix-nx-api_style')) {
+                nxListEl.querySelectorAll('.trellix-nx-row').forEach(function(row, idx) {
+                    var sel = row.querySelector('.trellix-nx-api_style');
+                    if (sel && nxTargets[idx]) nxTargets[idx].api_style = sel.value;
+                });
+                renderNx();
+            }
+        });
     }
 
     function normVer(s) {
@@ -795,6 +846,8 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
     }
     function expandTrellixNxToAppliances(rows) {
         return rows.map(function(r) {
+            var style = (r.api_style || 'wsapis').trim().toLowerCase();
+            if (style === 'wmps') return null;
             var base = (r.base_url || '').trim().replace(/\/+$/, '');
             var ver = normVer(r.wsapis_version);
             var ft = normFt(r.yara_file_type);
@@ -807,7 +860,7 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                 api_key: (r.api_key || '').trim(),
                 api_key_header: (r.api_key_header || '').trim()
             };
-        }).filter(function(x) { return x.base_url; });
+        }).filter(function(x) { return x && x.base_url; });
     }
 
     function renderNx() {
@@ -816,14 +869,25 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
         nxTargets.forEach(function(a, idx) {
             var row = document.createElement('div');
             row.className = 'trellix-nx-row space-y-2 p-3 rounded-lg border border-white/10 bg-black/20';
+            var style = (a.api_style || 'wsapis').trim().toLowerCase();
+            if (style !== 'wmps') style = 'wsapis';
             var v = (a.wsapis_version || 'v2.0.0').trim() || 'v2.0.0';
             var ft = (a.yara_file_type || 'yar').trim() || 'yar';
-            row.innerHTML =
-                '<div class="flex flex-wrap items-center gap-2">' +
-                    '<input type="text" class="trellix-nx-name px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary flex-1 min-w-[8rem]" placeholder="Name" value="' + escAttr(a.name) + '">' +
-                    '<input type="text" class="trellix-nx-base_url px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary flex-1 min-w-[12rem]" placeholder="https://nx:443" value="' + escAttr(a.base_url) + '">' +
-                    '<button type="button" class="trellix-nx-remove px-2 py-1.5 rounded text-sm bg-red-600/80 hover:bg-red-500 text-white shrink-0" data-idx="' + idx + '">Remove</button>' +
-                '</div>' +
+            var wlp = (a.login_path || '/login/login').trim() || '/login/login';
+            var wup = (a.upload_path || '/wmps/yara_rules_ng/upload_yara').trim() || '/wmps/yara_rules_ng/upload_yara';
+            var wft = (a.f_type || 'common').trim() || 'common';
+            var wct = (a.content_type || 'base').trim() || 'base';
+            var wvs = a.verify_ssl === false || a.verify_ssl === 'false' ? 'false' : 'true';
+            var wdel = (a.delete_path || '').trim();
+            var edm = (a.ex_delete_name_mode || 'same').trim().toLowerCase();
+            if (edm !== 'yar_txt') edm = 'same';
+            var styleRow =
+                '<div><label class="block text-xs text-secondary mb-0.5">API style</label>' +
+                '<select class="trellix-nx-api_style w-full max-w-md px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm">' +
+                '<option value="wsapis"' + (style === 'wsapis' ? ' selected' : '') + '>wsapis (REST + API key)</option>' +
+                '<option value="wmps"' + (style === 'wmps' ? ' selected' : '') + '>wmps (web session + multipart)</option>' +
+                '</select></div>';
+            var wsapisBlock =
                 '<div class="grid grid-cols-1 sm:grid-cols-3 gap-2">' +
                     '<div><label class="block text-xs text-secondary mb-0.5">wsapis version</label>' +
                     '<input type="text" class="trellix-nx-wsapis_version w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" placeholder="v2.0.0" value="' + escAttr(v) + '"></div>' +
@@ -834,6 +898,51 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                 '</div>' +
                 '<div><label class="block text-xs text-secondary mb-0.5">API key</label>' +
                 '<input type="password" class="trellix-nx-api_key w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" placeholder="optional" value="' + escAttr(a.api_key) + '" autocomplete="off"></div>';
+            var wmpsBlock =
+                '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">Login POST path</label>' +
+                    '<input type="text" class="trellix-nx-wmps-login_path w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(wlp) + '" autocomplete="off"></div>' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">Upload POST path</label>' +
+                    '<input type="text" class="trellix-nx-wmps-upload_path w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(wup) + '" autocomplete="off"></div>' +
+                '</div>' +
+                '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">Username</label>' +
+                    '<input type="text" class="trellix-nx-wmps-username w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(a.username) + '" autocomplete="off"></div>' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">Password</label>' +
+                    '<input type="password" class="trellix-nx-wmps-password w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" placeholder="' + (a.password ? '••••••••' : '') + '" value="' + escAttr(a.password) + '" autocomplete="new-password"></div>' +
+                '</div>' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Manual cookie (optional)</label>' +
+                '<textarea rows="2" class="trellix-nx-wmps-manual_cookie w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-xs" placeholder="session_id=…">' + escHtml(a.manual_cookie) + '</textarea></div>' +
+                '<div class="grid grid-cols-1 sm:grid-cols-3 gap-2">' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">Verify TLS</label>' +
+                    '<select class="trellix-nx-wmps-verify_ssl w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm">' +
+                    '<option value="true"' + (wvs === 'true' ? ' selected' : '') + '>Yes</option>' +
+                    '<option value="false"' + (wvs === 'false' ? ' selected' : '') + '>No</option></select></div>' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">f_type</label>' +
+                    '<input type="text" class="trellix-nx-wmps-f_type w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(wft) + '"></div>' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">content_type</label>' +
+                    '<input type="text" class="trellix-nx-wmps-content_type w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(wct) + '"></div>' +
+                '</div>' +
+                '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">CSRF param (optional)</label>' +
+                    '<input type="text" class="trellix-nx-wmps-csrf_param w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(a.csrf_param) + '"></div>' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">CSRF token (optional)</label>' +
+                    '<input type="text" class="trellix-nx-wmps-csrf_token w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(a.csrf_token) + '"></div>' +
+                '</div>' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Delete path (optional)</label>' +
+                '<input type="text" class="trellix-nx-wmps-delete_path w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(wdel) + '" placeholder="auto from upload path"></div>' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Delete filename mode</label>' +
+                '<select class="trellix-nx-wmps-ex_delete_name_mode w-full max-w-xs px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm">' +
+                '<option value="same"' + (edm === 'same' ? ' selected' : '') + '>same as ZIoCHub</option>' +
+                '<option value="yar_txt"' + (edm === 'yar_txt' ? ' selected' : '') + '>.yar → .yar.txt on appliance</option></select></div>';
+            row.innerHTML =
+                '<div class="flex flex-wrap items-center gap-2">' +
+                    '<input type="text" class="trellix-nx-name px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary flex-1 min-w-[8rem]" placeholder="Name" value="' + escAttr(a.name) + '">' +
+                    '<input type="text" class="trellix-nx-base_url px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary flex-1 min-w-[12rem]" placeholder="https://nx:443" value="' + escAttr(a.base_url) + '">' +
+                    '<button type="button" class="trellix-nx-remove px-2 py-1.5 rounded text-sm bg-red-600/80 hover:bg-red-500 text-white shrink-0" data-idx="' + idx + '">Remove</button>' +
+                '</div>' +
+                styleRow +
+                (style === 'wmps' ? wmpsBlock : wsapisBlock);
             nxListEl.appendChild(row);
         });
         nxListEl.querySelectorAll('.trellix-nx-remove').forEach(function(btn) {
@@ -847,7 +956,15 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
     var nxAdd = document.getElementById('trellixNxAddTarget');
     if (nxAdd) {
         nxAdd.addEventListener('click', function() {
-            nxTargets.push({ name: '', base_url: '', wsapis_version: 'v2.0.0', yara_file_type: 'yar', api_key: '', api_key_header: '' });
+            nxTargets.push({
+                name: '',
+                base_url: '',
+                api_style: 'wsapis',
+                wsapis_version: 'v2.0.0',
+                yara_file_type: 'yar',
+                api_key: '',
+                api_key_header: ''
+            });
             renderNx();
         });
     }
@@ -859,20 +976,55 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
         nxListEl.querySelectorAll('.trellix-nx-row').forEach(function(row) {
             var n = row.querySelector('.trellix-nx-name');
             var u = row.querySelector('.trellix-nx-base_url');
+            var stEl = row.querySelector('.trellix-nx-api_style');
+            var style = stEl ? (stEl.value || 'wsapis').trim().toLowerCase() : 'wsapis';
+            if (!n || !u) return;
+            if (style === 'wmps') {
+                var wlp = row.querySelector('.trellix-nx-wmps-login_path');
+                var wup = row.querySelector('.trellix-nx-wmps-upload_path');
+                var wu = row.querySelector('.trellix-nx-wmps-username');
+                var wp = row.querySelector('.trellix-nx-wmps-password');
+                var wmc = row.querySelector('.trellix-nx-wmps-manual_cookie');
+                var wvs = row.querySelector('.trellix-nx-wmps-verify_ssl');
+                var wft = row.querySelector('.trellix-nx-wmps-f_type');
+                var wct = row.querySelector('.trellix-nx-wmps-content_type');
+                var wcsp = row.querySelector('.trellix-nx-wmps-csrf_param');
+                var wcst = row.querySelector('.trellix-nx-wmps-csrf_token');
+                var wdel = row.querySelector('.trellix-nx-wmps-delete_path');
+                var edm = row.querySelector('.trellix-nx-wmps-ex_delete_name_mode');
+                collected.push({
+                    name: (n.value || '').trim(),
+                    base_url: (u.value || '').trim(),
+                    api_style: 'wmps',
+                    login_path: wlp ? (wlp.value || '').trim() : '',
+                    upload_path: wup ? (wup.value || '').trim() : '',
+                    username: wu ? (wu.value || '').trim() : '',
+                    password: wp ? (wp.value || '').trim() : '',
+                    manual_cookie: wmc ? (wmc.value || '').trim() : '',
+                    verify_ssl: wvs ? (wvs.value || 'true').trim().toLowerCase() !== 'false' : true,
+                    f_type: wft ? (wft.value || '').trim() : 'common',
+                    content_type: wct ? (wct.value || '').trim() : 'base',
+                    csrf_param: wcsp ? (wcsp.value || '').trim() : '',
+                    csrf_token: wcst ? (wcst.value || '').trim() : '',
+                    delete_path: wdel ? (wdel.value || '').trim() : '',
+                    ex_delete_name_mode: edm ? (edm.value || 'same').trim().toLowerCase() : 'same'
+                });
+                return;
+            }
             var ver = row.querySelector('.trellix-nx-wsapis_version');
             var ft = row.querySelector('.trellix-nx-yara_file_type');
             var kh = row.querySelector('.trellix-nx-api_key_header');
             var k = row.querySelector('.trellix-nx-api_key');
-            if (n && u && ver && ft && k) {
-                collected.push({
-                    name: (n.value || '').trim(),
-                    base_url: (u.value || '').trim(),
-                    wsapis_version: (ver.value || '').trim(),
-                    yara_file_type: (ft.value || '').trim(),
-                    api_key: (k.value || '').trim(),
-                    api_key_header: kh ? (kh.value || '').trim() : ''
-                });
-            }
+            if (!ver || !ft) return;
+            collected.push({
+                name: (n.value || '').trim(),
+                base_url: (u.value || '').trim(),
+                api_style: 'wsapis',
+                wsapis_version: (ver.value || '').trim(),
+                yara_file_type: (ft.value || '').trim(),
+                api_key: k ? (k.value || '').trim() : '',
+                api_key_header: kh ? (kh.value || '').trim() : ''
+            });
         });
         return collected;
     }
@@ -918,7 +1070,13 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             outEl.innerHTML = '';
             if (!appliances.length) {
                 outEl.classList.remove('hidden');
-                outEl.innerHTML = '<div class="text-amber-400">Add an NX appliance with a base URL.</div>';
+                var rows = collectTrellixNx().filter(function(r) { return (r.base_url || '').trim(); });
+                var onlyWmps = rows.length && rows.every(function(r) {
+                    return (r.api_style || 'wsapis').trim().toLowerCase() === 'wmps';
+                });
+                outEl.innerHTML = onlyWmps
+                    ? '<div class="text-amber-400">wmps (web session) targets are not probed here. Save settings and verify with a test YARA approve, or add a wsapis row to test the REST API.</div>'
+                    : '<div class="text-amber-400">Add an NX appliance with a base URL (wsapis), or switch API style to wmps for web UI upload.</div>';
                 return;
             }
             this.disabled = true;

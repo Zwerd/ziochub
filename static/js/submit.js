@@ -77,6 +77,23 @@ document.getElementById('btnModeCsv').addEventListener('click', () => setBulkUpl
 document.getElementById('btnModePaste').addEventListener('click', () => setBulkUploadMode('paste'));
 setBulkUploadMode('single');
 
+/** Native file input uses OS locale for its button; use hidden input + English label for IOC bulk pickers. */
+function _wireEnglishBulkFilePicker(inputId, chosenLabelId) {
+    const inp = document.getElementById(inputId);
+    const chosen = document.getElementById(chosenLabelId);
+    if (!inp || !chosen) return;
+    const emptyText = 'No file chosen';
+    function sync() {
+        const f = inp.files && inp.files[0];
+        chosen.textContent = f ? f.name : emptyText;
+        chosen.title = f ? f.name : '';
+    }
+    inp.addEventListener('change', sync);
+    sync();
+}
+_wireEnglishBulkFilePicker('txtFile', 'txtFileChosenLabel');
+_wireEnglishBulkFilePicker('csvFile', 'csvFileChosenLabel');
+
 // ---- IOC Validation ----
 
 function validateIocFormat(value, type) {

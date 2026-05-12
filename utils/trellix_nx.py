@@ -5,7 +5,7 @@ Trellix Network Security (NX): two integration styles for YARA automation.
    ``utils.yara_http_push`` (API key + ``/wsapis/{ver}/customioc/yara/...``).
 
 2. **wmps**: Web UI session flow (same multipart / delete shape as Email EX but under
-   ``/wmps/yara_rules_ng/…``). Rows use ``api_style: "wmps"`` plus the same fields as an EX
+   ``/wmps/yara_rules_ng/...``). Rows use ``api_style: "wmps"`` plus the same fields as an EX
    target (``login_path``, ``upload_path``, credentials, CSRF overrides, etc.).
    Push/delete reuse ``push_yara_session_targets`` / ``delete_yara_session_targets`` in
    ``utils.trellix_ex``.

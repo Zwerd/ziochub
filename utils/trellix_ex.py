@@ -1,10 +1,10 @@
 """
 Trellix Email Security (EX): YARA upload/delete via session cookie after JSON password auth.
 
-Upload (multipart POST): yara_file, f_type, content_type — **default** path
+Upload (multipart POST): yara_file, f_type, content_type - **default** path
 ``/ex/yara_rules_ng/upload_yara`` (Email Security web UI).
 
-Delete: POST ``application/x-www-form-urlencoded`` to ``…/yara_rules_ng/delete_yara_files``
+Delete: POST ``application/x-www-form-urlencoded`` to ``.../yara_rules_ng/delete_yara_files``
 (derived from upload path unless ``delete_path`` is set per target).
 
 Session-style push/delete for additional targets reuse ``push_yara_session_targets`` /
@@ -17,7 +17,10 @@ After login, parses JSON for CSRF and sends X-CSRF-Token, X-CSRF-Param, X-Reques
 Accept ``application/json, text/plain, */*``, and Referer ``{prefix}/settings/yara_rules``.
 
 Optional manual Cookie; optional per-target csrf_*; ``ex_delete_name_mode: yar_txt`` maps
-``rule.yar`` → ``rule.yar.txt`` for delete payloads when EX stores that suffix.
+``rule.yar`` -> ``rule.yar.txt`` for delete payloads when EX stores that suffix.
+
+API/telemetry rows may include ``summary`` (short general outcome), ``message`` (technical detail),
+and ``hint`` (likely cause for operators) on failures.
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import ssl
 import string
 import urllib.error
@@ -39,9 +43,136 @@ _MAX_RESPONSE_BODY_BYTES = 256 * 1024
 # Defaults aligned with current Trellix EX UI (paths / form values may differ on older appliances).
 _DEFAULT_EX_LOGIN_PATH = '/login/login'
 _DEFAULT_EX_CONTENT_TYPE = 'base'
-# EX (Email Security) web UI — NX IPS uses /wmps/… (see utils.trellix_nx, api_style wmps).
+# EX (Email Security) web UI - NX IPS uses /wmps/... (see utils.trellix_nx, api_style wmps).
 _DEFAULT_EX_UPLOAD_PATH = '/ex/yara_rules_ng/upload_yara'
 _EX_ACCEPT = 'application/json, text/plain, */*'
+
+
+def _http_code_from_message(msg: str) -> Optional[int]:
+    """Best-effort HTTP status from Trellix error strings (e.g. 'Login HTTP 401', 'HTTP 403; ...')."""
+    m = re.search(r"\bHTTP\s+(\d{3})\b", msg or "", re.I)
+    if not m:
+        m = re.search(r"Login\s+HTTP\s+(\d{3})\b", msg or "", re.I)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _trellix_ex_operator_hint(
+    *,
+    phase: str,
+    message: str = "",
+    http_status: Optional[int] = None,
+    exc: Optional[BaseException] = None,
+) -> str:
+    """Short 'likely cause' line for operators (EX / shared wmps session flow). Empty if unknown."""
+    msg_l = (message or "").lower()
+    code = http_status if isinstance(http_status, int) else _http_code_from_message(message or "")
+
+    if exc is not None:
+        exc_s = str(exc).lower()
+        if any(x in exc_s for x in ("certificate", "ssl:", "tls", "cert_verify", "hostname")):
+            return (
+                "Likely: TLS verification failed - use \"Verify TLS: No\" for a quick test, "
+                "or install the appliance CA / fix the hostname on the EX target."
+            )
+        if "timed out" in exc_s or "timeout" in exc_s:
+            return "Likely: HTTPS timeout - firewall, slow network path, or the appliance is overloaded."
+        if "refused" in exc_s or "errno 111" in exc_s:
+            return "Likely: connection refused - wrong port, service down, or firewall blocking this host."
+        if "resolve" in exc_s or "getaddrinfo" in exc_s or "name or service not known" in exc_s:
+            return "Likely: DNS / hostname - typo in base URL, or this server cannot resolve the EX host."
+
+    if phase == "config":
+        if "base" in msg_l and "missing" in msg_l:
+            return "Likely: set base_url on the Trellix EX target row (Integrations), save, then test again."
+
+    if phase == "login":
+        if code == 401:
+            return (
+                "Likely: wrong username or password, locked account, or the appliance expects SSO "
+                "instead of JSON password login."
+            )
+        if code == 403:
+            return "Likely: WAF, IP allowlist, or policy blocks the login endpoint from this ZIoCHub host."
+        if code == 404:
+            return "Likely: wrong login_path for this EX build - confirm JSON login URL (often /login/login on Trellix EX)."
+        if code == 429:
+            return "Likely: rate limiting - wait before retrying automated login."
+        if "missing" in msg_l and "username" in msg_l:
+            return "Likely: username is empty on the EX target - fill it in and save."
+        if "missing" in msg_l and "password" in msg_l:
+            return "Likely: password is empty - set it, or paste a manual session Cookie from a browser login if SSO is required."
+        if "no set-cookie" in msg_l or ("cookie" in msg_l and "upload" in msg_l):
+            return "Likely: login returned no session cookie - paste Cookie + CSRF from a browser session on this appliance."
+
+    if phase in ("upload", "delete"):
+        if code == 401:
+            return "Likely: session cookie expired or invalid - refresh manual Cookie or log in again on the appliance."
+        if code == 403:
+            return (
+                "Likely: CSRF rejected, missing YARA-admin permission, or a reverse proxy/WAF altered the POST."
+            )
+        if code == 404:
+            return (
+                "Likely: wrong upload/delete path - Email EX normally uses /ex/yara_rules_ng/...; "
+                "/wmps/... is usually IPS web (NX), not EX."
+            )
+        if code == 419:
+            return "Likely: CSRF/session mismatch (token expired). Refresh CSRF/cookie from a browser session on this EX."
+        if code == 422:
+            return "Likely: appliance validation rejected the payload (f_type, content_type, or rule text for this EX version)."
+        if code == 429:
+            return "Likely: throttling on the appliance - reduce how often you run the test or automation."
+        if code is not None and code >= 500:
+            return "Likely: server-side fault on Trellix EX - check appliance health and application logs."
+        if code == 203:
+            return (
+                "Likely: HTTP 203 is unusual for this API - a proxy may be rewriting the response; "
+                "hit the EX host directly if possible and compare with the technical line above."
+            )
+        if "success=false" in msg_l or '"success": false' in msg_l or "'success': false" in msg_l:
+            return "Likely: JSON reports failure (error/errors fields) - read the technical message for the appliance reason."
+        if "error page" in msg_l or ("<html" in msg_l and "body suggests" in msg_l):
+            return "Likely: HTML or login page instead of JSON - wrong URL, expired session, or SSO intercepting the API."
+
+    if phase == "login" and "rejected" in msg_l:
+        return "Likely: login JSON indicates failure - verify credentials, login_path, and that JSON login is enabled."
+
+    return ""
+
+
+def _trellix_ex_failure_row(
+    name: str,
+    url: str,
+    *,
+    phase: str,
+    summary: str,
+    message: str,
+    http_status: Optional[int] = None,
+    exc: Optional[BaseException] = None,
+) -> dict[str, Any]:
+    """One result row for a failed EX/wmps step: general summary + technical message + optional hint."""
+    code = http_status if isinstance(http_status, int) else _http_code_from_message(message)
+    hint = _trellix_ex_operator_hint(phase=phase, message=message, http_status=code, exc=exc)
+    row: dict[str, Any] = {
+        "name": name,
+        "url": url or "",
+        "success": False,
+        "summary": summary,
+        "message": message,
+        "phase": phase,
+    }
+    if hint:
+        row["hint"] = hint
+    if isinstance(http_status, int):
+        row["http_status"] = http_status
+    elif isinstance(code, int):
+        row["http_status"] = code
+    return row
 
 
 def _extract_csrf_from_login_body(body_bytes: bytes) -> tuple[Optional[str], Optional[str]]:
@@ -200,7 +331,7 @@ def trellix_ex_upload_url_for_target(target: dict) -> str:
 
 
 def trellix_ex_referer_path(upload_path: str) -> str:
-    """Settings page path for Referer header (must match UI prefix: wmps, ex, …)."""
+    """Settings page path for Referer header (must match UI prefix: wmps, ex, ...)."""
     up = (upload_path or '').strip()
     if '/yara_rules_ng/' in up:
         prefix = up.split('/yara_rules_ng/')[0].strip() or '/ex'
@@ -490,7 +621,15 @@ def _push_yara_trellix_ex_one(
         audit_log_fn("yara_push_skip", f"target=Trellix_EX name={name} reason=missing_base_url")
         return {
             "overall_success": False,
-            "results": [{"name": name, "url": "", "success": False, "message": "Missing Trellix EX base URL"}],
+            "results": [
+                _trellix_ex_failure_row(
+                    name,
+                    "",
+                    phase="config",
+                    summary="Trellix EX target is incomplete.",
+                    message="Missing Trellix EX base URL",
+                )
+            ],
         }
 
     vs = verify_ssl if verify_ssl is not None else bool(target.get("verify_ssl", True))
@@ -509,7 +648,15 @@ def _push_yara_trellix_ex_one(
             audit_log_fn("yara_push_fail", f"file={filename} target=EX name={name} login={login_msg[:300]}")
             return {
                 "overall_success": False,
-                "results": [{"name": name, "url": upload_url, "success": False, "message": login_msg}],
+                "results": [
+                    _trellix_ex_failure_row(
+                        name,
+                        upload_url,
+                        phase="login",
+                        summary="Trellix EX login failed.",
+                        message=login_msg,
+                    )
+                ],
             }
     else:
         csrf_p, csrf_t = _csrf_from_target_only(target)
@@ -546,14 +693,46 @@ def _push_yara_trellix_ex_one(
                         "yara_push_fail",
                         f"file={filename} target=EX name={name} code={code} detail={detail_msg[:500]}",
                     )
+                if logical_ok:
+                    return {
+                        "overall_success": True,
+                        "results": [
+                            {
+                                "name": name,
+                                "url": upload_url,
+                                "success": True,
+                                "message": detail_msg,
+                                "http_status": code,
+                                "phase": "upload",
+                            }
+                        ],
+                    }
                 return {
-                    "overall_success": logical_ok,
-                    "results": [{"name": name, "url": upload_url, "success": logical_ok, "message": detail_msg}],
+                    "overall_success": False,
+                    "results": [
+                        _trellix_ex_failure_row(
+                            name,
+                            upload_url,
+                            phase="upload",
+                            summary="Trellix EX reported the YARA upload did not succeed.",
+                            message=detail_msg,
+                            http_status=code,
+                        )
+                    ],
                 }
             audit_log_fn("yara_push_fail", f"file={filename} target=EX name={name} code={code}")
             return {
                 "overall_success": False,
-                "results": [{"name": name, "url": upload_url, "success": False, "message": f"HTTP {code}"}],
+                "results": [
+                    _trellix_ex_failure_row(
+                        name,
+                        upload_url,
+                        phase="upload",
+                        summary="Trellix EX returned a non-success HTTP status during upload.",
+                        message=f"HTTP {code}",
+                        http_status=code,
+                    )
+                ],
             }
     except urllib.error.HTTPError as e:
         err_body = ""
@@ -565,17 +744,51 @@ def _push_yara_trellix_ex_one(
             pass
         msg = _truncate_msg(f"HTTP {e.code} {e.reason}; {err_body}")
         audit_log_fn("yara_push_fail", f"file={filename} target=EX name={name} code={e.code}")
-        return {"overall_success": False, "results": [{"name": name, "url": upload_url, "success": False, "message": msg}]}
+        return {
+            "overall_success": False,
+            "results": [
+                _trellix_ex_failure_row(
+                    name,
+                    upload_url,
+                    phase="upload",
+                    summary="Trellix EX returned an HTTP error during YARA upload.",
+                    message=msg,
+                    http_status=e.code,
+                    exc=e,
+                )
+            ],
+        }
     except urllib.error.URLError as e:
         audit_log_fn("yara_push_fail", f"file={filename} target=EX name={name} error={e.reason}")
         return {
             "overall_success": False,
-            "results": [{"name": name, "url": upload_url, "success": False, "message": str(e.reason or e)}],
+            "results": [
+                _trellix_ex_failure_row(
+                    name,
+                    upload_url,
+                    phase="upload",
+                    summary="Could not reach Trellix EX over HTTPS (YARA upload).",
+                    message=str(e.reason or e),
+                    exc=e,
+                )
+            ],
         }
     except Exception as e:
         logging.exception("Trellix EX YARA push")
         audit_log_fn("yara_push_fail", f"file={filename} target=EX name={name} error={e}")
-        return {"overall_success": False, "results": [{"name": name, "url": upload_url, "success": False, "message": str(e)}]}
+        return {
+            "overall_success": False,
+            "results": [
+                _trellix_ex_failure_row(
+                    name,
+                    upload_url,
+                    phase="upload",
+                    summary="Unexpected error while pushing YARA to Trellix EX.",
+                    message=str(e),
+                    exc=e,
+                )
+            ],
+        }
 
 
 def _ex_delete_remote_filename(filename: str, target: dict) -> str:
@@ -605,7 +818,15 @@ def _delete_yara_trellix_ex_one(
         audit_log_fn("yara_delete_skip", f"target=EX name={name} reason=missing_base_url")
         return {
             "overall_success": False,
-            "results": [{"name": name, "url": "", "success": False, "message": "Missing Trellix EX base URL"}],
+            "results": [
+                _trellix_ex_failure_row(
+                    name,
+                    "",
+                    phase="config",
+                    summary="Trellix EX target is incomplete.",
+                    message="Missing Trellix EX base URL",
+                )
+            ],
         }
 
     vs = verify_ssl if verify_ssl is not None else bool(target.get("verify_ssl", True))
@@ -625,7 +846,15 @@ def _delete_yara_trellix_ex_one(
             audit_log_fn("yara_delete_fail", f"file={filename} target=EX name={name} login={login_msg[:300]}")
             return {
                 "overall_success": False,
-                "results": [{"name": name, "url": delete_url, "success": False, "message": login_msg}],
+                "results": [
+                    _trellix_ex_failure_row(
+                        name,
+                        delete_url,
+                        phase="login",
+                        summary="Trellix EX login failed (delete not attempted).",
+                        message=login_msg,
+                    )
+                ],
             }
     else:
         csrf_p, csrf_t = _csrf_from_target_only(target)
@@ -671,21 +900,63 @@ def _delete_yara_trellix_ex_one(
                         "yara_delete_fail",
                         f"file={filename} target=EX name={name} code={code} detail={detail_msg[:500]}",
                     )
+                if logical_ok:
+                    return {
+                        "overall_success": True,
+                        "results": [
+                            {
+                                "name": name,
+                                "url": delete_url,
+                                "success": True,
+                                "message": detail_msg,
+                                "http_status": code,
+                                "phase": "delete",
+                            }
+                        ],
+                    }
                 return {
-                    "overall_success": logical_ok,
-                    "results": [{"name": name, "url": delete_url, "success": logical_ok, "message": detail_msg}],
+                    "overall_success": False,
+                    "results": [
+                        _trellix_ex_failure_row(
+                            name,
+                            delete_url,
+                            phase="delete",
+                            summary="Trellix EX reported the YARA delete did not succeed.",
+                            message=detail_msg,
+                            http_status=code,
+                        )
+                    ],
                 }
             audit_log_fn("yara_delete_fail", f"file={filename} target=EX name={name} code={code}")
             return {
                 "overall_success": False,
-                "results": [{"name": name, "url": delete_url, "success": False, "message": f"HTTP {code}"}],
+                "results": [
+                    _trellix_ex_failure_row(
+                        name,
+                        delete_url,
+                        phase="delete",
+                        summary="Trellix EX returned a non-success HTTP status during delete.",
+                        message=f"HTTP {code}",
+                        http_status=code,
+                    )
+                ],
             }
     except urllib.error.HTTPError as e:
         if e.code == 404:
             audit_log_fn("yara_delete_ok", f"file={filename} remote={remote_name!r} target=EX name={name} code=404")
             return {
                 "overall_success": True,
-                "results": [{"name": name, "url": delete_url, "success": True, "message": "HTTP 404 (already absent)"}],
+                "results": [
+                    {
+                        "name": name,
+                        "url": delete_url,
+                        "success": True,
+                        "summary": "Rule not present on Trellix EX (nothing to delete).",
+                        "message": "HTTP 404 (already absent)",
+                        "http_status": 404,
+                        "phase": "delete",
+                    }
+                ],
             }
         err_body = ""
         try:
@@ -696,17 +967,51 @@ def _delete_yara_trellix_ex_one(
             pass
         msg = _truncate_msg(f"HTTP {e.code} {e.reason}; {err_body}")
         audit_log_fn("yara_delete_fail", f"file={filename} target=EX name={name} code={e.code}")
-        return {"overall_success": False, "results": [{"name": name, "url": delete_url, "success": False, "message": msg}]}
+        return {
+            "overall_success": False,
+            "results": [
+                _trellix_ex_failure_row(
+                    name,
+                    delete_url,
+                    phase="delete",
+                    summary="Trellix EX returned an HTTP error during YARA delete.",
+                    message=msg,
+                    http_status=e.code,
+                    exc=e,
+                )
+            ],
+        }
     except urllib.error.URLError as e:
         audit_log_fn("yara_delete_fail", f"file={filename} target=EX name={name} error={e.reason}")
         return {
             "overall_success": False,
-            "results": [{"name": name, "url": delete_url, "success": False, "message": str(e.reason or e)}],
+            "results": [
+                _trellix_ex_failure_row(
+                    name,
+                    delete_url,
+                    phase="delete",
+                    summary="Could not reach Trellix EX over HTTPS (YARA delete).",
+                    message=str(e.reason or e),
+                    exc=e,
+                )
+            ],
         }
     except Exception as e:
         logging.exception("Trellix EX YARA delete")
         audit_log_fn("yara_delete_fail", f"file={filename} target=EX name={name} error={e}")
-        return {"overall_success": False, "results": [{"name": name, "url": delete_url, "success": False, "message": str(e)}]}
+        return {
+            "overall_success": False,
+            "results": [
+                _trellix_ex_failure_row(
+                    name,
+                    delete_url,
+                    phase="delete",
+                    summary="Unexpected error while deleting YARA on Trellix EX.",
+                    message=str(e),
+                    exc=e,
+                )
+            ],
+        }
 
 
 def delete_yara_session_targets(
@@ -718,10 +1023,10 @@ def delete_yara_session_targets(
     cookie_header: Optional[str] = None,
     empty_skip_log: str = "yara_delete_skip",
     empty_log_detail: str = "reason=no_targets",
-    empty_result_name: str = "—",
+    empty_result_name: str = "-",
     empty_message: str = "No targets configured",
 ) -> dict[str, Any]:
-    """Run session-cookie YARA delete for each target dict (EX or NX wmps — same HTTP shape)."""
+    """Run session-cookie YARA delete for each target dict (EX or NX wmps - same HTTP shape)."""
     if not audit_log_fn:
         def _noop(*_a, **_k):
             pass
@@ -759,7 +1064,7 @@ def push_yara_session_targets(
     cookie_header: Optional[str] = None,
     empty_skip_log: str = "yara_push_skip",
     empty_log_detail: str = "reason=no_targets",
-    empty_result_name: str = "—",
+    empty_result_name: str = "-",
     empty_message: str = "No targets configured",
 ) -> dict[str, Any]:
     """Run session-cookie YARA multipart upload for each target dict (EX or NX wmps)."""
@@ -852,13 +1157,22 @@ def test_trellix_ex_connection(get_setting: Callable[[str, str], str], *, verify
 """
 
     if not trellix_ex_enabled(get_setting):
-        return {"success": False, "message": "Trellix EX is disabled. Enable it or use Save first.", "overall_success": False, "results": []}
+        return {
+            "success": False,
+            "overall_success": False,
+            "results": [],
+            "summary": "Trellix EX integration is disabled.",
+            "message": "Trellix EX is disabled. Enable it or use Save first.",
+            "hint": "Likely: set \"Enable Trellix EX YARA push\" to Yes under Integrations -> Email (EX), save, then test.",
+        }
     if not list_trellix_ex_targets(get_setting):
         return {
             "success": True,
             "overall_success": False,
             "results": [],
+            "summary": "No Trellix EX targets configured.",
             "message": "Add at least one EX target with a base URL, then save.",
+            "hint": "Likely: add a target row with base_url and credentials, save Integrations, then run the test again.",
         }
     res = push_yara_trellix_ex(
         _test_yara,
@@ -869,8 +1183,33 @@ def test_trellix_ex_connection(get_setting: Callable[[str, str], str], *, verify
     )
     ok = bool(res.get("overall_success"))
     msgs = []
+    hints: list[str] = []
+    summaries: list[str] = []
     for r in res.get("results") or []:
-        if isinstance(r, dict) and (r.get("message") or "").strip():
+        if not isinstance(r, dict):
+            continue
+        if (r.get("message") or "").strip():
             msgs.append(str(r.get("message") or "").strip())
+        if not r.get("success"):
+            hn = (r.get("name") or "Target").strip()
+            if (r.get("hint") or "").strip():
+                hints.append(f"{hn}: {(r.get('hint') or '').strip()}")
+            if (r.get("summary") or "").strip():
+                summaries.append(str(r.get("summary") or "").strip())
     msg = "; ".join(msgs)[:900] if msgs else ""
-    return {"success": True, "overall_success": ok, "results": res.get("results", []), "message": msg}
+    agg_hint = "\n".join(hints)[:2000] if hints else ""
+    agg_summary = ""
+    if summaries:
+        agg_summary = summaries[0] if len(summaries) == 1 else " - ".join(list(dict.fromkeys(summaries)))[:500]
+    out: dict[str, Any] = {
+        "success": True,
+        "overall_success": ok,
+        "results": res.get("results", []),
+        "message": msg,
+    }
+    if not ok:
+        if agg_summary:
+            out["summary"] = agg_summary
+        if agg_hint:
+            out["hint"] = agg_hint
+    return out

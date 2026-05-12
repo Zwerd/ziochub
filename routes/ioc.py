@@ -47,6 +47,37 @@ def _log_sanity_warning_history(_log_ioc_history_fn, ioc_type: str, value: str, 
         return
 
 
+def _log_ioc_reactivation_history_if_needed(
+    _log_ioc_history_fn,
+    was_active_before: bool,
+    ioc_type: str,
+    value: str,
+    analyst: str,
+    exp_date,
+    entered_by: str,
+):
+    """
+    After apply_ioc_submission_to_existing_row: if the row was inactive (revoked or expired),
+    append a 'created' IocHistory row with reactivated=True — same contract as /api/submit-ioc.
+    Skips when the row was already active (metadata-only refresh).
+    """
+    if was_active_before:
+        return
+    try:
+        payload_hist = {
+            'entered_by': (entered_by or '').strip(),
+            'assigned_to': (analyst or '').strip(),
+        }
+        if exp_date:
+            payload_hist['expiration_date'] = (
+                exp_date.isoformat() if hasattr(exp_date, 'isoformat') else str(exp_date)[:10]
+            )
+        payload_hist['reactivated'] = True
+        _log_ioc_history_fn(ioc_type, value, 'created', analyst, payload_hist)
+    except Exception:
+        logging.exception('_log_ioc_reactivation_history_if_needed failed')
+
+
 def _from_app(*names):
     import app as _app
     return tuple(getattr(_app, n) for n in names)
@@ -993,12 +1024,14 @@ def bulk_csv():
         apply_ioc_submission_to_existing_row,
         _create_ioc, _compute_rare_find_fields,
         _auto_ticket_id, _data_dir, _get_setting,
+        ioc_row_is_active,
     ) = _from_app(
         '_commit_with_retry', 'audit_log', '_log_ioc_history',
         'check_allowlist', 'calculate_expiration_date',
         'apply_ioc_submission_to_existing_row',
         '_create_ioc', '_compute_rare_find_fields',
         '_auto_ticket_id', '_data_dir', '_get_setting',
+        'ioc_row_is_active',
     )
     try:
         if 'file' not in request.files:
@@ -1111,6 +1144,7 @@ def bulk_csv():
                 ticket_id_val = (ticket_id.strip() if ticket_id else None) or csv_fallback_ticket
                 existing = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.lower()).first()
                 if existing:
+                    was_active_before = ioc_row_is_active(existing)
                     rare = _compute_rare_find_fields(ioc_type, value)
                     apply_ioc_submission_to_existing_row(
                         existing,
@@ -1127,6 +1161,19 @@ def bulk_csv():
                         rare=rare,
                     )
                     updated_count += 1
+                    if not was_active_before:
+                        _log_ioc_reactivation_history_if_needed(
+                            _log_ioc_history,
+                            was_active_before,
+                            ioc_type,
+                            value,
+                            username,
+                            exp_date,
+                            current_user.username if current_user.is_authenticated else '',
+                        )
+                        _log_sanity_warning_history(
+                            _log_ioc_history, ioc_type, value, get_sanity_warnings(value, ioc_type)
+                        )
                 else:
                     rare = _compute_rare_find_fields(ioc_type, value)
                     db.session.add(_create_ioc(
@@ -1683,6 +1730,7 @@ def submit_staging():
         _resolve_analyst_to_user, _auto_ticket_id,
         _capture_champs_before, _detect_champs_changes,
         _data_dir, _get_setting,
+        ioc_row_is_active,
     ) = _from_app(
         '_commit_with_retry', '_log_ioc_history', 'audit_log',
         'check_allowlist', 'calculate_expiration_date',
@@ -1691,6 +1739,7 @@ def submit_staging():
         '_resolve_analyst_to_user', '_auto_ticket_id',
         '_capture_champs_before', '_detect_champs_changes',
         '_data_dir', '_get_setting',
+        'ioc_row_is_active',
     )
     try:
         sanity_mode = _get_setting('sanity_check_mode', 'block_non_admin')
@@ -1787,6 +1836,7 @@ def submit_staging():
 
             existing = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == ioc_value.lower()).first()
             if existing:
+                was_active_before = ioc_row_is_active(existing)
                 rare = _compute_rare_find_fields(ioc_type, ioc_value)
                 apply_ioc_submission_to_existing_row(
                     existing,
@@ -1805,6 +1855,19 @@ def submit_staging():
                 total_updated += 1
                 summary[ioc_type] = summary.get(ioc_type, {'updated': 0, 'new': 0})
                 summary[ioc_type]['updated'] += 1
+                if not was_active_before:
+                    _log_ioc_reactivation_history_if_needed(
+                        _log_ioc_history,
+                        was_active_before,
+                        ioc_type,
+                        ioc_value,
+                        analyst,
+                        exp_date,
+                        current_user.username if current_user.is_authenticated else '',
+                    )
+                    _log_sanity_warning_history(
+                        _log_ioc_history, ioc_type, ioc_value, get_sanity_warnings(ioc_value, ioc_type)
+                    )
             else:
                 rare = _compute_rare_find_fields(ioc_type, ioc_value)
                 db.session.add(_create_ioc(
@@ -1935,6 +1998,7 @@ def upload_txt():
         _create_ioc, _compute_rare_find_fields,
         _resolve_analyst_to_user, _auto_ticket_id,
         _capture_champs_before, _detect_champs_changes,
+        ioc_row_is_active,
     ) = _from_app(
         '_commit_with_retry', 'audit_log', '_log_ioc_history',
         'check_allowlist', 'calculate_expiration_date',
@@ -1942,6 +2006,7 @@ def upload_txt():
         '_create_ioc', '_compute_rare_find_fields',
         '_resolve_analyst_to_user', '_auto_ticket_id',
         '_capture_champs_before', '_detect_champs_changes',
+        'ioc_row_is_active',
     )
     try:
         champs_before = _capture_champs_before(current_user.id, current_user.username.lower())
@@ -2042,6 +2107,7 @@ def upload_txt():
             for value, meta in ioc_dict.items():
                 existing = IOC.query.filter(IOC.type == ioc_type, func.lower(IOC.value) == value.lower()).first()
                 if existing:
+                    was_active_before = ioc_row_is_active(existing)
                     u = meta['user']
                     analyst_from_file = meta.get('analyst_raw')
                     resolved_bulk_txt = _resolve_analyst_to_user(u)
@@ -2066,6 +2132,16 @@ def upload_txt():
                         rare=rare,
                     )
                     updated_count += 1
+                    if not was_active_before:
+                        _log_ioc_reactivation_history_if_needed(
+                            _log_ioc_history,
+                            was_active_before,
+                            ioc_type,
+                            value,
+                            store_analyst,
+                            exp_date,
+                            current_user.username if current_user.is_authenticated else '',
+                        )
                 else:
                     rare = _compute_rare_find_fields(ioc_type, value)
                     u = meta['user']

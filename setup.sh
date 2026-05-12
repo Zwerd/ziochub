@@ -711,17 +711,17 @@ except Exception:
     sys.exit(1)
 " 2>&1
     ); then
-        ok "utils.${_trellix_util} — import OK"
+        ok "utils.${_trellix_util} - import OK"
     else
         TRELLIX_UTILS_IMPORT_FAILED=true
-        warn "utils.${_trellix_util} — import FAILED. Admin → Integrations (Trellix EX / NX YARA) may be broken until this is fixed."
+        warn "utils.${_trellix_util} - import FAILED. Admin -> Integrations (Trellix EX / NX YARA) may be broken until this is fixed."
         while IFS= read -r _tl || [[ -n "${_tl}" ]]; do
             echo -e "    ${YELLOW}│${NC}  ${_tl}"
         done <<< "${_trellix_err}"
     fi
 done
 if $TRELLIX_UTILS_IMPORT_FAILED; then
-    warn "Diagnosis: if you see ImportError/ModuleNotFoundError for a third-party package, refresh offline wheels (pip download -d packages/ -r requirements.txt …) and rebuild the installer."
+    warn "Diagnosis: if you see ImportError/ModuleNotFoundError for a third-party package, refresh offline wheels (pip download -d packages/ -r requirements.txt ...) and rebuild the installer."
     warn "If trellix_nx fails after trellix_ex succeeded, the traceback below trellix_nx is specific to NX wmps wiring."
 fi
 

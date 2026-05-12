@@ -1125,7 +1125,8 @@ def trellix_ex_test():
             'admin_trellix_ex_test',
             f'by={current_user.username} ok={result.get("overall_success")}',
         )
-        return jsonify(result)
+        # Force 200 so browsers/proxies never surface rare 2xx (e.g. 203) without a JSON body the UI can parse.
+        return jsonify(result), 200
     except Exception as e:
         logging.exception('api_admin_trellix_ex_test failed')
         return _api_error(str(e), 500)

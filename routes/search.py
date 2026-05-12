@@ -403,6 +403,83 @@ def get_ioc_history():
     return jsonify({'success': True, 'ioc_type': ioc_type, 'ioc_value': value, 'events': events})
 
 
+@bp.route('/api/stix-ioc-lookup', methods=['GET'])
+@login_required
+def stix_ioc_lookup():
+    """
+    Diagnostic: map IOC type+value to the DB row and the same STIX 2.1 Indicator dict as TAXII/feeds emit.
+
+    Use this to verify revoke: revoked rows still appear in TAXII with ``revoked: true`` (STIX removal sync).
+    Plain-text feeds (e.g. /feed/ip) omit revoked IOCs entirely.
+    """
+    ioc_type = request.args.get('type', '').strip()
+    value = (request.args.get('value') or '').strip()
+    if not ioc_type or not value:
+        return jsonify({'success': False, 'message': MSG_MISSING_FIELDS_TYPE_VALUE}), 400
+    if ioc_type not in IOC_FILES or ioc_type == 'YARA':
+        return jsonify({'success': False, 'message': MSG_INVALID_IOC_TYPE}), 400
+    if not validate_ioc(value, ioc_type):
+        return jsonify({'success': False, 'message': f'Invalid {ioc_type} format'}), 400
+
+    ioc_row_is_active = _from_app('ioc_row_is_active')[0]
+    from routes.feeds import _stix_id_for_ioc, _stix_indicator_from_row
+
+    row = IOC.query.filter(
+        IOC.type == ioc_type,
+        func.lower(IOC.value) == value.lower(),
+    ).first()
+    if not row:
+        return jsonify({
+            'success': True,
+            'found': False,
+            'ioc_type': ioc_type,
+            'ioc_value': value,
+            'message': 'No IOC row in the database for this type+value.',
+        })
+
+    stix_id = _stix_id_for_ioc(row)
+    stix_indicator = _stix_indicator_from_row(row)
+    base = (request.url_root or '').rstrip('/')
+    taxii_object_path = f'/taxii2/ziochub/collections/indicators/objects/{stix_id}/'
+    feed_stix_path = f'/feed/stix/{ioc_type}'
+
+    ioc_summary = {
+        'id': row.id,
+        'type': row.type,
+        'value': row.value,
+        'revoked': bool(getattr(row, 'revoked', False)),
+        'revoked_at': row.revoked_at.isoformat() if getattr(row, 'revoked_at', None) else None,
+        'expiration_date': row.expiration_date.isoformat() if row.expiration_date else None,
+        'modified_at': row.modified_at.isoformat() if getattr(row, 'modified_at', None) else None,
+        'created_at': row.created_at.isoformat() if row.created_at else None,
+        'analyst': row.analyst or '',
+        'is_active_for_plain_feeds': ioc_row_is_active(row),
+    }
+
+    guidance = {
+        'plain_text_feeds': 'Paths like /feed/ip exclude revoked and expired IOCs — suitable for consumers that only add blocklist entries.',
+        'taxii_stix_feeds': 'TAXII Get Objects and /feed/stix include revoked indicators with JSON property revoked:true so STIX-aware clients can remove blocks. If a vendor ignores revoked, it may keep blocking.',
+        'outbound_push_on_revoke': 'Revoke triggers schedule_outbound_ioc_event(action=remove) for configured HTTP IOC push targets (Integrations); verify FireEye is wired there vs TAXII.',
+    }
+
+    return jsonify({
+        'success': True,
+        'found': True,
+        'ioc': ioc_summary,
+        'stix_id': stix_id,
+        'stix_indicator': stix_indicator,
+        'urls': {
+            'taxii_get_object': base + taxii_object_path,
+            'feed_stix_type': base + feed_stix_path,
+        },
+        'taxii_request_hint': {
+            'Accept': 'application/taxii+json;version=2.1',
+            'note': 'TAXII 2.1 requires this Accept header on GET object/objects.',
+        },
+        'guidance': guidance,
+    })
+
+
 # ---------------------------------------------------------------------------
 # IOC Notes
 # ---------------------------------------------------------------------------

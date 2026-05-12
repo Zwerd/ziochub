@@ -26,7 +26,7 @@
 
         <div id="trellix-exnx-sub-ex" class="trellix-exnx-subpane space-y-3">
             <h4 class="text-sm font-semibold text-primary">Email Security (EX)</h4>
-            <p class="text-secondary text-sm mb-2">Push approved YARA rules to Trellix Email Security (EX): JSON password login to <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code>, then <code class="px-0.5 rounded bg-white/10 text-xs">multipart/form-data</code> POST (default upload path <code class="px-0.5 rounded bg-white/10 text-xs">/ex/yara_rules_ng/upload_yara</code>). Network Security (NX) web YARA uses <code class="px-0.5 rounded bg-white/10 text-xs">/wmps/yara_rules_ng/upload_yara</code> — configure that under <strong class="text-primary">Network (NX)</strong> with API style <code class="px-0.5 rounded bg-white/10 text-xs">wmps</code>. On ZIoCHub YARA delete, matching <code class="px-0.5 rounded bg-white/10 text-xs">delete_yara_files</code> POSTs run when the integration is enabled. Fields: <code class="px-0.5 rounded bg-white/10 text-xs">yara_file</code>, <code class="px-0.5 rounded bg-white/10 text-xs">f_type</code>, <code class="px-0.5 rounded bg-white/10 text-xs">content_type</code>.</p>
+            <p class="text-secondary text-sm mb-2">Push approved YARA rules to Trellix Email Security (EX): JSON password login to <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code>, then <code class="px-0.5 rounded bg-white/10 text-xs">multipart/form-data</code> POST (default upload path <code class="px-0.5 rounded bg-white/10 text-xs">/ex/yara_rules_ng/upload_yara</code>). Network Security (NX) web YARA uses <code class="px-0.5 rounded bg-white/10 text-xs">/wmps/yara_rules_ng/upload_yara</code> - configure that under <strong class="text-primary">Network (NX)</strong> with API style <code class="px-0.5 rounded bg-white/10 text-xs">wmps</code>. On ZIoCHub YARA delete, matching <code class="px-0.5 rounded bg-white/10 text-xs">delete_yara_files</code> POSTs run when the integration is enabled. Fields: <code class="px-0.5 rounded bg-white/10 text-xs">yara_file</code>, <code class="px-0.5 rounded bg-white/10 text-xs">f_type</code>, <code class="px-0.5 rounded bg-white/10 text-xs">content_type</code>.</p>
             <p class="text-secondary text-xs mb-4">If you already have a session cookie from the browser, paste it into <strong class="text-primary">Manual Cookie</strong> to skip login. Otherwise set username and password (login body: <code class="px-0.5 rounded bg-white/10 text-xs">{"auth_method":"password","data":{"username","password"}}</code>). Default login path is <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code> (newer UI); use <code class="px-0.5 rounded bg-white/10 text-xs">/ex/login</code> if your appliance still uses it. Optional: paste <strong class="text-primary">CSRF token</strong> from DevTools when using manual cookie if upload is rejected.</p>
 
             <form id="trellixExForm" class="space-y-4 max-w-3xl">
@@ -746,7 +746,7 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             outEl.innerHTML = '';
             this.disabled = true;
             outEl.classList.remove('hidden');
-            outEl.innerHTML = '<div class="text-secondary">Testing Trellix EX (login + minimal YARA upload)…</div>';
+            outEl.innerHTML = '<div class="text-secondary">Testing Trellix EX (login + minimal YARA upload)...</div>';
             try {
                 var body = {};
                 if (ign && ign.checked) {
@@ -758,18 +758,36 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                     credentials: 'same-origin',
                     body: JSON.stringify(body)
                 });
-                var data = await res.json().catch(function() { return {}; });
+                var rawText = await res.text();
+                var data = {};
+                try {
+                    data = rawText ? JSON.parse(rawText) : {};
+                } catch (parseErr) {
+                    data = { success: false, _parseError: true, _rawPreview: (rawText || '').slice(0, 2000) };
+                }
                 var lines = [];
-                if (!res.ok) {
+                var zioHttp2xx = res.status >= 200 && res.status < 300;
+                lines.push('<div class="text-secondary text-xs mb-2">ZIoCHub response: HTTP ' + res.status + '</div>');
+                if (!zioHttp2xx) {
                     lines.push('<div class="text-red-400">' + (data.message || ('HTTP ' + res.status)) + '</div>');
+                } else if (data._parseError) {
+                    lines.push('<div class="text-red-400 font-semibold mb-1">Could not parse JSON from ZIoCHub (upload test result lost).</div>');
+                    lines.push('<div class="text-secondary text-xs mb-1">Often caused by a proxy returning HTML or an unusual 2xx (e.g. 203) without JSON. Raw body preview:</div>');
+                    lines.push('<pre class="text-xs text-secondary whitespace-pre-wrap break-all max-h-48 overflow-auto border border-white/10 rounded p-2 bg-black/30">' + String(data._rawPreview || '').replace(/</g, '&lt;') + '</pre>');
                 } else if (data.success !== false) {
                     if (data.overall_success) {
-                        lines.push('<div class="text-green-400 font-semibold mb-2">Trellix EX test succeeded.</div>');
+                        lines.push('<div class="text-green-400 font-semibold mb-2">Trellix EX test succeeded (login + minimal YARA upload).</div>');
                     } else {
-                        lines.push('<div class="text-amber-400 font-semibold mb-2">Trellix EX test did not fully succeed  -  see details.</div>');
+                        lines.push('<div class="text-amber-400 font-semibold mb-2">Trellix EX test did not fully succeed  -  see per-target lines below.</div>');
+                    }
+                    if (data.summary) {
+                        lines.push('<div class="text-primary text-sm font-semibold mb-1">' + String(data.summary).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>');
                     }
                     if (data.message) {
-                        lines.push('<div class="text-secondary text-xs">' + String(data.message).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>');
+                        lines.push('<div class="text-secondary text-xs"><span class="opacity-75">Technical:</span> ' + String(data.message).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>');
+                    }
+                    if (data.hint) {
+                        lines.push('<div class="text-amber-200/95 text-xs mt-1 whitespace-pre-wrap border-l-2 border-amber-500/50 pl-2">' + String(data.hint).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>');
                     }
                     if (data.results && data.results.length) {
                         data.results.forEach(function(r) {
@@ -778,11 +796,27 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                             var color = ok ? 'text-green-400' : 'text-red-400';
                             var msg = (r.message || '').replace(/</g, '&lt;').replace(/&/g, '&amp;');
                             var name = (r.name || 'Trellix EX').replace(/</g, '&lt;');
-                            lines.push('<div class="' + color + '">[' + icon + '] <strong>' + name + '</strong>  -  ' + msg + '</div>');
+                            var phase = '';
+                            if (r.phase === 'login') phase = ' <span class="text-secondary text-xs">(login)</span>';
+                            else if (r.phase === 'upload') phase = ' <span class="text-secondary text-xs">(upload)</span>';
+                            else if (r.phase === 'delete') phase = ' <span class="text-secondary text-xs">(delete)</span>';
+                            else if (r.phase === 'config') phase = ' <span class="text-secondary text-xs">(config)</span>';
+                            var hs = (r.http_status !== undefined && r.http_status !== null && r.http_status !== '')
+                                ? ' <span class="text-cyan-300/90 text-xs">[Trellix HTTP ' + String(r.http_status) + ']</span>'
+                                : '';
+                            var sumL = (r.summary) ? '<div class="text-xs font-semibold text-primary/90 mb-0.5">' + String(r.summary).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>' : '';
+                            var hintL = (r.hint) ? '<div class="text-amber-200/95 text-xs mt-1 whitespace-pre-wrap border-l-2 border-amber-500/40 pl-2">' + String(r.hint).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>' : '';
+                            lines.push('<div class="' + color + ' mb-2">' + sumL + '<div>[' + icon + '] <strong>' + name + '</strong>' + phase + hs + '</div><div class="text-xs mt-0.5 opacity-90">' + msg + '</div>' + hintL + '</div>');
                         });
+                    } else {
+                        lines.push('<div class="text-amber-400 text-xs mt-2">No per-target results in the API payload. Check server logs for <code class="text-xs">admin_trellix_ex_test</code>.</div>');
                     }
                 } else {
-                    lines.push('<div class="text-red-400">' + (data.message || 'Test failed.') + '</div>');
+                    lines.push('<div class="text-red-400 font-semibold">' + (data.summary || 'Test blocked.') + '</div>');
+                    lines.push('<div class="text-red-400 text-sm mt-1">' + (data.message || 'Test failed.').replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>');
+                    if (data.hint) {
+                        lines.push('<div class="text-amber-200/95 text-xs mt-1 whitespace-pre-wrap border-l-2 border-amber-500/50 pl-2">' + String(data.hint).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>');
+                    }
                 }
                 outEl.innerHTML = lines.join('');
             } catch (err) {

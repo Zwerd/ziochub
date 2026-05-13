@@ -1005,6 +1005,20 @@
         });
     }
 
+    /** URL next to Copy: clickable in online mode; Copy still works offline. */
+    function playbookUrlLinkHtml(url) {
+        const u = (url || '').trim();
+        const text = escapeHtml(u);
+        const href = escapeAttr(u);
+        if (/^https?:\/\//i.test(u)) {
+            return (
+                '<a href="' + href + '" class="playbook-external-url text-secondary font-mono text-sm hover:underline break-all flex-1 min-w-0" ' +
+                'target="_blank" rel="noopener noreferrer">' + text + '</a>'
+            );
+        }
+        return '<span class="text-secondary font-mono text-sm break-all flex-1 min-w-0">' + text + '</span>';
+    }
+
     function showPlaybookSite(id) {
         const site = playbookSites.find(s => s.id === id);
         const contentEl = document.getElementById('playbookContent');
@@ -1053,7 +1067,7 @@
                         <div class="playbook-group-site">
                             <h4 class="text-lg font-semibold mb-2 accent-blue">${escapeHtml(s.name)}</h4>
                             <div class="flex items-center gap-2 mb-2">
-                                <span class="text-secondary font-mono text-sm">${escapeHtml(s.url)}</span>
+                                ${playbookUrlLinkHtml(s.url)}
                                 <button type="button" class="copy-ioc-btn btn-cmd-neutral text-xs flex-shrink-0" onclick="copyToClipboard('${urlAttr}')" title="Copy URL">Copy</button>
                             </div>
                             <div class="playbook-section-content">${s.descHtml}</div>
@@ -1080,7 +1094,7 @@
         contentEl.innerHTML = `
             <h3 class="text-xl font-bold mb-2 accent-blue">${escapeHtml(site.name)}</h3>
             <div class="flex items-center gap-2 mb-6">
-                <span class="text-secondary font-mono text-sm">${escapeHtml(site.url)}</span>
+                ${playbookUrlLinkHtml(site.url)}
                 <button type="button" class="copy-ioc-btn btn-cmd-neutral text-xs flex-shrink-0" onclick="copyToClipboard('${urlAttr}')" title="Copy URL">Copy</button>
             </div>
             <div class="playbook-section">

@@ -6,11 +6,12 @@ Requires a normal user session (form login). Environment variables (optional def
 
   ZIOCHUB_BASE_URL   e.g. https://ziochub.example.com:5000
   ZIOCHUB_USERNAME
-  ZIOCHUB_PASSWORD
+  ZIOCHUB_PASSWORD   optional; if unset and you omit --password on the CLI, the script prompts (no echo, not in shell history)
 
 Usage:
   python scripts/stix_taxii_lookup.py --type Domain --value evil.example.com
-  python scripts/stix_taxii_lookup.py -k --base-url https://host:5000 -u USER -p PASS -t IP -v 203.0.113.1
+  python scripts/stix_taxii_lookup.py -k --base-url https://host:5000 -u USER --type IP --value 203.0.113.1
+    (password: prompted if ZIOCHUB_PASSWORD is unset — do not pass passwords on the command line)
   python scripts/stix_taxii_lookup.py --type IP --value 203.0.113.1 --fetch-taxii
 
   -k / --insecure  Skip TLS certificate verification (needed for ZIoCHub default self-signed cert).
@@ -22,9 +23,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
+
+_PASSWORD_ARG_UNSET = object()
 
 
 def _die(msg: str, code: int = 1) -> None:
@@ -33,13 +37,36 @@ def _die(msg: str, code: int = 1) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description='ZIoCHub STIX/TAXII IOC lookup (authenticated).')
+    _epilog = """
+Examples:
+  %(prog)s --base-url https://ziochub.example.com:5000 -u analyst -t Domain -v evil.example.com
+      (password from ZIOCHUB_PASSWORD or interactive prompt)
+
+  %(prog)s -k --base-url https://host:5000 -u analyst -t IP -v 203.0.113.1
+      (-k skips TLS verification; common with self-signed certs)
+
+  %(prog)s -t Hash -v d41d8cd98f00b204e9800998ecf8427e --fetch-taxii
+      (also GET the public TAXII object URL when the API returns one)
+"""
+    p = argparse.ArgumentParser(
+        description='ZIoCHub STIX/TAXII IOC lookup (authenticated).',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_epilog,
+    )
     p.add_argument('--base-url', default=os.environ.get('ZIOCHUB_BASE_URL', '').rstrip('/'),
                    help='Server root URL (or set ZIOCHUB_BASE_URL)')
     p.add_argument('--user', '-u', default=os.environ.get('ZIOCHUB_USERNAME', ''),
                    help='Username (or ZIOCHUB_USERNAME)')
-    p.add_argument('--password', '-p', default=os.environ.get('ZIOCHUB_PASSWORD', ''),
-                   help='Password (or ZIOCHUB_PASSWORD)')
+    p.add_argument(
+        '--password',
+        nargs='?',
+        default=_PASSWORD_ARG_UNSET,
+        const=None,
+        metavar='VALUE',
+        help='Password. Prefer omitting this flag: uses ZIOCHUB_PASSWORD or secure prompt (no echo). '
+             'Passing a value here is insecure (may appear in shell history). '
+             '`--password` alone forces a prompt even if ZIOCHUB_PASSWORD is set.',
+    )
     p.add_argument('--type', '-t', required=True, help='IOC type: IP, Domain, URL, Hash, Email')
     p.add_argument('--value', '-v', required=True, help='IOC value')
     p.add_argument('--fetch-taxii', action='store_true',
@@ -55,8 +82,26 @@ def main() -> None:
 
     if not base_url:
         _die('Missing --base-url or ZIOCHUB_BASE_URL')
-    if not args.user or not args.password:
-        _die('Missing credentials: use --user/--password or ZIOCHUB_USERNAME / ZIOCHUB_PASSWORD')
+    if not args.user:
+        _die('Missing username: use --user or ZIOCHUB_USERNAME')
+
+    if args.password is _PASSWORD_ARG_UNSET:
+        password = (os.environ.get('ZIOCHUB_PASSWORD') or '').strip()
+        if not password:
+            try:
+                password = getpass.getpass('ZIOCHUB password: ')
+            except (EOFError, KeyboardInterrupt):
+                _die('Password input cancelled', 130)
+    elif args.password is None:
+        try:
+            password = getpass.getpass('ZIOCHUB password: ')
+        except (EOFError, KeyboardInterrupt):
+            _die('Password input cancelled', 130)
+    else:
+        password = args.password
+
+    if not password:
+        _die('Missing password: set ZIOCHUB_PASSWORD, enter at prompt, or pass --password (discouraged on CLI)')
 
     try:
         import requests
@@ -76,7 +121,7 @@ def main() -> None:
     login_url = f'{base_url}/login'
     r = s.post(
         login_url,
-        data={'username': args.user, 'password': args.password},
+        data={'username': args.user, 'password': password},
         allow_redirects=True,
         timeout=60,
     )

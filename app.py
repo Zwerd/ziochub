@@ -1403,6 +1403,20 @@ def _deleted_history_matches(h, query_lower, filter_type):
     if filter_type == 'ticket_id':
         ref = (payload.get('ticket_id') or '').lower()
         return query_lower in ref
+    if filter_type == 'metadata':
+        tags = payload.get('tags') or []
+        if isinstance(tags, str):
+            try:
+                tags = json.loads(tags)
+            except (TypeError, ValueError):
+                tags = []
+        tag_hit = any(query_lower in (str(t).lower()) for t in tags)
+        ref = (payload.get('ticket_id') or '').lower()
+        return (
+            query_lower in comment or query_lower in reason_l or
+            query_lower in user_lower or query_lower in orig_user or
+            (ref and query_lower in ref) or tag_hit
+        )
     if filter_type == 'tag':
         tags = payload.get('tags') or []
         if isinstance(tags, str):
@@ -1925,6 +1939,22 @@ def _ensure_campaign_reference_image_ext_column():
         print(f"[Migration] campaigns reference_image_ext: {e}")
 
 
+def _ensure_campaign_tags_column():
+    """Add tags (JSON array text) to campaigns for campaign-level tag propagation to IOCs."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(campaigns)"))
+        rows = result.fetchall()
+        if not rows:
+            return
+        if any((row[1] == 'tags' for row in rows)):
+            return
+        db.session.execute(text("ALTER TABLE campaigns ADD COLUMN tags TEXT DEFAULT '[]'"))
+        _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] campaigns tags: {e}")
+
+
 def _init_db():
     """Create tables and run legacy migration if DB is empty."""
     with app.app_context():
@@ -1957,6 +1987,7 @@ def _init_db():
         _ensure_campaign_dir_column()
         _ensure_campaign_created_by_column()
         _ensure_campaign_reference_image_ext_column()
+        _ensure_campaign_tags_column()
         _ensure_ioc_history_type_value_index()
         _ensure_ioc_notes_type_value_index()
         _ensure_champ_scores_streak_days_column()

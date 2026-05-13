@@ -31,6 +31,26 @@
     }
     global.detectTextDir = detectTextDir;
 
+    /** Compact badges: which fields matched (especially analyst notes vs submission comment). */
+    function searchMatchHintsHtml(result, query, filter) {
+        var hints = result.match_hints;
+        var q = (query || '').trim();
+        var f = filter || 'all';
+        if (!hints || !hints.length || !q) return '';
+        if (f === 'ioc_value' && hints.length === 1 && hints[0] === 'ioc_value') return '';
+        if (f === 'ticket_id' && hints.length === 1 && hints[0] === 'ticket') return '';
+        if (f === 'user' && hints.length === 1 && hints[0] === 'analyst') return '';
+        if (f === 'tag' && hints.length === 1 && hints[0] === 'tag') return '';
+        var parts = [];
+        for (var hi = 0; hi < hints.length; hi++) {
+            var h = hints[hi];
+            var key = 'search.hint.' + h;
+            var label = (typeof t === 'function' && t(key)) ? t(key) : h;
+            parts.push('<span class="search-match-hint" title="' + escapeAttr(label) + '">' + escapeHtml(label) + '</span>');
+        }
+        return '<div class="mt-1 flex flex-wrap gap-1 text-[10px] leading-snug text-secondary max-w-[16rem]">' + parts.join('') + '</div>';
+    }
+
     const searchInput = document.getElementById('searchInput');
     const searchButton = document.getElementById('searchButton');
     const searchResults = document.getElementById('searchResults');
@@ -335,9 +355,10 @@
         const icon = getIocTypeIcon(result.file_type, result.ioc, result.country_code);
         const f = (filter || 'all');
         const shouldHlAll = (f === 'all');
+        const noteMatched = Array.isArray(result.match_hints) && result.match_hints.indexOf('analyst_note') >= 0;
         const shouldHlIoc = shouldHlAll || f === 'ioc_value';
         const shouldHlUser = shouldHlAll || f === 'user';
-        const shouldHlComment = shouldHlAll || f === 'comment';
+        const shouldHlComment = shouldHlAll || f === 'comment' || f === 'note' || noteMatched;
         const shouldHlTicket = shouldHlAll || f === 'ticket_id';
         const shouldHlCampaign = shouldHlAll || f === 'campaign';
         const shouldHlTags = shouldHlAll || f === 'tag';
@@ -349,6 +370,7 @@
         const typeCellClass = isYara
             ? 'border border-white/10 px-4 py-2 font-mono text-sm text-amber-400'
             : (isCampaign ? 'border border-white/10 px-4 py-2 font-mono text-sm text-rose-300' : 'border border-white/10 px-4 py-2 font-mono text-sm');
+        const hintsHtml = searchMatchHintsHtml(result, query, filter);
         const isDeleted = result.status === 'Deleted';
         const graphBtnLabel = (typeof t === 'function' && t('tab.campaign')) ? t('tab.campaign') : 'Campaign Graph';
         const actionsCell = isCampaign
@@ -393,12 +415,12 @@
             : '<span class="text-secondary">-</span>';
 
         row.innerHTML = `
-            <td class="${typeCellClass}">${icon} ${result.file_type}</td>
+            <td class="${typeCellClass}">${icon} ${result.file_type}${hintsHtml}</td>
             <td class="border border-white/10 px-4 py-2 font-mono" title="${iocAttr}"><span class="inline-flex items-center gap-1">${iocDisplay} <button type="button" class="copy-ioc-btn btn-cmd-neutral btn-cmd-sm ml-1 flex-shrink-0" onclick="copyToClipboard(this.getAttribute('data-ioc'))" data-ioc="${iocAttr}" title="${t('actions.copy')}" aria-label="${t('actions.copy')}">${t('actions.copy')}</button></span></td>
             <td class="border border-white/10 px-4 py-2 text-sm">${result.date || 'N/A'}</td>
             <td class="border border-white/10 px-4 py-2 text-sm" title="${escapeAttr(result.user || '')}">${userDisplay}</td>
             <td class="border border-white/10 px-4 py-2 text-sm font-mono" title="${escapeAttr(result.ref || '')}">${ticketDisplay || '<span class="text-secondary">-</span>'}</td>
-            <td class="border border-white/10 px-4 py-2 text-sm" title="${escapeAttr(result.comment || '')}" dir="${typeof detectTextDir==='function'?detectTextDir(result.comment||''):'auto'}">${commentDisplay}</td>
+            <td class="border border-white/10 px-4 py-2 text-sm${noteMatched ? ' search-row-comment-note-match' : ''}" title="${escapeAttr(result.comment || '')}" dir="${typeof detectTextDir==='function'?detectTextDir(result.comment||''):'auto'}">${commentDisplay}</td>
             <td class="border border-white/10 px-4 py-2 text-sm">${tagsDisplay}</td>
             <td class="border border-white/10 px-4 py-2 text-sm" title="${escapeAttr(result.campaign_name || '')}">${campaignDisplay || '<span class="text-secondary">-</span>'}</td>
             <td class="border border-white/10 px-4 py-2">${expirationBadge}</td>

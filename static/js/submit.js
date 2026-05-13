@@ -1179,6 +1179,7 @@ window.validateStagingItem = validateStagingItem;
 window.setBulkUploadMode = setBulkUploadMode;
 window.addSingleToStaging = addSingleToStaging;
 window.invalidateStagingAnalystCache = function () { _cachedStagingAnalystUsers = null; };
+window.maybeSuggestInvalidTags = maybeSuggestInvalidTags;
 
 // Auto-detect RTL/LTR direction for all comment fields
 if (typeof initAutoDirFields === 'function') {

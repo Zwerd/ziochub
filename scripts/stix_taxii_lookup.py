@@ -10,7 +10,10 @@ Requires a normal user session (form login). Environment variables (optional def
 
 Usage:
   python scripts/stix_taxii_lookup.py --type Domain --value evil.example.com
+  python scripts/stix_taxii_lookup.py -k --base-url https://host:5000 -u USER -p PASS -t IP -v 203.0.113.1
   python scripts/stix_taxii_lookup.py --type IP --value 203.0.113.1 --fetch-taxii
+
+  -k / --insecure  Skip TLS certificate verification (needed for ZIoCHub default self-signed cert).
 
 --fetch-taxii performs an extra unauthenticated GET to the public TAXII object URL
 (same as FireEye would see if feeds are public) and prints the response status + JSON.
@@ -41,9 +44,16 @@ def main() -> None:
     p.add_argument('--value', '-v', required=True, help='IOC value')
     p.add_argument('--fetch-taxii', action='store_true',
                    help='Also GET the TAXII object URL (no session cookie); needs public feeds enabled')
+    p.add_argument('--insecure', '-k', action='store_true',
+                   help='Skip TLS certificate verification (use with ZIoCHub self-signed HTTPS)')
     args = p.parse_args()
 
-    if not args.base_url:
+    base_url = (args.base_url or '').rstrip('/')
+    verify_tls = not args.insecure
+    if verify_tls and os.environ.get('ZIOCHUB_SSL_VERIFY', '').strip().lower() in ('0', 'false', 'no'):
+        verify_tls = False
+
+    if not base_url:
         _die('Missing --base-url or ZIOCHUB_BASE_URL')
     if not args.user or not args.password:
         _die('Missing credentials: use --user/--password or ZIOCHUB_USERNAME / ZIOCHUB_PASSWORD')
@@ -55,20 +65,37 @@ def main() -> None:
 
     s = requests.Session()
     s.headers.setdefault('User-Agent', 'ziochub-stix-taxii-lookup/1.0')
+    s.verify = verify_tls
+    if not verify_tls:
+        try:
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        except Exception:
+            pass
 
-    login_url = f'{args.base_url}/login'
+    login_url = f'{base_url}/login'
     r = s.post(
         login_url,
         data={'username': args.user, 'password': args.password},
         allow_redirects=True,
         timeout=60,
     )
+    if r.status_code == 401:
+        _die(
+            'Login failed (HTTP 401): invalid username or password.\n'
+            'STIX is returned only after a successful login ( /api/stix-ioc-lookup requires a session ).\n'
+            'Verify the same credentials in the browser; user name is matched case-insensitively.'
+        )
     if r.status_code != 200:
-        _die(f'Login HTTP {r.status_code}: {r.text[:500]}')
+        body = (r.text or '')[:500].replace('\n', ' ')
+        _die(f'Login HTTP {r.status_code}. Response body (truncated): {body}')
     if '/login' in (r.url or '') and 'change-password' not in (r.url or ''):
-        _die('Login appears to have failed (still on login page). Check user/password or forced password change.')
+        _die(
+            'Login appears to have failed (still on /login). Check user/password.\n'
+            'STIX output requires an authenticated session.'
+        )
 
-    lookup_url = f'{args.base_url}/api/stix-ioc-lookup'
+    lookup_url = f'{base_url}/api/stix-ioc-lookup'
     r2 = s.get(
         lookup_url,
         params={'type': args.type.strip(), 'value': args.value.strip()},
@@ -76,6 +103,24 @@ def main() -> None:
         timeout=60,
     )
     print(f'GET {r2.url} -> HTTP {r2.status_code}')
+    if r2.status_code == 404:
+        _die(
+            'HTTP 404: this server does not expose /api/stix-ioc-lookup (route missing).\n'
+            'The STIX lookup API was added in newer ZIoCHub sources (routes/search.py).\n'
+            'Fix: copy updated app code to the server (at least routes/search.py), then:\n'
+            '     sudo systemctl restart ziochub\n'
+            'If you use /opt/ziochub from setup.sh, run an upgrade from a fresh installer ZIP or sync files there.'
+        )
+    if r2.status_code == 403:
+        try:
+            err = r2.json()
+        except Exception:
+            err = {}
+        if err.get('require_password_change'):
+            _die(
+                'API returned 403: this user must change password before using the app (and this script).\n'
+                'Log in once in the browser, complete password change, then retry.'
+            )
     try:
         data = r2.json()
     except Exception:
@@ -92,6 +137,7 @@ def main() -> None:
             taxii_url,
             headers={'Accept': accept},
             timeout=60,
+            verify=verify_tls,
         )
         print('\n--- TAXII GET object (unauthenticated) ---')
         print(f'GET {taxii_url} -> HTTP {r3.status_code}')

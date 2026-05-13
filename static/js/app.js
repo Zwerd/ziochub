@@ -905,5 +905,5 @@ document.addEventListener('keydown', (e) => {
 
 // IOC tag fields: autocomplete + lowercase on blur (server also normalizes)
 if (typeof initTagAutocomplete === 'function') {
-    initTagAutocomplete(['iocTags', 'editTags', 'txtTagsForAll', 'pasteTagsForAll', 'csvTagsForAll']);
+    initTagAutocomplete(['iocTags', 'editTags', 'txtTagsForAll', 'pasteTagsForAll', 'csvTagsForAll', 'campaignCreateTags', 'campaignEditTags']);
 }

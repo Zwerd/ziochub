@@ -14,17 +14,33 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify, Response, current_app, send_file
 from werkzeug.utils import secure_filename
 from flask_login import current_user
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from extensions import db
-from models import Campaign, IOC, YaraRule
+from models import Campaign, IOC, YaraRule, _utcnow
 from utils.decorators import login_required
+from utils.tags import normalize_tags_from_input
+from utils.campaign_tag_sync import parse_tags_field, merge_tag_lists, sync_added_tags_to_campaign_iocs
 
 
 bp = Blueprint('campaigns_api', __name__, url_prefix='/api')
 
 ALLOWED_CAMPAIGN_IMAGE_EXT = frozenset({'jpg', 'jpeg', 'png', 'gif', 'webp'})
 _MAX_CAMPAIGN_IMAGE_BYTES = 8 * 1024 * 1024  # 8 MB
+
+
+def _campaign_tags_validated_or_error(tags_list):
+    """
+    Same tag governance as IOC submit (routes.ioc._validate_tags_or_reject).
+    Returns (valid_tags_list, None) or (None, (response, status_code)).
+    """
+    _get_setting, = _from_app('_get_setting')
+    from routes.ioc import _validate_tags_or_reject
+    valid, err = _validate_tags_or_reject(tags_list or [], _get_setting)
+    if err is not None:
+        return None, err
+    return valid, None
 
 
 def _from_app(*names):
@@ -123,6 +139,7 @@ def list_campaigns():
                     'dir': getattr(c, 'dir', None) or 'ltr',
                     'created_at': c.created_at.isoformat() if c.created_at else None,
                     'has_reference_image': bool(getattr(c, 'reference_image_ext', None)),
+                    'tags': parse_tags_field(getattr(c, 'tags', None)),
                 }
                 for c in campaigns
             ],
@@ -153,10 +170,18 @@ def create_campaign():
         if not name:
             return jsonify({'success': False, 'message': 'Campaign name is required'}), 400
 
+        tags_list = normalize_tags_from_input(data.get('tags'))
+        valid_tags, tags_err = _campaign_tags_validated_or_error(tags_list)
+        if tags_err is not None:
+            return tags_err
+
         champs_before = _capture_champs_before(current_user.id, (current_user.username or '').lower()) if current_user and current_user.is_authenticated else None
 
         created_by = current_user.id if current_user and current_user.is_authenticated else None
-        db.session.add(Campaign(name=name, description=description, dir=dir_val, created_by=created_by))
+        db.session.add(Campaign(
+            name=name, description=description, dir=dir_val, created_by=created_by,
+            tags=json.dumps(valid_tags) if valid_tags else '[]',
+        ))
         _commit_with_retry()
         audit_log('CAMPAIGN_CREATE', f'name={name}')
         c = Campaign.query.filter_by(name=name).first()
@@ -180,6 +205,7 @@ def create_campaign():
                 'dir': c.dir or 'ltr',
                 'created_at': c.created_at.isoformat() if c.created_at else None,
                 'has_reference_image': bool(getattr(c, 'reference_image_ext', None)),
+                'tags': parse_tags_field(getattr(c, 'tags', None)),
             }
         }
         if champs_before and current_user and current_user.is_authenticated:
@@ -219,7 +245,7 @@ def link_ioc_to_campaign():
         campaign = db.session.get(Campaign, campaign_id)
         if not campaign:
             return jsonify({'success': False, 'message': 'Campaign not found'}), 404
-        ioc = IOC.query.filter(IOC.value == ioc_value).first()
+        ioc = IOC.query.filter(func.lower(IOC.value) == ioc_value.strip().lower()).first()
         if not ioc:
             return jsonify({'success': False, 'message': MSG_IOC_NOT_FOUND}), 404
 
@@ -231,12 +257,27 @@ def link_ioc_to_campaign():
         if old_campaign_id:
             old_camp = db.session.get(Campaign, old_campaign_id)
             old_campaign_name = (old_camp.name if old_camp else '')
+        old_tags_list = parse_tags_field(ioc.tags)
+        campaign_tag_list = parse_tags_field(getattr(campaign, 'tags', None))
         ioc.campaign_id = campaign_id
+        edit_changes = []
         if old_campaign_id != campaign_id:
-            edit_changes = [{'field': 'campaign', 'old': old_campaign_name or '\u2014', 'new': campaign.name}]
-            _log_ioc_history(ioc.type, ioc_value, 'edited',
-                             current_user.username if current_user and current_user.is_authenticated else None,
-                             {'changes': edit_changes})
+            edit_changes.append({'field': 'campaign', 'old': old_campaign_name or '\u2014', 'new': campaign.name})
+        merged_tags, newly = merge_tag_lists(old_tags_list, campaign_tag_list)
+        if newly:
+            old_display = ', '.join(old_tags_list) if old_tags_list else ''
+            new_display = ', '.join(merged_tags) if merged_tags else ''
+            ioc.tags = json.dumps(merged_tags)
+            ioc.modified_at = _utcnow()
+            edit_changes.append({'field': 'tags', 'old': old_display or '\u2014', 'new': new_display or '\u2014'})
+        if edit_changes:
+            _log_ioc_history(
+                ioc.type,
+                (ioc.value or '').strip(),
+                'edited',
+                current_user.username if current_user and current_user.is_authenticated else None,
+                {'changes': edit_changes, 'source': 'campaign_link'},
+            )
         _commit_with_retry()
         audit_log('IOC_CAMPAIGN_LINK', f'ioc_value={ioc_value[:80]} campaign={campaign.name} type={ioc.type}')
         # Champs Smart Effort: reward first-time campaign linking as a separate effort event
@@ -280,12 +321,19 @@ def link_ioc_to_campaign():
 @login_required
 def update_campaign(campaign_id):
     """Update campaign name and/or description."""
-    _commit_with_retry, audit_log = _from_app('_commit_with_retry', 'audit_log')
+    _commit_with_retry, audit_log, _log_ioc_history = _from_app('_commit_with_retry', 'audit_log', '_log_ioc_history')
     try:
         campaign = db.session.get(Campaign, campaign_id)
         if not campaign:
             return jsonify({'success': False, 'message': 'Campaign not found'}), 404
         data = request.get_json() or {}
+        new_tags_for_update = None
+        if 'tags' in data:
+            raw_tags = normalize_tags_from_input(data.get('tags'))
+            valid_tags, tags_err = _campaign_tags_validated_or_error(raw_tags)
+            if tags_err is not None:
+                return tags_err
+            new_tags_for_update = valid_tags
         name = (data.get('name') or '').strip()
         if name:
             campaign.name = name
@@ -297,6 +345,14 @@ def update_campaign(campaign_id):
             dir_val = (dir_val or 'ltr').strip().lower()
             if dir_val in ('ltr', 'rtl'):
                 campaign.dir = dir_val
+        if new_tags_for_update is not None:
+            old_tags = parse_tags_field(getattr(campaign, 'tags', None))
+            old_lower = {(t or '').strip().lower() for t in old_tags if (t or '').strip()}
+            added_tags = [t for t in new_tags_for_update if (t or '').strip().lower() not in old_lower]
+            campaign.tags = json.dumps(new_tags_for_update) if new_tags_for_update else '[]'
+            uname = current_user.username if current_user and current_user.is_authenticated else None
+            if added_tags:
+                sync_added_tags_to_campaign_iocs(campaign_id, added_tags, uname, _log_ioc_history)
         _commit_with_retry()
         audit_log('CAMPAIGN_UPDATE', f'id={campaign_id} name={campaign.name}')
         return jsonify({
@@ -308,6 +364,7 @@ def update_campaign(campaign_id):
                 'description': campaign.description,
                 'dir': campaign.dir or 'ltr',
                 'has_reference_image': bool(getattr(campaign, 'reference_image_ext', None)),
+                'tags': parse_tags_field(getattr(campaign, 'tags', None)),
             }
         })
     except IntegrityError:
@@ -572,6 +629,7 @@ def export_campaign_json(campaign_id):
                 'id': campaign.id,
                 'name': campaign.name,
                 'description': campaign.description or '',
+                'tags': parse_tags_field(getattr(campaign, 'tags', None)),
             },
             'exported_at': datetime.now().strftime('%Y-%m-%dT%H:%M:%S'),
             'iocs': [],
@@ -820,4 +878,58 @@ def campaign_graph(campaign_id):
             },
         })
     except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/campaign-graph/<int:campaign_id>/investigate/ioc/<int:ioc_id>', methods=['GET'])
+@login_required
+def campaign_graph_investigate_ioc(campaign_id, ioc_id):
+    """
+    Campaign Search mode: IOC details, tags, full history, and related IOCs in the same campaign
+    (sorted by shared tags count).
+    """
+    from routes.search import build_ioc_history_events_list
+    try:
+        campaign = db.session.get(Campaign, campaign_id)
+        if not campaign:
+            return jsonify({'success': False, 'message': 'Campaign not found'}), 404
+        ioc = db.session.get(IOC, ioc_id)
+        if not ioc or ioc.campaign_id != campaign_id:
+            return jsonify({'success': False, 'message': 'IOC not in this campaign'}), 404
+        tags = parse_tags_field(ioc.tags)
+        events = build_ioc_history_events_list(ioc.type, (ioc.value or '').strip())
+        focus_tags = {t.lower() for t in tags if t}
+        related = []
+        for o in IOC.query.filter(IOC.campaign_id == campaign_id, IOC.id != ioc_id).all():
+            ot = parse_tags_field(o.tags)
+            shared = [t for t in ot if t.lower() in focus_tags]
+            related.append({
+                'id': o.id,
+                'type': o.type,
+                'value': o.value,
+                'shared_tags': shared,
+                'shared_count': len(shared),
+            })
+        related.sort(key=lambda r: (-r['shared_count'], (r.get('value') or '').lower()))
+        related = related[:40]
+        return jsonify({
+            'success': True,
+            'campaign': {'id': campaign.id, 'name': campaign.name},
+            'ioc': {
+                'id': ioc.id,
+                'type': ioc.type,
+                'value': ioc.value,
+                'tags': tags,
+                'comment': ioc.comment or '',
+                'ticket_id': ioc.ticket_id or '',
+                'analyst': ioc.analyst or '',
+                'expiration': ioc.expiration_date.strftime('%Y-%m-%d') if ioc.expiration_date else None,
+                'created_at': ioc.created_at.isoformat() if ioc.created_at else None,
+                'revoked': bool(getattr(ioc, 'revoked', False)),
+            },
+            'events': events,
+            'related': related,
+        })
+    except Exception as e:
+        logging.exception('campaign_graph_investigate_ioc')
         return jsonify({'success': False, 'message': str(e)}), 500

@@ -216,6 +216,601 @@ body, input, select, textarea, button, label, .tab-button {
     background: var(--bg-secondary);
 }
 
+/* Vis canvas stays on the background plane; Investigate HUD paints opaque panels above it */
+#campaign-graph-viz-stack {
+    isolation: isolate;
+}
+/* Campaign Graph right rail: Create + Link share height 50/50; each body scrolls independently */
+.campaigns-right-rail {
+    align-self: stretch;
+}
+.campaigns-right-rail-split {
+    flex: 1 1 0;
+    min-height: 0;
+    min-width: 0;
+}
+.campaigns-right-rail-scroll {
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}
+/* Viewport for vis-network: scroll when graph is taller/wider than panel (IOC thumbnails stay readable). */
+#campaign-graph-scroll-wrap {
+    flex: 1 1 0;
+    min-height: 0;
+    min-width: 0;
+    overscroll-behavior: contain;
+}
+#campaign-graph-viz-stack #campaign-network {
+    position: relative;
+    z-index: 0;
+}
+
+/* Search & Investigate: where the query matched (badges) + analyst-note emphasis on Comment column */
+.search-match-hint {
+    display: inline-block;
+    padding: 0.12rem 0.45rem;
+    border-radius: 0.25rem;
+    background: rgba(15, 23, 42, 0.75);
+    border: 1px solid rgba(0, 212, 255, 0.25);
+    color: rgba(165, 243, 252, 0.92);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+[data-theme="light"] .search-match-hint {
+    background: rgba(241, 245, 249, 0.95);
+    border-color: rgba(0, 102, 204, 0.22);
+    color: rgba(15, 23, 42, 0.9);
+}
+.search-row-comment-note-match {
+    box-shadow: inset 3px 0 0 rgba(34, 211, 238, 0.55);
+}
+
+/* Campaign graph Search mode: focus card entrance */
+.campaign-search-focus-card {
+    transform: scale(0.94);
+    opacity: 0.88;
+}
+.campaign-search-focus-card.is-visible {
+    transform: scale(1);
+    opacity: 1;
+}
+
+/* Investigate: full-area frosted backdrop over Vis; cards sit above (see .campaign-search-focus-shell) */
+.campaign-search-focus-overlay {
+    background: transparent;
+    pointer-events: none;
+}
+.campaign-search-focus-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: auto;
+    background: rgba(2, 6, 23, 0.48);
+    backdrop-filter: blur(18px) saturate(118%);
+    -webkit-backdrop-filter: blur(18px) saturate(118%);
+}
+[data-theme="light"] .campaign-search-focus-backdrop {
+    background: rgba(248, 250, 252, 0.55);
+    backdrop-filter: blur(16px) saturate(125%);
+    -webkit-backdrop-filter: blur(16px) saturate(125%);
+}
+.campaign-search-focus-shell {
+    min-height: 0;
+}
+
+/* Investigate: full-bleed panels in graph area (not a narrow centered column) */
+.campaign-search-focus-card-column {
+    display: flex;
+    flex-direction: column;
+}
+.campaign-investigate-stack {
+    flex: 1 1 0;
+    min-height: 0;
+}
+.campaign-search-focus-card-column .campaign-game-hud__split {
+    flex: 1 1 0;
+    min-height: 0;
+    align-content: stretch;
+}
+@media (min-width: 640px) {
+    .campaign-search-focus-card-column .campaign-game-hud__split {
+        grid-template-rows: 1fr;
+    }
+}
+.campaign-search-focus-card-column .campaign-game-panel--log .campaign-game-log-list,
+.campaign-search-focus-card-column .campaign-game-panel--notes .campaign-game-notes-list {
+    max-height: none;
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+}
+.campaign-search-focus-card-column .campaign-game-related-grid--scroll {
+    max-height: none;
+    flex: 1 1 0;
+    min-height: 0;
+}
+
+/*
+ * Investigate mode (Campaign Graph): one scrollbar on the main column edge — reading-pane pattern.
+ * Inner panels no longer compete with nested scrollbars at 100% zoom (History | Notes | Related).
+ */
+.campaign-search-focus-overlay .campaign-investigate-stack {
+    flex: 0 0 auto;
+    min-height: 0;
+}
+.campaign-search-focus-overlay .campaign-search-focus-card-column .campaign-game-hud__split {
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+}
+.campaign-search-focus-overlay .campaign-search-focus-card-column .campaign-game-panel--log .campaign-game-log-list,
+.campaign-search-focus-overlay .campaign-search-focus-card-column .campaign-game-panel--notes .campaign-game-notes-list {
+    flex: none !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    overflow-y: visible !important;
+    padding-right: 0;
+}
+.campaign-search-focus-overlay .campaign-search-focus-card-column .campaign-game-panel--related {
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+}
+.campaign-search-focus-overlay .campaign-search-focus-card-column .campaign-game-related-grid--scroll {
+    flex: none !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    overflow-y: visible !important;
+    padding-right: 0;
+}
+.campaign-search-focus-overlay .campaign-search-focus-card-column.campaign-game-hud-scroll {
+    scrollbar-gutter: stable;
+}
+
+.campaign-search-focus-overlay .campaign-game-hud__chrome,
+.campaign-search-focus-overlay .campaign-search-focus-card-column {
+    pointer-events: auto;
+    position: relative;
+    z-index: 2;
+}
+
+/* ── Campaign Search: “game HUD” investigation console ── */
+.campaign-game-hud {
+    font-variant-numeric: tabular-nums;
+}
+.campaign-game-hud__chrome {
+    box-shadow: 0 0 24px rgba(0, 212, 255, 0.08), inset 0 -1px 0 rgba(0, 212, 255, 0.15);
+}
+.campaign-game-hud__chrome-divider {
+    width: 1px;
+    height: 1.25rem;
+    background: linear-gradient(to bottom, transparent, rgba(0, 212, 255, 0.45), transparent);
+    flex-shrink: 0;
+}
+.campaign-game-breadcrumb {
+    color: rgba(148, 163, 184, 0.95);
+    letter-spacing: 0.04em;
+}
+.campaign-game-back-btn {
+    flex-shrink: 0;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-primary);
+    background: linear-gradient(145deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.98));
+    border: 1px solid rgba(0, 212, 255, 0.35);
+    border-radius: 0.25rem;
+    box-shadow: 0 0 12px rgba(0, 212, 255, 0.12);
+    transition: border-color 0.15s, box-shadow 0.15s, color 0.15s;
+}
+.campaign-game-back-btn:hover {
+    border-color: rgba(0, 212, 255, 0.65);
+    box-shadow: 0 0 18px rgba(0, 212, 255, 0.22);
+    color: var(--accent-blue);
+}
+.campaign-game-hud__upper {
+    background: linear-gradient(180deg, rgba(2, 6, 23, 0.92) 0%, rgba(15, 23, 42, 0.55) 100%);
+    border-bottom: 1px solid rgba(0, 212, 255, 0.12);
+}
+.campaign-game-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+    gap: 0.5rem;
+}
+.campaign-game-stat-tile {
+    position: relative;
+    padding: 0.55rem 0.65rem 0.5rem;
+    background: linear-gradient(160deg, rgba(15, 23, 42, 0.92) 0%, rgba(2, 6, 23, 0.88) 100%);
+    border: 1px solid rgba(0, 212, 255, 0.22);
+    border-radius: 0.35rem;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.04),
+        0 2px 8px rgba(0, 0, 0, 0.35);
+    clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 8px 100%, 0 calc(100% - 8px));
+    min-height: 3.25rem;
+}
+.campaign-game-stat-tile::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.5), transparent);
+    opacity: 0.85;
+    pointer-events: none;
+}
+.campaign-game-stat-tile__label {
+    display: block;
+    font-size: 0.62rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: rgba(148, 163, 184, 0.95);
+    margin-bottom: 0.2rem;
+}
+.campaign-game-stat-tile__value {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    line-height: 1.35;
+    word-break: break-word;
+}
+.campaign-game-stat-tile--wide {
+    grid-column: 1 / -1;
+    clip-path: none;
+}
+.campaign-game-stat-tile--comment .campaign-game-stat-tile__value {
+    font-weight: 500;
+    white-space: pre-wrap;
+    font-size: 0.8rem;
+}
+.campaign-game-btn-copy {
+    margin-top: 0.5rem;
+    padding: 0.35rem 0.85rem;
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent-blue);
+    background: rgba(0, 212, 255, 0.08);
+    border: 1px solid rgba(0, 212, 255, 0.35);
+    border-radius: 0.25rem;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+.campaign-game-btn-copy:hover {
+    background: rgba(0, 212, 255, 0.16);
+    border-color: rgba(0, 212, 255, 0.55);
+}
+.campaign-game-target-panel {
+    border-color: rgba(0, 212, 255, 0.45) !important;
+    background: linear-gradient(165deg, rgba(15, 23, 42, 0.95), rgba(2, 6, 23, 0.88)) !important;
+    box-shadow:
+        0 0 0 1px rgba(0, 212, 255, 0.12),
+        0 8px 32px rgba(0, 0, 0, 0.45),
+        0 0 40px rgba(0, 212, 255, 0.08);
+}
+.campaign-game-target-panel__glow {
+    position: absolute;
+    inset: -40%;
+    background: radial-gradient(ellipse at 50% 0%, rgba(0, 212, 255, 0.18), transparent 55%);
+    pointer-events: none;
+    z-index: 0;
+}
+.campaign-game-tag-rack .campaign-game-tag {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.25rem 0.55rem;
+    border-radius: 0.2rem;
+    border: 1px solid rgba(0, 212, 255, 0.28);
+    background: rgba(8, 47, 73, 0.65);
+    color: rgba(165, 243, 252, 0.95);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.campaign-game-hud__gap {
+    flex: 2 1 0;
+    min-height: 64px;
+    min-width: 0;
+}
+.campaign-game-hud__lower {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+    min-width: 0;
+    background: linear-gradient(0deg, rgba(2, 6, 23, 0.94) 0%, rgba(15, 23, 42, 0.72) 100%);
+    border-top: 1px solid rgba(0, 212, 255, 0.15);
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* Scroll areas: flex-safe min-height + visible scrollbar when content overflows */
+.campaign-game-hud-scroll {
+    min-height: 0;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 212, 255, 0.45) rgba(15, 23, 42, 0.6);
+}
+.campaign-game-hud-scroll::-webkit-scrollbar {
+    width: 10px;
+}
+.campaign-game-hud-scroll::-webkit-scrollbar-track {
+    background: rgba(2, 6, 23, 0.45);
+    border-radius: 6px;
+    margin: 4px 0;
+}
+.campaign-game-hud-scroll::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(0, 212, 255, 0.45), rgba(0, 212, 255, 0.22));
+    border-radius: 6px;
+    border: 2px solid rgba(2, 6, 23, 0.5);
+}
+.campaign-game-hud-scroll::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgba(0, 212, 255, 0.65), rgba(0, 212, 255, 0.35));
+}
+[data-theme="light"] .campaign-game-hud-scroll {
+    scrollbar-color: rgba(0, 102, 204, 0.5) rgba(241, 245, 249, 0.95);
+}
+[data-theme="light"] .campaign-game-hud-scroll::-webkit-scrollbar-track {
+    background: rgba(226, 232, 240, 0.9);
+}
+[data-theme="light"] .campaign-game-hud-scroll::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(0, 102, 204, 0.45), rgba(0, 102, 204, 0.2));
+    border-color: rgba(241, 245, 249, 0.9);
+}
+.campaign-game-panel {
+    padding: 0.65rem 0.75rem;
+    background: rgba(2, 6, 23, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.4rem;
+}
+.campaign-game-panel__title {
+    font-size: 0.65rem;
+    font-weight: 800;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: rgba(0, 212, 255, 0.85);
+    padding-bottom: 0.35rem;
+    margin-bottom: 0.45rem;
+    border-bottom: 1px solid rgba(0, 212, 255, 0.2);
+}
+.campaign-game-panel__hint {
+    font-size: 0.7rem;
+    color: rgba(148, 163, 184, 0.95);
+    line-height: 1.4;
+}
+.campaign-game-log-entry {
+    padding: 0.5rem 0.65rem;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    background: linear-gradient(90deg, rgba(15, 23, 42, 0.85), rgba(2, 6, 23, 0.65));
+    border-radius: 0.25rem;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-left: 3px solid rgba(0, 212, 255, 0.45);
+}
+.campaign-game-log-entry .campaign-game-log-type {
+    font-weight: 800;
+    color: rgba(226, 232, 240, 0.98);
+}
+.campaign-game-related-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.5rem;
+}
+/* Scroll inside Related when many IOC cards (Investigate HUD) */
+.campaign-game-related-grid--scroll {
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    align-content: start;
+    padding-right: 2px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 212, 255, 0.45) rgba(2, 6, 23, 0.5);
+}
+.campaign-game-related-grid--scroll::-webkit-scrollbar {
+    width: 10px;
+}
+.campaign-game-related-grid--scroll::-webkit-scrollbar-track {
+    background: rgba(2, 6, 23, 0.45);
+    border-radius: 6px;
+}
+.campaign-game-related-grid--scroll::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(0, 212, 255, 0.45), rgba(0, 212, 255, 0.2));
+    border-radius: 6px;
+    border: 2px solid rgba(2, 6, 23, 0.45);
+}
+.campaign-game-related-grid--scroll::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, rgba(0, 212, 255, 0.65), rgba(0, 212, 255, 0.35));
+}
+[data-theme="light"] .campaign-game-related-grid--scroll {
+    scrollbar-color: rgba(0, 102, 204, 0.45) rgba(241, 245, 249, 0.95);
+}
+[data-theme="light"] .campaign-game-related-grid--scroll::-webkit-scrollbar-track {
+    background: rgba(226, 232, 240, 0.95);
+}
+.campaign-game-related-card {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
+    width: 100%;
+    text-align: start;
+    padding: 0.55rem 0.65rem;
+    min-height: 4.25rem;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+    background: linear-gradient(155deg, rgba(15, 23, 42, 0.95), rgba(2, 6, 23, 0.9));
+    border: 1px solid rgba(0, 212, 255, 0.2);
+    border-radius: 0.35rem;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    transition: border-color 0.15s, transform 0.12s, box-shadow 0.15s;
+}
+.campaign-game-related-card:hover {
+    border-color: rgba(0, 212, 255, 0.55);
+    box-shadow: 0 0 16px rgba(0, 212, 255, 0.12);
+    transform: translateY(-1px);
+}
+.campaign-game-related-card__type {
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: rgba(0, 212, 255, 0.9);
+}
+.campaign-game-related-card__value {
+    font-size: 0.8rem;
+    font-weight: 600;
+    font-family: ui-monospace, Consolas, monospace;
+    word-break: break-all;
+    color: var(--text-primary);
+    line-height: 1.3;
+}
+.campaign-game-related-card__shared {
+    font-size: 0.62rem;
+    color: rgba(103, 232, 249, 0.85);
+    line-height: 1.3;
+}
+.campaign-game-related-empty {
+    grid-column: 1 / -1;
+    font-size: 0.8rem;
+    color: rgba(148, 163, 184, 0.95);
+    padding: 0.5rem;
+    text-align: center;
+    border: 1px dashed rgba(255, 255, 255, 0.12);
+    border-radius: 0.35rem;
+}
+
+/* Investigate HUD: History | Notes (fixed screen order; text dir per note) */
+.campaign-game-hud__split {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+    min-width: 0;
+    direction: ltr;
+}
+@media (min-width: 640px) {
+    .campaign-game-hud__split {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    }
+}
+.campaign-game-panel--notes .campaign-game-notes-list {
+    max-height: min(28vh, 220px);
+    overflow-y: auto;
+    padding-right: 2px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 212, 255, 0.35) rgba(2, 6, 23, 0.45);
+}
+.campaign-game-panel--notes .campaign-game-notes-list::-webkit-scrollbar {
+    width: 8px;
+}
+.campaign-game-panel--notes .campaign-game-notes-list::-webkit-scrollbar-thumb {
+    background: rgba(0, 212, 255, 0.35);
+    border-radius: 4px;
+}
+.campaign-game-panel--log .campaign-game-log-list {
+    max-height: min(28vh, 220px);
+    overflow-y: auto;
+    padding-right: 2px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 212, 255, 0.35) rgba(2, 6, 23, 0.45);
+}
+.campaign-game-panel--log .campaign-game-log-list::-webkit-scrollbar {
+    width: 8px;
+}
+.campaign-game-panel--log .campaign-game-log-list::-webkit-scrollbar-thumb {
+    background: rgba(0, 212, 255, 0.35);
+    border-radius: 4px;
+}
+.campaign-game-note-card {
+    padding: 0.5rem 0.6rem;
+    border-radius: 0.35rem;
+    border: 1px solid rgba(0, 212, 255, 0.18);
+    background: linear-gradient(165deg, rgba(15, 23, 42, 0.9), rgba(2, 6, 23, 0.75));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.campaign-game-note-card__meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.35rem 0.5rem;
+    margin-bottom: 0.35rem;
+    font-size: 0.72rem;
+}
+.campaign-game-note-card__user {
+    font-weight: 800;
+    color: rgba(226, 232, 240, 0.98);
+}
+.campaign-game-note-card__when {
+    font-size: 0.68rem;
+    color: rgba(148, 163, 184, 0.95);
+    font-family: ui-monospace, Consolas, monospace;
+}
+.campaign-game-note-card__body {
+    font-size: 0.8rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-primary);
+}
+[data-theme="light"] .campaign-game-note-card {
+    background: linear-gradient(165deg, #fff, #f1f5f9);
+    border-color: rgba(0, 102, 204, 0.2);
+}
+[data-theme="light"] .campaign-game-panel--notes .campaign-game-notes-list {
+    scrollbar-color: rgba(0, 102, 204, 0.4) rgba(241, 245, 249, 0.95);
+}
+[data-theme="light"] .campaign-game-hud__upper {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(241, 245, 249, 0.75) 100%);
+    border-bottom-color: rgba(0, 102, 204, 0.18);
+}
+[data-theme="light"] .campaign-game-stat-tile {
+    background: linear-gradient(160deg, #f8fafc, #f1f5f9);
+    border-color: rgba(0, 102, 204, 0.22);
+    box-shadow: inset 0 1px 0 #fff, 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+[data-theme="light"] .campaign-game-stat-tile__label {
+    color: rgba(71, 85, 105, 0.95);
+}
+[data-theme="light"] .campaign-game-stat-tile__value {
+    color: var(--text-primary);
+}
+[data-theme="light"] .campaign-game-target-panel {
+    background: linear-gradient(165deg, #ffffff, #f1f5f9) !important;
+    border-color: rgba(0, 102, 204, 0.35) !important;
+    box-shadow: 0 0 0 1px rgba(0, 102, 204, 0.1), 0 8px 28px rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .campaign-game-hud__lower {
+    background: linear-gradient(0deg, rgba(248, 250, 252, 0.98) 0%, rgba(241, 245, 249, 0.88) 100%);
+    border-top-color: rgba(0, 102, 204, 0.2);
+}
+[data-theme="light"] .campaign-game-panel {
+    background: rgba(255, 255, 255, 0.75);
+    border-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="light"] .campaign-game-log-entry {
+    background: linear-gradient(90deg, #fff, #f8fafc);
+    border-color: rgba(0, 0, 0, 0.06);
+    border-left-color: rgba(0, 102, 204, 0.5);
+}
+[data-theme="light"] .campaign-game-related-card {
+    background: linear-gradient(155deg, #fff, #f1f5f9);
+    border-color: rgba(0, 102, 204, 0.2);
+}
+[data-theme="light"] .campaign-game-tag-rack .campaign-game-tag {
+    background: rgba(224, 242, 254, 0.9);
+    border-color: rgba(0, 102, 204, 0.28);
+    color: rgba(30, 64, 175, 0.95);
+}
+
 /* Modal close button: unified look for Close/Cancel in modals */
 .modal-close-btn {
     padding: 0.25rem 0.5rem;
@@ -1092,10 +1687,12 @@ header .navbar-tabs {
         min-width: 0 !important;
     }
 
-    /* Make the graph visible on phones (give it a stable height) */
+    /* Graph viewport: min height so empty/small graphs still show; inner canvas height comes from JS */
+    #tab-campaigns #campaign-graph-scroll-wrap {
+        min-height: 50vh !important;
+        flex: none !important;
+    }
     #tab-campaigns #campaign-network {
-        min-height: 60vh !important;
-        height: 60vh !important;
         flex: none !important;
     }
 
@@ -1109,6 +1706,24 @@ header .navbar-tabs {
     #tab-campaigns .campaigns-layout-root > div {
         flex: none !important;
         min-height: auto !important;
+    }
+
+    /* Right rail: natural card height on small screens; page scrolls as a whole */
+    #tab-campaigns .campaigns-right-rail-split {
+        flex: none !important;
+        min-height: auto !important;
+    }
+    #tab-campaigns .campaigns-right-rail-split > .card {
+        flex: none !important;
+        min-height: auto !important;
+    }
+    #tab-campaigns .campaigns-right-rail-scroll {
+        flex: none !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        overflow-y: visible !important;
+        overflow-x: visible !important;
+        scrollbar-gutter: auto;
     }
 
     /* Champs Analysis: stack sections vertically and allow scroll */

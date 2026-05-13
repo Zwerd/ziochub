@@ -233,6 +233,7 @@
                             <select id="searchFilter" 
                                     class="px-4 py-2 bg-tertiary">
                                 <option value="all" data-i18n="search.filter.all">All</option>
+                                <option value="metadata" data-i18n="search.filter.metadata">Metadata (no IOC value)</option>
                                 <option value="ioc_value" data-i18n="search.filter.ioc">IOC Value</option>
                                 <option value="ticket_id" data-i18n="search.filter.ticket">Ticket ID</option>
                                 <option value="user" data-i18n="search.filter.user">User</option>
@@ -831,7 +832,15 @@
 
                 <!-- Tab: Campaign Graph (3-column fixed layout, no page scroll) -->
                 <div id="tab-campaigns" class="tab-content hidden flex flex-col h-full overflow-hidden">
-                    <h2 class="text-2xl font-bold mb-3 accent-blue flex-shrink-0" data-i18n="campaign.title">Campaign Graph</h2>
+                    <div class="flex-shrink-0 mb-3">
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <h2 class="text-2xl font-bold accent-blue" data-i18n="campaign.title">Campaign Graph</h2>
+                            <div class="flex rounded border border-white/10 overflow-hidden bg-tertiary">
+                                <button type="button" id="btnCampaignModeCopy" class="campaign-graph-mode-btn text-xs py-1 px-3 font-semibold bg-blue-600 text-white transition" data-i18n="campaign.mode_copy">Copy</button>
+                                <button type="button" id="btnCampaignModeSearch" class="campaign-graph-mode-btn text-xs py-1 px-3 font-semibold bg-transparent text-secondary hover:bg-white/5 transition" data-i18n="campaign.mode_search">Investigate</button>
+                            </div>
+                        </div>
+                    </div>
                     <div class="flex-1 min-h-0 flex gap-3 campaigns-layout-root">
                         <!-- Left Sidebar: Active Campaigns -->
                         <aside class="w-[300px] flex-shrink-0 flex flex-col min-h-0 overflow-hidden">
@@ -847,44 +856,99 @@
                         <!-- Center: Graph (fills remaining space) -->
                         <div class="flex-1 min-w-0 min-h-0 flex flex-col gap-2 min-h-0">
                             <div id="campaignGraphActivityBanner" class="hidden flex-shrink-0 rounded-lg border border-amber-500/40 bg-amber-950/40 px-3 py-2 text-sm text-amber-100/95" role="status"></div>
-                            <div id="campaign-network" class="campaign-network-canvas w-full flex-1 min-h-0 rounded-xl border-2"></div>
-                        </div>
-                        <!-- Right Sidebar: Create Campaign + Link IOC -->
-                        <aside class="w-[300px] flex-shrink-0 flex flex-col gap-3 min-h-0">
-                            <div class="card bg-tertiary rounded-lg p-4 flex-shrink-0">
-                                <h3 class="text-lg font-semibold mb-3 accent-blue" data-i18n="campaign.create">Create Campaign</h3>
-                                <form id="campaignCreateForm" class="space-y-3">
-                                    <div>
-                                        <label class="block mb-1 text-sm font-medium" data-i18n="campaign.name">Name</label>
-                                        <input type="text" id="campaignName" required class="w-full px-3 py-2 rounded" placeholder="Campaign name" data-i18n-placeholder="campaign.name_placeholder">
+                            <div id="campaign-graph-viz-stack" class="relative flex-1 min-h-0 flex flex-col min-w-0 rounded-xl border-2 border-white/10 overflow-hidden bg-black/20">
+                                <p id="campaignSearchBrowseHint" class="hidden absolute top-2 left-1/2 -translate-x-1/2 z-[5] max-w-[90%] text-center text-xs text-secondary/90 px-3 py-1 rounded-md bg-black/50 pointer-events-none" data-i18n="campaign.search_pick_hint">Click an IOC on the graph to investigate.</p>
+                                <div id="campaign-graph-scroll-wrap" class="campaign-graph-scroll-wrap flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-auto custom-scrollbar relative z-0">
+                                    <div id="campaign-network" class="campaign-network-canvas relative z-0 box-border"></div>
+                                </div>
+                                <div id="campaignSearchFocusOverlay" class="hidden absolute inset-0 z-30 flex flex-col min-h-0 campaign-search-focus-overlay campaign-game-hud">
+                                    <div class="campaign-search-focus-backdrop" aria-hidden="true"></div>
+                                    <div class="campaign-search-focus-shell flex flex-col min-h-0 flex-1 relative z-[2] pointer-events-none min-w-0">
+                                        <div class="campaign-game-hud__chrome flex-shrink-0 flex items-center gap-2 px-3 py-2 border-b border-cyan-500/25 bg-black/90 backdrop-blur-md pointer-events-auto">
+                                            <button type="button" id="campaignSearchBackBtn" class="campaign-game-back-btn" data-i18n="campaign.search_back">← Back</button>
+                                            <span class="campaign-game-hud__chrome-divider" aria-hidden="true"></span>
+                                            <span id="campaignSearchBreadcrumb" class="campaign-game-breadcrumb text-xs truncate flex-1 min-w-0 font-mono"></span>
+                                        </div>
+                                        <div class="campaign-search-focus-card-column campaign-game-hud-scroll flex flex-col flex-1 min-h-0 w-full min-w-0 overflow-y-auto custom-scrollbar px-2 sm:px-3 py-2 pointer-events-auto">
+                                            <div class="campaign-investigate-stack w-full min-w-0 flex flex-col gap-3 flex-1 min-h-0">
+                                                <div id="campaignSearchMetaBlock" class="campaign-game-stat-grid campaign-game-investigate-float shrink-0" role="list"></div>
+                                                <div id="campaignSearchCenterCard" class="campaign-game-target-panel campaign-search-focus-card campaign-game-investigate-float relative overflow-hidden rounded-lg border-2 px-4 py-3 transition-all duration-300 ease-out shrink-0">
+                                                    <div class="campaign-game-target-panel__glow" aria-hidden="true"></div>
+                                                    <div class="relative z-[1] text-center text-[10px] font-bold uppercase tracking-[0.2em] text-cyan-400/90 mb-1" data-i18n="campaign.search_hud_target">Locked target</div>
+                                                    <div class="text-center text-sm font-bold text-cyan-300 font-mono tracking-wide" id="campaignSearchCenterType"></div>
+                                                    <div class="text-center font-mono text-sm break-all text-primary mt-2 leading-snug" id="campaignSearchCenterValue"></div>
+                                                </div>
+                                                <div id="campaignSearchTagsAbove" class="campaign-game-tag-rack campaign-game-investigate-float flex flex-wrap gap-2 justify-center min-h-[1.25rem] shrink-0"></div>
+                                                <div class="campaign-game-hud__split campaign-game-investigate-float min-w-0">
+                                                    <section class="campaign-game-panel campaign-game-panel--log min-w-0 flex flex-col" aria-labelledby="campaignSearchHistoryLabel">
+                                                        <div id="campaignSearchHistoryLabel" class="campaign-game-panel__title" data-i18n="campaign.search_history">History</div>
+                                                        <div id="campaignSearchHistory" class="campaign-game-log-list space-y-2"></div>
+                                                    </section>
+                                                    <section class="campaign-game-panel campaign-game-panel--notes min-w-0 flex flex-col" aria-labelledby="campaignSearchNotesLabel">
+                                                        <div id="campaignSearchNotesLabel" class="campaign-game-panel__title" data-i18n="notes.title">Analyst Notes</div>
+                                                        <div id="campaignSearchNotesList" class="campaign-game-notes-list space-y-2"></div>
+                                                    </section>
+                                                </div>
+                                                <section class="campaign-game-panel campaign-game-panel--related campaign-game-investigate-float min-w-0 flex flex-col" aria-labelledby="campaignSearchRelatedLabel">
+                                                    <div class="campaign-game-panel__head flex-shrink-0">
+                                                        <h4 id="campaignSearchRelatedLabel" class="campaign-game-panel__title m-0" data-i18n="campaign.search_related">Related IOCs (same campaign)</h4>
+                                                        <p class="campaign-game-panel__hint m-0 mt-1" data-i18n="campaign.search_related_hint">Sorted by shared tags with the focused IOC. Click to drill in.</p>
+                                                    </div>
+                                                    <div id="campaignSearchRelated" class="campaign-game-related-grid campaign-game-related-grid--scroll mt-2"></div>
+                                                </section>
+                                            </div>
+                                        </div>
                                     </div>
-                                    <div>
-                                        <label class="block mb-1 text-sm font-medium" data-i18n="campaign.description">Description</label>
-                                        <textarea id="campaignDesc" rows="2" class="w-full px-3 py-2 rounded" placeholder="Optional description" data-i18n-placeholder="campaign.desc_placeholder"></textarea>
-                                    </div>
-                                    <div>
-                                        <label class="block mb-1 text-sm font-medium" data-i18n="campaign.ref_image_label">Reference image (optional)</label>
-                                        <input type="file" id="campaignCreateRefFile" accept="image/jpeg,image/png,image/gif,image/webp" class="w-full text-sm file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-tertiary">
-                                        <p class="text-xs text-secondary mt-1" data-i18n="campaign.ref_image_hint">Screenshot or email excerpt (JPG, PNG, GIF, WebP, max 8 MB).</p>
-                                    </div>
-                                    <button type="submit" class="w-full btn-cmd-primary" data-i18n="campaign.create_btn">Create Campaign</button>
-                                </form>
+                                </div>
                             </div>
-                            <div class="card bg-tertiary rounded-lg p-4 flex-1 min-h-0 flex flex-col">
-                                <h3 class="text-lg font-semibold mb-3 accent-blue flex-shrink-0" data-i18n="campaign.link_ioc">Link IOC</h3>
-                                <form id="campaignLinkForm" class="space-y-3">
-                                    <div>
-                                        <label class="block mb-1 text-sm font-medium" data-i18n="campaign.ioc_value">IOC Value</label>
-                                        <input type="text" id="linkIocValue" required class="w-full px-3 py-2 rounded" placeholder="Exact IOC value" data-i18n-placeholder="campaign.ioc_value_placeholder">
+                        </div>
+                        <!-- Right Sidebar: Create Campaign + Link IOC (equal height panes, each scrolls independently) -->
+                        <aside class="campaigns-right-rail w-[300px] flex-shrink-0 flex flex-col gap-3 min-h-0 self-stretch">
+                            <div class="campaigns-right-rail-split flex flex-1 min-h-0 flex-col gap-3">
+                                <div class="card bg-tertiary rounded-lg flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden border border-white/10">
+                                    <h3 class="text-lg font-semibold accent-blue flex-shrink-0 px-4 pt-4 pb-2 border-b border-white/5" data-i18n="campaign.create">Create Campaign</h3>
+                                    <div class="campaigns-right-rail-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden custom-scrollbar px-4 pb-4 pt-3">
+                                        <form id="campaignCreateForm" class="space-y-3">
+                                            <div>
+                                                <label class="block mb-1 text-sm font-medium" data-i18n="campaign.name">Name</label>
+                                                <input type="text" id="campaignName" required class="w-full px-3 py-2 rounded" placeholder="Campaign name" data-i18n-placeholder="campaign.name_placeholder">
+                                            </div>
+                                            <div>
+                                                <label class="block mb-1 text-sm font-medium" data-i18n="campaign.description">Description</label>
+                                                <textarea id="campaignDesc" rows="2" class="w-full px-3 py-2 rounded" placeholder="Optional description" data-i18n-placeholder="campaign.desc_placeholder"></textarea>
+                                            </div>
+                                            <div>
+                                                <label class="block mb-1 text-sm font-medium" data-i18n="campaign.tags_label">Tags (optional)</label>
+                                                <textarea id="campaignCreateTags" rows="2" class="w-full px-3 py-2 rounded font-mono text-sm" dir="ltr" placeholder="e.g. apt29, phishing" data-i18n-placeholder="campaign.tags_placeholder"></textarea>
+                                                <p class="text-xs text-secondary mt-1" data-i18n="campaign.tags_hint">Tags added on the campaign are merged onto IOCs when you link them or when you add new tags to the campaign later.</p>
+                                            </div>
+                                            <div>
+                                                <label class="block mb-1 text-sm font-medium" data-i18n="campaign.ref_image_label">Reference image (optional)</label>
+                                                <input type="file" id="campaignCreateRefFile" accept="image/jpeg,image/png,image/gif,image/webp" class="w-full text-sm file:mr-2 file:py-1 file:px-2 file:rounded file:border-0 file:bg-tertiary">
+                                                <p class="text-xs text-secondary mt-1" data-i18n="campaign.ref_image_hint">Screenshot or email excerpt (JPG, PNG, GIF, WebP, max 8 MB).</p>
+                                            </div>
+                                            <button type="submit" class="w-full btn-cmd-primary" data-i18n="campaign.create_btn">Create Campaign</button>
+                                        </form>
                                     </div>
-                                    <div>
-                                        <label class="block mb-1 text-sm font-medium" data-i18n="campaign.campaign_label">Campaign</label>
-                                        <select id="linkCampaignSelect" class="w-full px-3 py-2 rounded">
-                                            <option value="" data-i18n="campaign.select_campaign">-- Select campaign --</option>
-                                        </select>
+                                </div>
+                                <div class="card bg-tertiary rounded-lg flex flex-1 min-h-0 min-w-0 flex-col overflow-hidden border border-white/10">
+                                    <h3 class="text-lg font-semibold accent-blue flex-shrink-0 px-4 pt-4 pb-2 border-b border-white/5" data-i18n="campaign.link_ioc">Link IOC</h3>
+                                    <div class="campaigns-right-rail-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden custom-scrollbar px-4 pb-4 pt-3">
+                                        <form id="campaignLinkForm" class="space-y-3">
+                                            <div>
+                                                <label class="block mb-1 text-sm font-medium" data-i18n="campaign.ioc_value">IOC Value</label>
+                                                <input type="text" id="linkIocValue" required class="w-full px-3 py-2 rounded" placeholder="Exact IOC value" data-i18n-placeholder="campaign.ioc_value_placeholder">
+                                            </div>
+                                            <div>
+                                                <label class="block mb-1 text-sm font-medium" data-i18n="campaign.campaign_label">Campaign</label>
+                                                <select id="linkCampaignSelect" class="w-full px-3 py-2 rounded">
+                                                    <option value="" data-i18n="campaign.select_campaign">-- Select campaign --</option>
+                                                </select>
+                                            </div>
+                                            <button type="submit" class="w-full btn-cmd-primary" data-i18n="campaign.link_btn">Link IOC</button>
+                                        </form>
                                     </div>
-                                    <button type="submit" class="w-full btn-cmd-primary" data-i18n="campaign.link_btn">Link IOC</button>
-                                </form>
+                                </div>
                             </div>
                             <div class="card bg-tertiary rounded-lg p-4 flex-shrink-0">
                                 <div class="flex flex-col gap-2">
@@ -1680,6 +1744,11 @@
                 <div>
                     <label class="block mb-2 text-sm font-semibold" data-i18n="modal.description">Description</label>
                     <textarea id="campaignEditDesc" rows="3" class="w-full" placeholder="Optional description" data-i18n-placeholder="modal.desc_placeholder"></textarea>
+                </div>
+                <div>
+                    <label class="block mb-2 text-sm font-semibold" data-i18n="campaign.tags_label">Tags (optional)</label>
+                    <textarea id="campaignEditTags" rows="2" class="w-full font-mono text-sm" dir="ltr" placeholder="e.g. apt29, phishing" data-i18n-placeholder="campaign.tags_placeholder"></textarea>
+                    <p class="text-xs text-secondary mt-1" data-i18n="campaign.tags_hint_edit">New tags you add here are merged onto all IOCs linked to this campaign. Removing a tag from the campaign does not remove it from IOCs.</p>
                 </div>
                 <div>
                     <label class="block mb-2 text-sm font-semibold" data-i18n="campaign.ref_image_label">Reference image (optional)</label>

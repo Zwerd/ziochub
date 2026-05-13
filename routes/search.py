@@ -79,8 +79,8 @@ def _distinct_ioc_tags_from_db():
 def api_tags_suggestions():
     """Distinct IOC tags for label-style autocomplete. Optional query: ?q=prefix (lowercase)."""
     q = (request.args.get('q') or '').strip().lower()
-    # If admin configured an allowlist taxonomy, return those tags (stable, clean),
-    # otherwise fall back to distinct tags from existing IOC rows.
+    # If admin configured an allowlist taxonomy + restriction, autocomplete is the allowlist only
+    # (same as IOC submit tag UX). Otherwise distinct tags from existing IOC rows.
     try:
         (_get_setting,) = _from_app('_get_setting')
         restricted = (_get_setting('tags_restricted_enabled', 'false') or 'false').lower() == 'true'
@@ -270,7 +270,201 @@ def _search_matching_campaign_models(filter_type: str, query_lower: str):
             if query_lower in (c.created_at.isoformat() if c.created_at else '').lower()
         ]
 
+    if filter_type == 'metadata':
+        return base.filter(
+            db.or_(
+                func.lower(Campaign.name).contains(query_lower),
+                db.and_(Campaign.description.isnot(None), func.lower(Campaign.description).contains(query_lower)),
+                db.and_(Creator.username.isnot(None), func.lower(Creator.username).contains(query_lower)),
+            )
+        ).order_by(Campaign.created_at.desc()).limit(500).all()
+
     return []
+
+
+def _ioc_matches_metadata_filter(row, query_lower: str, tag_matches_fn) -> bool:
+    """Metadata search: ticket, analyst, IOC submission comment, tags, campaign name/description — not IOC value."""
+    if not query_lower:
+        return False
+    ql = query_lower
+    if ql in (row.analyst or '').lower():
+        return True
+    if (row.ticket_id or '') and ql in (row.ticket_id or '').lower():
+        return True
+    if (row.comment or '') and ql in (row.comment or '').lower():
+        return True
+    if tag_matches_fn(getattr(row, 'tags', None), ql):
+        return True
+    camp = getattr(row, 'campaign', None)
+    if camp is not None:
+        if (camp.name or '') and ql in (camp.name or '').lower():
+            return True
+        if (camp.description or '') and ql in (camp.description or '').lower():
+            return True
+    return False
+
+
+def _compute_ioc_match_hints(row, query_lower: str, filter_type: str, analyst_note_keys: set, tag_matches_fn, exp_status_fn) -> list:
+    """Stable reasons for UI badges (Search & Investigate)."""
+    if not query_lower:
+        return []
+    ft = (filter_type or 'all').strip().lower()
+    ql = query_lower
+    key = ((row.type or ''), (row.value or '').strip().lower())
+    analyst_note_keys = analyst_note_keys or set()
+
+    if ft == 'note':
+        return ['analyst_note']
+    if ft == 'comment':
+        return ['ioc_comment']
+    if ft == 'metadata':
+        hints = []
+        if ql in (row.analyst or '').lower():
+            hints.append('analyst')
+        if (row.ticket_id or '') and ql in (row.ticket_id or '').lower():
+            hints.append('ticket')
+        if (row.comment or '') and ql in (row.comment or '').lower():
+            hints.append('ioc_comment')
+        if tag_matches_fn(getattr(row, 'tags', None), ql):
+            hints.append('tag')
+        camp = getattr(row, 'campaign', None)
+        if camp is not None:
+            if (camp.name or '') and ql in (camp.name or '').lower():
+                hints.append('campaign_name')
+            if (camp.description or '') and ql in (camp.description or '').lower():
+                hints.append('campaign_description')
+        return hints or ['metadata']
+
+    hints = []
+    if ft in ('all', 'ioc_value') and ql in (row.value or '').lower():
+        hints.append('ioc_value')
+    if ft in ('all', 'user') and ql in (row.analyst or '').lower():
+        hints.append('analyst')
+    if ft in ('all', 'ticket_id') and (row.ticket_id or '') and ql in (row.ticket_id or '').lower():
+        hints.append('ticket')
+    if ft in ('all', 'comment') and (row.comment or '') and ql in (row.comment or '').lower():
+        hints.append('ioc_comment')
+    if ft in ('all', 'tag') and tag_matches_fn(getattr(row, 'tags', None), ql):
+        hints.append('tag')
+    camp = getattr(row, 'campaign', None)
+    if ft in ('all', 'campaign') and camp is not None:
+        if (camp.name or '') and ql in (camp.name or '').lower():
+            hints.append('campaign_name')
+        if (camp.description or '') and ql in (camp.description or '').lower():
+            hints.append('campaign_description')
+    if ft == 'all' and ql in (row.type or '').lower():
+        hints.append('ioc_type')
+    if ft in ('all', 'date') and row.created_at and ql in (row.created_at.isoformat() or '').lower():
+        hints.append('created_at')
+    if ft in ('all', 'expiration_status') and exp_status_fn(row, ql):
+        hints.append('expiration')
+    if ft == 'all' and key in analyst_note_keys:
+        hints.append('analyst_note')
+    return list(dict.fromkeys(hints))
+
+
+def _campaign_match_hints(camp, query_lower: str, filter_type: str) -> list:
+    ql = (query_lower or '').strip().lower()
+    if not ql:
+        return []
+    ft = (filter_type or 'all').strip().lower()
+    hints = []
+    if (camp.name or '') and ql in (camp.name or '').lower():
+        hints.append('campaign_name')
+    if (camp.description or '') and ql in ((camp.description or '').lower()):
+        hints.append('campaign_description')
+    creator = _campaign_creator_username(camp)
+    if creator and ql in creator.lower():
+        hints.append('creator')
+    if ft == 'date' and camp.created_at and ql in (camp.created_at.isoformat() or '').lower():
+        hints.append('created_at')
+    return list(dict.fromkeys(hints)) or ['campaign']
+
+
+def _yara_match_hints(rule, query_lower: str, filter_type: str) -> list:
+    ql = (query_lower or '').strip().lower()
+    if not ql:
+        return []
+    ft = (filter_type or 'all').strip().lower()
+    hints = []
+    if ft != 'metadata' and ql in (rule.filename or '').lower():
+        hints.append('yara_filename')
+    if (rule.comment or '') and ql in (rule.comment or '').lower():
+        hints.append('ioc_comment')
+    if ql in (rule.analyst or '').lower():
+        hints.append('analyst')
+    if (rule.ticket_id or '') and ql in (rule.ticket_id or '').lower():
+        hints.append('ticket')
+    return list(dict.fromkeys(hints)) or ['yara']
+
+
+def _enrich_ioc_results_with_hints(results_rows, _ioc_row_to_search_result, query_lower, filter_type, analyst_note_keys, tag_matches_fn, exp_status_fn):
+    """Mutate list of dicts from IOC rows: add match_hints."""
+    out = []
+    for row in results_rows:
+        d = _ioc_row_to_search_result(row, row.type, query_lower, filter_type)
+        d['match_hints'] = _compute_ioc_match_hints(
+            row, query_lower, filter_type, analyst_note_keys, tag_matches_fn, exp_status_fn
+        )
+        out.append(d)
+    return out
+
+
+def _deleted_history_match_hints(h, query_lower: str, filter_type: str) -> list:
+    """Which fields matched for a deleted IOC row in Search (badges)."""
+    ql = (query_lower or '').strip().lower()
+    ft = (filter_type or 'all').strip().lower()
+    if not ql:
+        return []
+    payload = {}
+    if h.payload:
+        try:
+            payload = json.loads(h.payload)
+        except (TypeError, ValueError):
+            pass
+    comment = (payload.get('comment') or '').lower()
+    reason_l = (payload.get('reason') or '').lower()
+    orig_user = (payload.get('original_analyst') or '').lower()
+    value_lower = (h.ioc_value or '').lower()
+    user_lower = (h.username or '').lower()
+    ref = (payload.get('ticket_id') or '').lower()
+    tags = payload.get('tags') or []
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except (TypeError, ValueError):
+            tags = []
+    tag_hit = any(ql in (str(t).lower()) for t in (tags or []))
+
+    if ft == 'metadata':
+        hints = []
+        if ql in comment or ql in reason_l:
+            hints.append('ioc_comment')
+        if ql in user_lower or ql in orig_user:
+            hints.append('analyst')
+        if ql in ref:
+            hints.append('ticket')
+        if tag_hit:
+            hints.append('tag')
+        return list(dict.fromkeys(hints)) or ['metadata']
+
+    hints = []
+    if ft in ('all', 'ioc_value') and ql in value_lower:
+        hints.append('ioc_value')
+    if ft in ('all', 'user') and (ql in user_lower or ql in orig_user):
+        hints.append('analyst')
+    if ft in ('all', 'comment') and (ql in comment or ql in reason_l):
+        hints.append('ioc_comment')
+    if ft in ('all', 'ticket_id') and ql in ref:
+        hints.append('ticket')
+    if ft in ('all', 'tag') and tag_hit:
+        hints.append('tag')
+    if ft == 'all' and ql in (h.ioc_type or '').lower():
+        hints.append('ioc_type')
+    date_str = (h.at.isoformat() if h.at else '').lower()
+    if ft in ('all', 'date') and ql in date_str:
+        hints.append('created_at')
+    return list(dict.fromkeys(hints)) or ['deleted']
 
 
 def _append_campaign_search_results(results, filter_type, query_lower):
@@ -283,22 +477,21 @@ def _append_campaign_search_results(results, filter_type, query_lower):
         if key in keys:
             continue
         keys.add(key)
-        results.append(_campaign_to_search_result_dict(camp))
+        cd = _campaign_to_search_result_dict(camp)
+        cd['match_hints'] = _campaign_match_hints(camp, query_lower, filter_type)
+        results.append(cd)
 
 
 # ---------------------------------------------------------------------------
 # IOC History
 # ---------------------------------------------------------------------------
 
-@bp.route('/api/ioc-history', methods=['GET'])
-@login_required
-def get_ioc_history():
-    """Return lifecycle events for an IOC (type+value): created, deleted. For Search & Investigate History modal."""
-    ioc_type = request.args.get('type', '').strip()
-    value = request.args.get('value', '').strip()
-    if not ioc_type or not value:
-        return jsonify({'success': False, 'message': 'Missing type or value'}), 400
-    value_lower = value.lower()
+def build_ioc_history_events_list(ioc_type: str, value: str) -> list:
+    """
+    Build sorted lifecycle events for an IOC (type+value), same contract as GET /api/ioc-history.
+    Shared with campaign graph Search mode investigate endpoint.
+    """
+    value_lower = (value or '').strip().lower()
     rows = (
         IocHistory.query.filter(
             IocHistory.ioc_type == ioc_type,
@@ -400,6 +593,18 @@ def get_ioc_history():
             except (ValueError, TypeError):
                 pass
     events.sort(key=lambda e: (e.get('at') or ''))
+    return events
+
+
+@bp.route('/api/ioc-history', methods=['GET'])
+@login_required
+def get_ioc_history():
+    """Return lifecycle events for an IOC (type+value): created, deleted. For Search & Investigate History modal."""
+    ioc_type = request.args.get('type', '').strip()
+    value = request.args.get('value', '').strip()
+    if not ioc_type or not value:
+        return jsonify({'success': False, 'message': 'Missing type or value'}), 400
+    events = build_ioc_history_events_list(ioc_type, value)
     return jsonify({'success': True, 'ioc_type': ioc_type, 'ioc_value': value, 'events': events})
 
 
@@ -747,6 +952,14 @@ def _yara_rules_for_search_filter(filter_type, query_lower):
             )
             .all()
         )
+    if ft == 'metadata':
+        return base.filter(
+            db.or_(
+                func.lower(YaraRule.analyst).contains(ql),
+                db.and_(YaraRule.ticket_id.isnot(None), func.lower(YaraRule.ticket_id).contains(ql)),
+                db.and_(YaraRule.comment.isnot(None), func.lower(YaraRule.comment).contains(ql)),
+            )
+        ).all()
     if ft == 'all':
         return base.filter(
             db.or_(
@@ -797,6 +1010,14 @@ def _yara_query_for_search_filter(filter_type, query_lower):
                 )
             )
         )
+    if ft == 'metadata':
+        return base.filter(
+            db.or_(
+                func.lower(YaraRule.analyst).contains(ql),
+                db.and_(YaraRule.ticket_id.isnot(None), func.lower(YaraRule.ticket_id).contains(ql)),
+                db.and_(YaraRule.comment.isnot(None), func.lower(YaraRule.comment).contains(ql)),
+            )
+        )
     if ft == 'all':
         return base.filter(
             db.or_(
@@ -845,6 +1066,8 @@ def list_ip_country_codes():
 def search_ioc():
     """Search for an IOC across all types with optional field filter (including tag).
 
+    ``filter`` may include ``metadata`` (ticket, analyst, submission comment, tags, campaign text — not IOC value).
+
     Optional query param ``country_code`` (or ``country``): ISO 3166-1 alpha-2, e.g. ``us`` for United States.
     When set, results are limited to IP IOCs with a matching stored ``country_code`` (GeoIP at ingest).
     ``q`` may be empty if ``country_code`` is set (lists IPs for that country, paginated).
@@ -858,7 +1081,7 @@ def search_ioc():
         '_tag_matches', '_search_expiration_status_matches', '_ioc_row_to_search_result',
         '_deleted_history_matches', '_history_deleted_to_search_result')
     query = request.args.get('q', '').strip()
-    filter_type = request.args.get('filter', 'all').strip().lower()
+    filter_type = (request.args.get('filter', 'all') or 'all').strip().lower() or 'all'
     page = max(1, int(request.args.get('page', 1)))
     per_page = min(max(1, int(request.args.get('per_page') or request.args.get('limit') or 100)), 1000)
     country_raw = (request.args.get('country_code') or request.args.get('country') or '').strip()
@@ -878,9 +1101,8 @@ def search_ioc():
             'message': 'Invalid browse_aggregate (use domain, email, url, hash_md5, hash_sha1, …)',
         }), 400
 
-    # Empty search: treat as "All Groups" + "All Columns" and return all IOCs (paginated).
-    # (YARA/Campaign have their own browse_aggregate buckets.)
-    if not query and not country_cc and not browse_aggregate:
+    # Empty query: only "All columns" lists every IOC (paginated). Other filters need dedicated logic.
+    if not query and not country_cc and not browse_aggregate and filter_type == 'all':
         total = IOC.query.filter(IOC.revoked.is_(False)).count()
         rows = (
             IOC.query.options(joinedload(IOC.campaign))
@@ -935,6 +1157,7 @@ def search_ioc():
                 'is_expired': False,
                 'status': 'Active',
                 'campaign_name': campaign_name,
+                'match_hints': _yara_match_hints(rule, query.lower() if query else '', filter_type),
             })
         return jsonify({
             'success': True,
@@ -977,7 +1200,7 @@ def search_ioc():
             'per_page': per_page,
         })
 
-    if not query and browse_aggregate:
+    if not query and browse_aggregate and filter_type == 'all':
         oq = _ioc_query_browse_aggregate(browse_aggregate)
         if oq is None:
             return jsonify({'success': False, 'message': 'Invalid browse_aggregate'}), 400
@@ -1001,7 +1224,7 @@ def search_ioc():
             'per_page': per_page,
         })
 
-    if not query and country_cc:
+    if not query and country_cc and filter_type == 'all':
         q = _apply_ip_country_filter(
             IOC.query.options(joinedload(IOC.campaign)).filter(IOC.revoked.is_(False)),
             country_cc,
@@ -1054,6 +1277,17 @@ def search_ioc():
         q = q.filter(func.lower(IOC.analyst).contains(query_lower))
     elif filter_type == 'comment':
         q = q.filter(IOC.comment.isnot(None), func.lower(IOC.comment).contains(query_lower))
+    elif filter_type == 'metadata':
+        q = q.outerjoin(IOC.campaign).filter(
+            db.or_(
+                func.lower(IOC.analyst).contains(query_lower),
+                db.and_(IOC.ticket_id.isnot(None), func.lower(IOC.ticket_id).contains(query_lower)),
+                db.and_(IOC.comment.isnot(None), func.lower(IOC.comment).contains(query_lower)),
+                db.and_(Campaign.name.isnot(None), func.lower(Campaign.name).contains(query_lower)),
+                db.and_(Campaign.description.isnot(None), func.lower(Campaign.description).contains(query_lower)),
+                db.and_(IOC.tags.isnot(None), IOC.tags.contains(query_lower)),
+            )
+        )
     elif filter_type == 'campaign':
         q = q.join(IOC.campaign).filter(
             db.or_(
@@ -1079,7 +1313,9 @@ def search_ioc():
             q = _apply_ip_country_filter(q, country_cc)
             rows_all = q.limit(1000).all()
             rows = [r for r in rows_all if _search_expiration_status_matches(r, query_lower)]
-            results = [_ioc_row_to_search_result(r, r.type, query_lower, filter_type) for r in rows]
+            results = _enrich_ioc_results_with_hints(
+                rows, _ioc_row_to_search_result, query_lower, filter_type, set(), _tag_matches, _search_expiration_status_matches
+            )
             _eo = {
                 'success': True,
                 'query': query,
@@ -1098,7 +1334,9 @@ def search_ioc():
         q = _apply_ip_country_filter(q, country_cc)
         rows = q.limit(1000).all()
         rows = [r for r in rows if _tag_matches(r.tags, query_lower)]
-        results = [_ioc_row_to_search_result(row, row.type, query_lower, filter_type) for row in rows]
+        results = _enrich_ioc_results_with_hints(
+            rows, _ioc_row_to_search_result, query_lower, filter_type, set(), _tag_matches, _search_expiration_status_matches
+        )
         _to = {
             'success': True,
             'query': query,
@@ -1113,12 +1351,62 @@ def search_ioc():
             _to['country_code'] = country_cc
         return jsonify(_to)
     elif filter_type == 'note':
-        note_rows = IocNote.query.filter(func.lower(IocNote.content).contains(query_lower)).limit(500).all()
-        note_keys = {(n.ioc_type, n.ioc_value.lower()) for n in note_rows}
+        if not query_lower:
+            # Analyst notes filter with no search text: list IOCs that have at least one note (distinct type+value).
+            base_pairs = (
+                db.session.query(IocNote.ioc_type, IocNote.ioc_value)
+                .distinct()
+                .order_by(IocNote.ioc_type.asc(), IocNote.ioc_value.asc())
+            )
+            total = base_pairs.count()
+            pairs_page = (
+                base_pairs.offset((page - 1) * per_page).limit(per_page).all()
+            )
+            note_analyst_keys = {
+                (t, (v or '').strip().lower()) for t, v in pairs_page
+            }
+            rows = []
+            for ioc_type, ioc_val in pairs_page:
+                val_l = (ioc_val or '').strip().lower()
+                row = IOC.query.options(joinedload(IOC.campaign)).filter(
+                    IOC.type == ioc_type,
+                    func.lower(IOC.value) == val_l,
+                    IOC.revoked.is_(False),
+                ).first()
+                if not row:
+                    continue
+                if not _ioc_row_matches_country(row, country_cc):
+                    continue
+                if browse_aggregate and not _ioc_row_in_browse_aggregate_bucket(row, browse_aggregate):
+                    continue
+                rows.append(row)
+            results = _enrich_ioc_results_with_hints(
+                rows, _ioc_row_to_search_result, query_lower, filter_type,
+                note_analyst_keys, _tag_matches, _search_expiration_status_matches,
+            )
+            _no = {
+                'success': True,
+                'query': query,
+                'filter': filter_type,
+                'results': results,
+                'count': len(results),
+                'total': total,
+                'page': page,
+                'per_page': per_page,
+            }
+            if country_cc:
+                _no['country_code'] = country_cc
+            return jsonify(_no)
+        note_analyst_keys = {
+            (n.ioc_type, (n.ioc_value or '').strip().lower())
+            for n in IocNote.query.filter(func.lower(IocNote.content).contains(query_lower)).limit(500).all()
+        }
         q = _apply_ip_country_filter(q, country_cc)
         rows = q.limit(1000).all()
-        rows = [r for r in rows if (r.type, (r.value or '').lower()) in note_keys]
-        results = [_ioc_row_to_search_result(row, row.type, query_lower, filter_type) for row in rows]
+        rows = [r for r in rows if (r.type, (r.value or '').strip().lower()) in note_analyst_keys]
+        results = _enrich_ioc_results_with_hints(
+            rows, _ioc_row_to_search_result, query_lower, filter_type, note_analyst_keys, _tag_matches, _search_expiration_status_matches
+        )
         _no = {
             'success': True,
             'query': query,
@@ -1137,7 +1425,9 @@ def search_ioc():
         q = _apply_ip_country_filter(q, country_cc)
         rows_all = q.limit(1000).all()
         rows = [r for r in rows_all if query_lower in (r.created_at.isoformat() if r.created_at else '').lower()]
-        results = [_ioc_row_to_search_result(r, r.type, query_lower, filter_type) for r in rows]
+        results = _enrich_ioc_results_with_hints(
+            rows, _ioc_row_to_search_result, query_lower, filter_type, set(), _tag_matches, _search_expiration_status_matches
+        )
         if not country_cc:
             _append_campaign_search_results(results, filter_type, query_lower)
         out = {
@@ -1186,8 +1476,14 @@ def search_ioc():
             )
         )
     q = _apply_ip_country_filter(q, country_cc)
-    total = q.count()
-    rows = q.offset((page - 1) * per_page).limit(per_page).all()
+    if filter_type == 'metadata':
+        ordered = q.order_by(IOC.created_at.desc()).limit(5000).all()
+        filtered = [r for r in ordered if _ioc_matches_metadata_filter(r, query_lower, _tag_matches)]
+        total = len(filtered)
+        rows = filtered[(page - 1) * per_page: page * per_page]
+    else:
+        total = q.count()
+        rows = q.offset((page - 1) * per_page).limit(per_page).all()
     if filter_type == 'all':
         seen_ids = set()
         deduped = []
@@ -1211,11 +1507,22 @@ def search_ioc():
             ):
                 deduped.append(r)
         rows = deduped
+    analyst_note_keys = set()
+    if query_lower:
+        if filter_type == 'all':
+            analyst_note_keys = {
+                (n.ioc_type, (n.ioc_value or '').strip().lower())
+                for n in IocNote.query.filter(func.lower(IocNote.content).contains(query_lower)).all()
+            }
+        elif filter_type == 'note':
+            analyst_note_keys = {
+                (n.ioc_type, (n.ioc_value or '').strip().lower())
+                for n in IocNote.query.filter(func.lower(IocNote.content).contains(query_lower)).limit(500).all()
+            }
     if filter_type in ('all', 'note'):
-        note_hits = IocNote.query.filter(func.lower(IocNote.content).contains(query_lower)).all()
-        note_keys = {(n.ioc_type, n.ioc_value.lower()) for n in note_hits}
+        note_keys = analyst_note_keys
         if note_keys:
-            existing_keys = {(r.type, (r.value or '').lower()) for r in rows}
+            existing_keys = {(r.type, (r.value or '').strip().lower()) for r in rows}
             missing = note_keys - existing_keys
             if missing:
                 for ntype, nval in missing:
@@ -1226,7 +1533,15 @@ def search_ioc():
                         if browse_aggregate and not _ioc_row_in_browse_aggregate_bucket(extra, browse_aggregate):
                             continue
                         rows.append(extra)
-    results = [_ioc_row_to_search_result(row, row.type, query_lower, filter_type) for row in rows]
+    results = _enrich_ioc_results_with_hints(
+        rows,
+        _ioc_row_to_search_result,
+        query_lower,
+        filter_type,
+        analyst_note_keys,
+        _tag_matches,
+        _search_expiration_status_matches,
+    )
     # Merge YARA + Campaign pseudo-rows only when not restricting by country or browse bucket.
     # browse_aggregate scopes to IOC buckets (domain/email/url/hash); YARA and Campaign rows are not in those buckets.
     if not country_cc and not browse_aggregate:
@@ -1253,6 +1568,7 @@ def search_ioc():
                 'is_expired': False,
                 'status': 'Active',
                 'campaign_name': campaign_name,
+                'match_hints': _yara_match_hints(rule, query_lower, filter_type),
             })
     if not country_cc and not browse_aggregate:
         _append_campaign_search_results(results, filter_type, query_lower)
@@ -1277,7 +1593,9 @@ def search_ioc():
             if not _deleted_history_matches(h, query_lower, filter_type):
                 continue
             current_keys.add(key)
-            results.append(_history_deleted_to_search_result(h))
+            dh = _history_deleted_to_search_result(h)
+            dh['match_hints'] = _deleted_history_match_hints(h, query_lower, filter_type)
+            results.append(dh)
     out = {
         'success': True,
         'query': query,

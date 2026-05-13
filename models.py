@@ -27,6 +27,8 @@ class Campaign(db.Model):
     created_at = db.Column(db.DateTime, default=_utcnow)
     # Optional screenshot (e.g. suspicious email); file at data/campaign_images/{id}.{ext}
     reference_image_ext = db.Column(db.String(8), nullable=True)
+    # JSON array of normalized (lowercased) tag strings; same semantics as IOC.tags list
+    tags = db.Column(db.Text, nullable=True, default='[]')
     iocs = db.relationship('IOC', backref='campaign', lazy=True, foreign_keys='IOC.campaign_id')
 
 

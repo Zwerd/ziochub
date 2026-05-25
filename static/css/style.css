@@ -125,10 +125,71 @@ body, input, select, textarea, button, label, .tab-button {
 }
 
 /* Staging row edit highlight (moved from index.html inline) */
+.txt-staging-row-editing {
+    background-color: rgba(0, 212, 255, 0.06);
+}
 .txt-staging-row-editing td[data-field] {
     outline: 2px solid var(--accent-blue);
     outline-offset: -1px;
     background-color: rgba(0, 212, 255, 0.08);
+}
+.txt-staging-edit.txt-staging-edit--active {
+    background-color: rgba(34, 197, 94, 0.22) !important;
+    border-color: rgba(34, 197, 94, 0.55) !important;
+    color: #86efac !important;
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.35);
+}
+
+/* Submit IOC staging queue: fixed column widths + wrap long values */
+.ioc-staging-table {
+    table-layout: fixed;
+    width: 100%;
+    min-width: 960px;
+}
+.ioc-staging-table th,
+.ioc-staging-table td {
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    vertical-align: top;
+    max-width: 0;
+}
+.ioc-staging-col-ioc { width: 19%; }
+.ioc-staging-col-type { width: 4%; min-width: 2.75rem; }
+.ioc-staging-col-sanity { width: 14%; }
+.ioc-staging-col-tags { width: 5%; min-width: 3.25rem; }
+.ioc-staging-col-ticket { width: 8%; }
+.ioc-staging-col-analyst { width: 5%; min-width: 3.5rem; }
+.ioc-staging-col-date { width: 9%; }
+.ioc-staging-col-comment { width: 18%; }
+.ioc-staging-col-expiration { width: 5%; min-width: 4.25rem; }
+.ioc-staging-col-actions { width: 14%; min-width: 14.5rem; }
+.ioc-staging-table .staging-sanity-text,
+.ioc-staging-table .staging-comment-text {
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    max-width: none;
+    display: block;
+}
+.ioc-staging-table td[data-field="comment"],
+.ioc-staging-table td[data-field="type"],
+.ioc-staging-table td[data-field="expiration"] {
+    white-space: normal;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+.ioc-staging-table th:last-child,
+.ioc-staging-table td:last-child {
+    max-width: none;
+}
+.ioc-staging-table td:last-child {
+    vertical-align: middle;
+}
+.ioc-staging-table td:last-child .flex {
+    justify-content: center;
+    gap: 0.35rem;
+    row-gap: 0.35rem;
 }
 
 /* Header bar: solid background only (no glass); avoids global .bg-secondary override */
@@ -3181,15 +3242,15 @@ textarea:focus-visible {
     box-shadow: 0 0 8px rgba(0, 212, 255, 0.4);
 }
 
-/* Spotlight: 4-column grid; row1 = [avatar+name together] | Points, row2 = 4 stat cards */
+/* Spotlight: 5-column grid; row1 = [avatar+name] spans cols 1–4 | Points col 5; row2 = 5 stat cards */
 .champs-spotlight-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr 1fr;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0.5rem 0.5rem;
     align-items: stretch;
 }
 .champs-spotlight-grid .champs-spotlight-header-cell {
-    grid-column: 1 / 4;
+    grid-column: 1 / 5;
     grid-row: 1;
     display: flex;
     align-items: center;
@@ -3197,7 +3258,7 @@ textarea:focus-visible {
     min-width: 0;
 }
 .champs-spotlight-grid .champs-spotlight-points-hero {
-    grid-column: 4;
+    grid-column: 5;
     grid-row: 1;
 }
 .champs-spotlight-grid .champs-stat-card:nth-child(3) {
@@ -3214,6 +3275,10 @@ textarea:focus-visible {
 }
 .champs-spotlight-grid .champs-stat-card:nth-child(6) {
     grid-column: 4;
+    grid-row: 2;
+}
+.champs-spotlight-grid .champs-stat-card:nth-child(7) {
+    grid-column: 5;
     grid-row: 2;
 }
 

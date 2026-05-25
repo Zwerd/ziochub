@@ -11,9 +11,29 @@ import json
 import logging
 from typing import Any, Callable
 
-from models import IOC, _utcnow
+from models import IOC, Campaign, _utcnow
 
 logger = logging.getLogger(__name__)
+
+
+def merge_campaign_tags_into_tags_json(tags_field: Any, campaign_id: int | None) -> str:
+    """
+    Merge Campaign.tags onto an IOC tags JSON field when campaign_id is set.
+    Uses Flask db session. Returns JSON array string for IOC.tags.
+    """
+    cur = parse_tags_field(tags_field)
+    if not campaign_id:
+        return json.dumps(cur) if cur else '[]'
+    try:
+        from extensions import db
+    except Exception:
+        return json.dumps(cur) if cur else '[]'
+    camp = db.session.get(Campaign, int(campaign_id))
+    if not camp:
+        return json.dumps(cur) if cur else '[]'
+    ctags = parse_tags_field(getattr(camp, 'tags', None))
+    merged, _ = merge_tag_lists(cur, ctags)
+    return json.dumps(merged) if merged else '[]'
 
 
 def parse_tags_field(tags_field: Any) -> list[str]:

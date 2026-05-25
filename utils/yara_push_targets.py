@@ -8,9 +8,25 @@ NX **wsapis** rows are expanded in ``utils.trellix_nx``; **wmps** rows use sessi
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 
 from utils.trellix_nx import expand_trellix_nx_targets, parse_trellix_nx_targets_json
+
+
+def yara_http_push_verify_ssl(get_setting: Callable[[str, str], str]) -> bool:
+    """Global TLS verify flag for generic HTTP / NX wsapis YARA push (``automation_fireeye_ignore_ssl``)."""
+    return (get_setting('automation_fireeye_ignore_ssl', 'false') or 'false').lower() != 'true'
+
+
+def yara_session_push_verify_ssl(get_setting: Callable[[str, str], str]) -> Optional[bool]:
+    """TLS verify for Trellix EX / NX wmps (approve, delete, retry).
+
+    When ``automation_fireeye_ignore_ssl`` is on, verification is off for all session targets.
+    Otherwise ``None`` so each target row's ``verify_ssl`` applies (same as Integrations test).
+    """
+    if (get_setting('automation_fireeye_ignore_ssl', 'false') or 'false').lower() == 'true':
+        return False
+    return None
 
 
 def merged_yara_automation_appliances(get_setting: Callable[[str, str], str]) -> List[dict]:

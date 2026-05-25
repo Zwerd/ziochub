@@ -270,22 +270,29 @@ def yara_validate_syntax():
 
 
 @bp.route('/list-yara', methods=['GET'])
+@login_required
 def list_yara():
+    """Approved YARA rules only (data/YARA + DB status approved). Includes can_edit/can_delete for UI."""
     try:
         files = []
         data_yara = _data_yara()
         if not os.path.isdir(data_yara):
             return jsonify({'success': True, 'files': []})
+        is_admin = bool(getattr(current_user, 'is_admin', False))
+        uname_lower = (current_user.username or '').strip().lower()
         for name in sorted(os.listdir(data_yara)):
             if not name.lower().endswith('.yar'):
                 continue
             filepath = os.path.join(data_yara, name)
             if not os.path.isfile(filepath):
                 continue
+            meta = YaraRule.query.filter_by(filename=name).first()
+            status = (meta.status if meta else 'approved') or 'approved'
+            if status.lower() != 'approved':
+                continue
             size_bytes = os.path.getsize(filepath)
             mtime = os.path.getmtime(filepath)
             size_kb = round(size_bytes / 1024, 2)
-            meta = YaraRule.query.filter_by(filename=name).first()
             if meta and meta.uploaded_at:
                 upload_date = meta.uploaded_at.strftime('%Y-%m-%d %H:%M')
             else:
@@ -293,6 +300,16 @@ def list_yara():
             display_name = name
             if meta and getattr(meta, 'original_filename', None):
                 display_name = meta.original_filename
+            analyst_lower = (meta.analyst if meta else '').strip().lower()
+            if is_admin:
+                can_edit = True
+                can_delete = True
+            elif meta and analyst_lower and analyst_lower == uname_lower:
+                can_edit = True
+                can_delete = True
+            else:
+                can_edit = False
+                can_delete = False
             files.append({
                 'filename': name,
                 'original_filename': (meta.original_filename if meta else None) or None,
@@ -301,7 +318,10 @@ def list_yara():
                 'upload_date': upload_date,
                 'user': meta.analyst if meta else None,
                 'ticket_id': meta.ticket_id if meta else None,
-                'comment': meta.comment if meta else None
+                'comment': meta.comment if meta else None,
+                'status': 'approved',
+                'can_edit': can_edit,
+                'can_delete': can_delete,
             })
         return jsonify({'success': True, 'files': files})
     except Exception as e:
@@ -370,6 +390,11 @@ def delete_yara():
         except Exception:
             tx_on = False
         try:
+            from utils.trellix_cms import delete_yara_trellix_cms, trellix_cms_enabled as _trellix_cms_on_delete
+            cms_on = _trellix_cms_on_delete(_get_setting)
+        except Exception:
+            cms_on = False
+        try:
             from utils.trellix_nx import delete_yara_nx_wmps, trellix_nx_wmps_enabled as _nx_wmps_on_delete
 
             nx_wmps_on = _nx_wmps_on_delete(_get_setting)
@@ -386,11 +411,13 @@ def delete_yara():
                 logging.warning('YARA delete: appliance list failed: %s', e)
                 appliances = []
         has_fe = fe_on and bool(appliances)
-        if has_fe or tx_on or nx_wmps_on:
+        if has_fe or tx_on or cms_on or nx_wmps_on:
             from utils.yara_http_push import delete_yara_from_appliances
             app_obj = current_app._get_current_object()
-            verify_fe = _get_setting('automation_fireeye_ignore_ssl', 'false').lower() != 'true'
-            verify_tx = (_get_setting('trellix_ex_verify_ssl', 'true') or 'true').lower() in ('true', '1', 'yes')
+            from utils.yara_push_targets import yara_http_push_verify_ssl, yara_session_push_verify_ssl
+
+            verify_fe = yara_http_push_verify_ssl(_get_setting)
+            verify_session = yara_session_push_verify_ssl(_get_setting)
 
             def _auto_delete():
                 with app_obj.app_context():
@@ -403,12 +430,20 @@ def delete_yara():
                             overall = overall and bool(result_fe.get('overall_success'))
                         if tx_on:
                             result_tx = delete_yara_trellix_ex(
-                                safe, _get_setting, audit_log, verify_ssl=verify_tx
+                                safe, _get_setting, audit_log, verify_ssl=verify_session
                             )
                             combined_results.extend(result_tx.get('results', []))
                             overall = overall and bool(result_tx.get('overall_success'))
+                        if cms_on:
+                            result_cms = delete_yara_trellix_cms(
+                                safe, _get_setting, audit_log, verify_ssl=verify_session
+                            )
+                            combined_results.extend(result_cms.get('results', []))
+                            overall = overall and bool(result_cms.get('overall_success'))
                         if nx_wmps_on:
-                            result_nxw = delete_yara_nx_wmps(safe, _get_setting, audit_log, verify_ssl=None)
+                            result_nxw = delete_yara_nx_wmps(
+                                safe, _get_setting, audit_log, verify_ssl=verify_session
+                            )
                             combined_results.extend(result_nxw.get('results', []))
                             overall = overall and bool(result_nxw.get('overall_success'))
                         result = {'overall_success': overall, 'results': combined_results}
@@ -507,26 +542,44 @@ def update_yara():
             return jsonify({'success': False, 'message': MSG_YARA_EDIT_REASON_REQUIRED}), 400
         row = YaraRule.query.filter_by(filename=safe).first()
         is_admin = getattr(current_user, 'is_admin', False)
+        uname_lower = (current_user.username or '').strip().lower()
         if not is_admin:
             if not row:
                 return jsonify({'success': False, 'message': 'Only an admin can edit this rule'}), 403
             analyst_lower = (row.analyst or '').strip().lower()
-            if analyst_lower != current_user.username.lower():
+            if analyst_lower != uname_lower:
                 return jsonify({'success': False, 'message': 'Only the rule owner or an admin can edit this rule'}), 403
+        if not content_changed:
+            return jsonify({'success': True, 'message': f'No changes to apply for {safe}'})
+
+        def _ensure_row_for_update() -> YaraRule:
+            nonlocal row
+            if row:
+                return row
+            row = YaraRule(
+                filename=safe,
+                original_filename=safe,
+                analyst='unknown',
+                ticket_id=None,
+                comment='Recovered from approved file on edit',
+                status='approved',
+                content_sha256=new_h,
+            )
+            db.session.add(row)
+            return row
+
+        # Approved on disk: any content change → pending (analyst or admin).
         if os.path.isfile(filepath_approved):
-            # Any content change to an approved rule → pending (analyst or admin); only admins approve.
-            if not content_changed:
-                return jsonify({'success': True, 'message': f'No changes to apply for {safe}'})
             with open(filepath_pending, 'w', encoding='utf-8') as f:
                 f.write(content_str)
             try:
                 os.remove(filepath_approved)
             except OSError:
                 pass
-            if row:
-                row.quality_points = compute_yara_quality_points(content_str)
-                row.status = 'pending'
-                row.content_sha256 = new_h
+            r = _ensure_row_for_update()
+            r.quality_points = compute_yara_quality_points(content_str)
+            r.status = 'pending'
+            r.content_sha256 = new_h
             _log_ioc_history('YARA', safe, 'edited', current_user.username, {'reason': reason[:4000]})
             _commit_with_retry()
             audit_log('YARA_UPDATE', f'file={safe} analyst={current_user.username} status=pending (re-approval required)')
@@ -535,20 +588,29 @@ def update_yara():
                 'message': f'Updated {safe}. Rule moved to pending for admin approval.',
                 'moved_to_pending': True,
             })
-        elif os.path.isfile(filepath_pending):
+        if os.path.isfile(filepath_pending):
             with open(filepath_pending, 'w', encoding='utf-8') as f:
                 f.write(content_str)
-        else:
-            return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
-        quality_pts = compute_yara_quality_points(content_str)
-        if row:
-            row.quality_points = quality_pts
-            row.content_sha256 = new_h
-        if content_changed:
-            _log_ioc_history('YARA', safe, 'edited', current_user.username, {'reason': reason[:4000]})
-        _commit_with_retry()
-        audit_log('YARA_UPDATE', f'file={safe} analyst={current_user.username}')
-        return jsonify({'success': True, 'message': f'Updated {safe}'})
+            r = _ensure_row_for_update() if is_admin or row else row
+            if r:
+                r.quality_points = compute_yara_quality_points(content_str)
+                r.content_sha256 = new_h
+                if (r.status or '').lower() == 'approved':
+                    r.status = 'pending'
+                    _log_ioc_history('YARA', safe, 'edited', current_user.username, {'reason': reason[:4000]})
+                    _commit_with_retry()
+                    audit_log('YARA_UPDATE', f'file={safe} analyst={current_user.username} status=pending (re-approval required)')
+                    return jsonify({
+                        'success': True,
+                        'message': f'Updated {safe}. Rule moved to pending for admin approval.',
+                        'moved_to_pending': True,
+                    })
+            if content_changed:
+                _log_ioc_history('YARA', safe, 'edited', current_user.username, {'reason': reason[:4000]})
+            _commit_with_retry()
+            audit_log('YARA_UPDATE', f'file={safe} analyst={current_user.username}')
+            return jsonify({'success': True, 'message': f'Updated {safe}', 'moved_to_pending': False})
+        return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
     except Exception as e:
         return jsonify({'success': False, 'message': str(e)}), 500
 
@@ -573,7 +635,8 @@ def edit_yara_meta():
             analyst_lower = (rule.analyst or '').strip().lower()
             if analyst_lower != current_user.username.lower():
                 return jsonify({'success': False, 'message': 'Only the rule owner or an admin can edit this rule'}), 403
-        if not is_admin and getattr(rule, 'status', None) == 'approved':
+        moved_to_pending = False
+        if not is_admin and (rule.status or '').lower() == 'approved':
             path_approved = os.path.join(_data_yara(), safe)
             path_pending = os.path.join(_data_yara_pending(), safe)
             if os.path.isfile(path_approved):
@@ -586,6 +649,7 @@ def edit_yara_meta():
                 except OSError:
                     pass
                 rule.status = 'pending'
+                moved_to_pending = True
         new_ticket_id = data.get('ticket_id')
         if new_ticket_id is not None:
             _auto_ticket_id, = _from_app('_auto_ticket_id')
@@ -614,10 +678,9 @@ def edit_yara_meta():
             changes.append('campaign')
         audit_log('YARA_EDIT_META', f'file={filename} changes={",".join(changes) or "none"}')
         msg = f'YARA rule "{filename}" updated successfully'
-        moved = not is_admin and getattr(rule, 'status', None) == 'pending'
-        if moved:
+        if moved_to_pending:
             msg += ' Rule moved to pending for admin approval.'
-        return jsonify({'success': True, 'message': msg, 'moved_to_pending': moved})
+        return jsonify({'success': True, 'message': msg, 'moved_to_pending': moved_to_pending})
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500
@@ -750,11 +813,17 @@ def approve_yara():
         _get_setting = _from_app('_get_setting')[0]
         try:
             from utils.trellix_ex import trellix_ex_enabled as _trellix_ex_on
+            from utils.trellix_cms import trellix_cms_enabled as _trellix_cms_on
             from utils.trellix_nx import trellix_nx_wmps_enabled as _nx_wmps_on
-            from utils.yara_push_targets import merged_yara_automation_appliances
+            from utils.yara_push_targets import (
+                merged_yara_automation_appliances,
+                yara_http_push_verify_ssl,
+                yara_session_push_verify_ssl,
+            )
 
             fe_on = _get_setting('automation_fireeye_enabled', 'false').lower() == 'true'
             tx_on = _trellix_ex_on(_get_setting)
+            cms_on = _trellix_cms_on(_get_setting)
             nx_wmps_on = _nx_wmps_on(_get_setting)
             appliances = []
             if fe_on:
@@ -762,11 +831,12 @@ def approve_yara():
                 if not isinstance(appliances, list):
                     appliances = []
             has_fe_targets = fe_on and len(appliances) > 0
-            if has_fe_targets or tx_on or nx_wmps_on:
+            if has_fe_targets or tx_on or cms_on or nx_wmps_on:
                 from utils.yara_http_push import push_yara_to_appliances, set_fireeye_status
 
                 app_obj = current_app._get_current_object()
-                verify_fe = _get_setting('automation_fireeye_ignore_ssl', 'false').lower() != 'true'
+                verify_fe = yara_http_push_verify_ssl(_get_setting)
+                verify_session = yara_session_push_verify_ssl(_get_setting)
                 set_fireeye_status(rule.filename, 'pending', '')
 
                 def _yara_outbound_upload():
@@ -783,21 +853,36 @@ def approve_yara():
                             if tx_on:
                                 from utils.trellix_ex import push_yara_trellix_ex
 
-                                verify_tx = (_get_setting('trellix_ex_verify_ssl', 'true') or 'true').lower() in (
-                                    'true',
-                                    '1',
-                                    'yes',
-                                )
                                 result_tx = push_yara_trellix_ex(
-                                    content, rule.filename, _get_setting, audit_log, verify_ssl=verify_tx
+                                    content,
+                                    rule.filename,
+                                    _get_setting,
+                                    audit_log,
+                                    verify_ssl=verify_session,
                                 )
                                 combined_results.extend(result_tx.get('results', []))
                                 overall = overall and bool(result_tx.get('overall_success'))
+                            if cms_on:
+                                from utils.trellix_cms import push_yara_trellix_cms
+
+                                result_cms = push_yara_trellix_cms(
+                                    content,
+                                    rule.filename,
+                                    _get_setting,
+                                    audit_log,
+                                    verify_ssl=verify_session,
+                                )
+                                combined_results.extend(result_cms.get('results', []))
+                                overall = overall and bool(result_cms.get('overall_success'))
                             if nx_wmps_on:
                                 from utils.trellix_nx import push_yara_nx_wmps
 
                                 result_nxw = push_yara_nx_wmps(
-                                    content, rule.filename, _get_setting, audit_log, verify_ssl=None
+                                    content,
+                                    rule.filename,
+                                    _get_setting,
+                                    audit_log,
+                                    verify_ssl=verify_session,
                                 )
                                 combined_results.extend(result_nxw.get('results', []))
                                 overall = overall and bool(result_nxw.get('overall_success'))

@@ -226,15 +226,11 @@
         const tbody = document.getElementById('yaraRulesTableBody');
         if (!tbody) return;
         try {
-            const auth = (typeof window !== 'undefined' && window.authState) || (typeof global !== 'undefined' && global.authState) || {};
-            const usernameLower = (auth.username || '').toString().toLowerCase();
-            const isAdmin = !!(auth.is_admin);
             const result = await apiFetch('/api/list-yara');
             if (result && result.success && result.files && result.files.length > 0) {
                 tbody.innerHTML = result.files.map(f => {
-                    const ownerLower = (f.user || '').toString().toLowerCase();
-                    const canEdit = isAdmin || (ownerLower && ownerLower === usernameLower);
-                    const canDelete = isAdmin || (ownerLower && ownerLower === usernameLower);
+                    const canEdit = f.can_edit === true;
+                    const canDelete = f.can_delete === true;
                     const displayName = (f.display_name != null && f.display_name !== '') ? f.display_name : f.filename;
                     const storeTitle = (f.filename && displayName !== f.filename)
                         ? ` title="${escapeAttr('Stored file: ' + f.filename)}"`

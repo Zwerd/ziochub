@@ -45,6 +45,7 @@ import ssl
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -522,6 +523,27 @@ def _cortex_xdr_push_ioc_from_context_inner(ioc: dict[str, Any]) -> tuple[bool, 
     return True, tim_msg
 
 
+def _validate_cortex_base_url(base: str) -> Optional[str]:
+    """Return a user-facing error string, or None if the base URL looks acceptable."""
+    b = (base or '').strip()
+    if not b:
+        return 'Base URL is empty'
+    if ' ' in b:
+        return 'Base URL must not contain spaces'
+    if not b.lower().startswith('https://'):
+        return 'Base URL must start with https:// (example: https://api-xx.paloaltonetworks.com)'
+    try:
+        parsed = urlparse(b)
+    except Exception:
+        return 'Base URL is not a valid URL'
+    if not parsed.hostname:
+        return 'Base URL is missing a hostname'
+    host = parsed.hostname.lower()
+    if host in ('localhost', '127.0.0.1'):
+        return 'Base URL must be your Cortex XDR API host (api-*.paloaltonetworks.com), not localhost'
+    return None
+
+
 def cortex_xdr_test_connection(
     settings: Optional[dict[str, str]] = None,
     *,
@@ -533,6 +555,29 @@ def cortex_xdr_test_connection(
     Returns ``{ success, steps: [{ step, status, message }] }`` for the admin UI.
     HTTP 403 after TLS + auth is treated as reachable (role may block this probe).
     """
+    try:
+        return _cortex_xdr_test_connection_impl(settings, verify_ssl=verify_ssl)
+    except Exception as e:
+        logger.exception('cortex_xdr_test_connection failed')
+        err_msg = str(e).strip() or type(e).__name__
+        return {
+            'success': False,
+            'error_type': type(e).__name__,
+            'steps': [
+                {
+                    'step': 'server',
+                    'status': 'fail',
+                    'message': f'Internal error during Cortex test: {type(e).__name__}: {err_msg}',
+                },
+            ],
+        }
+
+
+def _cortex_xdr_test_connection_impl(
+    settings: Optional[dict[str, str]] = None,
+    *,
+    verify_ssl: Optional[bool] = None,
+) -> dict[str, Any]:
     g = settings or cortex_xdr_settings_dict()
     steps: list[dict[str, str]] = []
 
@@ -551,11 +596,20 @@ def cortex_xdr_test_connection(
     if not api_key:
         missing.append('api_key_secret')
     if missing:
+        hint = (
+            'Save settings first (API key secret is only stored when you click Save). '
+            'Test reads saved values from the database, not unsaved form fields.'
+        )
         steps.append({
             'step': 'config',
             'status': 'fail',
-            'message': 'Missing required Cortex XDR settings: ' + ', '.join(missing),
+            'message': 'Missing required Cortex XDR settings: ' + ', '.join(missing) + '. ' + hint,
         })
+        return {'success': False, 'steps': steps}
+
+    url_err = _validate_cortex_base_url(base)
+    if url_err:
+        steps.append({'step': 'config', 'status': 'fail', 'message': url_err})
         return {'success': False, 'steps': steps}
 
     url = _cortex_auth_settings_url(base)
@@ -580,14 +634,14 @@ def cortex_xdr_test_connection(
             f'HTTP 401 — authentication failed. Most common causes: wrong API key ID/secret, '
             f'API key is not an Advanced key, or clock skew on the server running ZIoCHub. '
             f'Base URL should look like https://api-<tenant>.paloaltonetworks.com. '
-            f'Response: {raw[:220]}'
+            f'Response: {raw[:400]}'
         ).strip()
         steps.append({'step': 'cortex_api', 'status': 'fail', 'message': msg})
         return {'success': False, 'steps': steps}
 
     if code == 403:
         msg = (
-            f'HTTP 403 — reachable; this probe may require higher RBAC on the API key. {raw[:180]}'
+            f'HTTP 403 — reachable; this probe may require higher RBAC on the API key. {raw[:300]}'
         ).strip()
         steps.append({'step': 'cortex_api', 'status': 'ok', 'message': msg})
         return {'success': True, 'steps': steps}
@@ -595,10 +649,10 @@ def cortex_xdr_test_connection(
     if code == 0:
         # Network/TLS failure (see _http_json_post)
         hint = 'If this is TLS-related, try "Ignore TLS for this test" temporarily to confirm connectivity.'
-        steps.append({'step': 'cortex_api', 'status': 'fail', 'message': f'Connection failed — {raw[:240]}. {hint}'.strip()})
+        steps.append({'step': 'cortex_api', 'status': 'fail', 'message': f'Connection failed — {raw[:400]}. {hint}'.strip()})
         return {'success': False, 'steps': steps}
 
     hint = ' (check base URL host)' if code == 404 else ''
-    snippet = raw[:200] + ('…' if len(raw) > 200 else '')
+    snippet = raw[:400] + ('…' if len(raw) > 400 else '')
     steps.append({'step': 'cortex_api', 'status': 'fail', 'message': f'HTTP {code}{hint} — {snippet}'.strip()})
     return {'success': False, 'steps': steps}

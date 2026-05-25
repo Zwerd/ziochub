@@ -422,6 +422,15 @@ _SETTINGS_DEFAULTS = {
     'trellix_ex_content_type': 'base',
     'trellix_ex_csrf_param': '',
     'trellix_ex_csrf_token': '',
+    # Trellix CMS (central manager for EX): separate targets from direct EX push
+    'trellix_cms_targets': '[]',
+    'trellix_cms_enabled': 'false',
+    'trellix_cms_login_path': '/login/login',
+    'trellix_cms_upload_path': '/cms/yara_rules_ng/upload_yara',
+    'trellix_cms_delete_path': '/cms/yara_rules_ng/delete_yara_files',
+    'trellix_cms_verify_ssl': 'true',
+    'trellix_cms_f_type': 'common',
+    'trellix_cms_content_type': 'base',
     'sanity_check_mode': 'block_non_admin',
     'search_comment_rtl_by_script': 'true',  # In search results: if comment has more Hebrew/Arabic than other text, show RTL
     # Tags governance (admin-controlled taxonomy)
@@ -643,6 +652,9 @@ def _normalize_trellix_ex_targets_for_save(val, _get_setting) -> str:
         edm = str(item.get('ex_delete_name_mode') or 'same').strip().lower()
         if edm not in ('same', 'yar_txt'):
             edm = 'same'
+        auth_m = str(item.get('auth_method') or 'password').strip().lower()
+        if auth_m not in ('password', 'ldap', 'auto'):
+            auth_m = 'password'
         row_out: dict = {
             'name': name,
             'base_url': base.rstrip('/'),
@@ -654,6 +666,7 @@ def _normalize_trellix_ex_targets_for_save(val, _get_setting) -> str:
             'verify_ssl': verify_ssl,
             'f_type': ft,
             'content_type': ct,
+            'auth_method': auth_m,
         }
         if csrf_p:
             row_out['csrf_param'] = csrf_p
@@ -663,6 +676,115 @@ def _normalize_trellix_ex_targets_for_save(val, _get_setting) -> str:
             row_out['delete_path'] = del_p
         if edm != 'same':
             row_out['ex_delete_name_mode'] = edm
+        out.append(row_out)
+    return json.dumps(out, ensure_ascii=False)
+
+
+def _trellix_cms_targets_json_for_form(get_setting_fn) -> str:
+    import json
+
+    raw = (get_setting_fn('trellix_cms_targets', '') or '').strip()
+    rows: list[dict] = []
+    if raw and raw != '[]':
+        try:
+            rows = json.loads(raw)
+        except Exception:
+            rows = []
+    if not isinstance(rows, list):
+        rows = []
+    return json.dumps([r for r in rows if isinstance(r, dict)], ensure_ascii=False)
+
+
+def _normalize_trellix_cms_targets_for_save(val, _get_setting) -> str:
+    import json
+
+    MAX_TARGETS = 32
+    MAX_URL = 2048
+
+    def _old_list() -> list:
+        try:
+            o = json.loads(_get_setting('trellix_cms_targets', '[]') or '[]')
+            return o if isinstance(o, list) else []
+        except Exception:
+            return []
+
+    old = [x for x in _old_list() if isinstance(x, dict)]
+
+    if val is None:
+        return '[]'
+    if isinstance(val, str):
+        try:
+            val = json.loads(val.strip() or '[]')
+        except Exception as e:
+            raise ValueError('trellix_cms_targets: invalid JSON') from e
+    if not isinstance(val, list):
+        raise ValueError('trellix_cms_targets must be a list')
+    if len(val) > MAX_TARGETS:
+        raise ValueError(f'trellix_cms_targets: at most {MAX_TARGETS} targets allowed')
+    out: list[dict] = []
+    for i, item in enumerate(val):
+        if not isinstance(item, dict):
+            continue
+        base = str(item.get('base_url') or '').strip()[:MAX_URL]
+        if not base:
+            continue
+        name = str(item.get('name') or '').strip()[:256] or 'Trellix CMS'
+        lp = str(item.get('login_path') or '').strip()[:512]
+        up = str(item.get('upload_path') or '').strip()[:512]
+        del_p = str(item.get('delete_path') or '').strip()[:512]
+        user = str(item.get('username') or '').strip()[:512]
+        pwd = str(item.get('password') or '')
+        if not pwd.strip() and i < len(old):
+            pwd = str(old[i].get('password') or '')
+        mc = str(item.get('manual_cookie') or '').strip()[:8000]
+        vs = item.get('verify_ssl', True)
+        if isinstance(vs, str):
+            verify_ssl = vs.strip().lower() in ('true', '1', 'yes')
+        else:
+            verify_ssl = bool(vs)
+        ft = str(item.get('f_type') or '').strip()[:64] or 'common'
+        ct = str(item.get('content_type') or '').strip()[:64] or 'base'
+        csrf_p = str(item.get('csrf_param') or '').strip()[:128]
+        csrf_t = str(item.get('csrf_token') or '').strip()[:8192]
+        edm = str(item.get('ex_delete_name_mode') or 'same').strip().lower()
+        if edm not in ('same', 'yar_txt'):
+            edm = 'same'
+        auth_m = str(item.get('auth_method') or 'auto').strip().lower()
+        if auth_m not in ('password', 'ldap', 'auto'):
+            auth_m = 'auto'
+        sensor_id = str(item.get('sensor_id') or '').strip()[:128]
+        sensor_group = str(item.get('sensor_group') or '').strip()[:128]
+        srl_raw = item.get('sensor_rules_list')
+        if isinstance(srl_raw, list):
+            sensor_rules_list = [str(x).strip() for x in srl_raw if str(x).strip()]
+        else:
+            sensor_rules_list = str(srl_raw or '').strip()[:2048]
+        row_out: dict = {
+            'name': name,
+            'base_url': base.rstrip('/'),
+            'login_path': lp,
+            'upload_path': up,
+            'delete_path': del_p,
+            'username': user,
+            'password': pwd,
+            'manual_cookie': mc,
+            'verify_ssl': verify_ssl,
+            'f_type': ft,
+            'content_type': ct,
+            'auth_method': auth_m,
+        }
+        if csrf_p:
+            row_out['csrf_param'] = csrf_p
+        if csrf_t:
+            row_out['csrf_token'] = csrf_t
+        if edm != 'same':
+            row_out['ex_delete_name_mode'] = edm
+        if sensor_id:
+            row_out['sensor_id'] = sensor_id
+        if sensor_group:
+            row_out['sensor_group'] = sensor_group
+        if sensor_rules_list:
+            row_out['sensor_rules_list'] = sensor_rules_list
         out.append(row_out)
     return json.dumps(out, ensure_ascii=False)
 
@@ -760,8 +882,10 @@ def save_settings():
             'automation_trellix_nx_enabled',
             'automation_trellix_nx_targets',
             'trellix_ex_targets',
+            'trellix_cms_targets',
         )
         trellix_ex_keys = ('trellix_ex_enabled',)
+        trellix_cms_keys = ('trellix_cms_enabled',)
         sanity_keys = ('sanity_check_mode',)
         feed_keys = ('feeds_public_enabled', 'feed_cache_enabled', 'feed_cache_ttl_seconds')
         search_keys = ('search_comment_rtl_by_script',)
@@ -795,7 +919,8 @@ def save_settings():
         sections = []
         for key in (
             session_keys + ldap_keys + misp_keys + syslog_keys + dxl_keys + automation_keys + trellix_ex_keys
-            + sanity_keys + feed_keys + search_keys + tags_keys + ioc_push_keys + esa_keys + vendor_ioc_keys
+            + trellix_cms_keys + sanity_keys + feed_keys + search_keys + tags_keys + ioc_push_keys + esa_keys
+            + vendor_ioc_keys
         ):
             if key in data:
                 val = data[key]
@@ -824,6 +949,11 @@ def save_settings():
                         _set_setting(key, _normalize_trellix_ex_targets_for_save(val, _get_setting))
                     except ValueError as vex:
                         return jsonify({'success': False, 'message': str(vex)}), 400
+                elif key == 'trellix_cms_targets':
+                    try:
+                        _set_setting(key, _normalize_trellix_cms_targets_for_save(val, _get_setting))
+                    except ValueError as vcms:
+                        return jsonify({'success': False, 'message': str(vcms)}), 400
                 elif key in ('automation_fireeye_appliances', 'automation_trellix_nx_targets'):
                     import json
                     _set_setting(key, json.dumps(val) if isinstance(val, (list, dict)) else str(val).strip())
@@ -855,6 +985,11 @@ def save_settings():
                     _set_setting(key, str(val).strip())
                 elif key in trellix_ex_keys:
                     if key == 'trellix_ex_enabled':
+                        _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
+                    else:
+                        _set_setting(key, str(val).strip())
+                elif key in trellix_cms_keys:
+                    if key == 'trellix_cms_enabled':
                         _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
                     else:
                         _set_setting(key, str(val).strip())
@@ -912,6 +1047,8 @@ def save_settings():
                     sections.append('YARA push')
                 elif (key in trellix_ex_keys or key == 'trellix_ex_targets') and 'Trellix EX' not in sections:
                     sections.append('Trellix EX')
+                elif (key in trellix_cms_keys or key == 'trellix_cms_targets') and 'Trellix CMS' not in sections:
+                    sections.append('Trellix CMS')
                 elif key in vendor_ioc_keys and 'Vendor IOC' not in sections:
                     sections.append('Vendor IOC')
                 elif key in sanity_keys and 'Sanity' not in sections:
@@ -1065,10 +1202,27 @@ def cortex_xdr_test():
 
         result = cortex_xdr_test_connection(settings, verify_ssl=verify_ssl)
         audit_log('admin_cortex_xdr_test', f'by={current_user.username} ok={result.get("success")}')
-        return jsonify({'success': True, **result})
+        body = {'success': bool(result.get('success')), **result}
+        return jsonify(body), 200
     except Exception as e:
         logging.exception('api_admin_cortex_xdr_test failed')
-        return _api_error(str(e), 500)
+        err_msg = str(e).strip() or type(e).__name__
+        return jsonify({
+            'success': False,
+            'message': err_msg,
+            'error_type': type(e).__name__,
+            'hint': (
+                'Server-side error before/during the Cortex probe. '
+                'Check the Python console (dev) or: journalctl -u ziochub -n 80 --no-pager | grep -i cortex'
+            ),
+            'steps': [
+                {
+                    'step': 'server',
+                    'status': 'fail',
+                    'message': f'{type(e).__name__}: {err_msg}',
+                },
+            ],
+        }), 200
 
 
 @bp.route('/google-secops/test', methods=['POST'])
@@ -1120,15 +1274,115 @@ def trellix_ex_test():
             # Per-target verify_ssl from trellix_ex_targets JSON (or legacy normalized row).
             verify_ssl = None
 
-        result = test_trellix_ex_connection(_get_setting, verify_ssl=verify_ssl)
-        audit_log(
-            'admin_trellix_ex_test',
-            f'by={current_user.username} ok={result.get("overall_success")}',
-        )
+        step = (data.get('step') or '').strip().lower()
+        if step in ('auth', 'upload', 'cleanup'):
+            from utils.trellix_ex import test_trellix_ex_step
+            result = test_trellix_ex_step(_get_setting, step, verify_ssl=verify_ssl)
+            audit_log(
+                'admin_trellix_ex_test',
+                f'by={current_user.username} step={step} ok={result.get("overall_success")}',
+            )
+        else:
+            result = test_trellix_ex_connection(_get_setting, verify_ssl=verify_ssl)
+            audit_log(
+                'admin_trellix_ex_test',
+                f'by={current_user.username} ok={result.get("overall_success")}',
+            )
         # Force 200 so browsers/proxies never surface rare 2xx (e.g. 203) without a JSON body the UI can parse.
         return jsonify(result), 200
     except Exception as e:
         logging.exception('api_admin_trellix_ex_test failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/trellix-cms/test', methods=['POST'])
+@admin_required
+def trellix_cms_test():
+    """POST minimal YARA to Trellix CMS (login + multipart upload) using saved Integrations settings."""
+    audit_log, _api_error = _from_app('audit_log', '_api_error')
+    try:
+        _get_setting, = _from_app('_get_setting')
+        from utils.trellix_cms import test_trellix_cms_connection, trellix_cms_enabled
+
+        if not trellix_cms_enabled(_get_setting):
+            return jsonify({
+                'success': True,
+                'overall_success': False,
+                'results': [],
+                'message': 'Trellix CMS is disabled. Enable it, save, then test.',
+            })
+
+        data = request.get_json(silent=True) or {}
+        ignore_ssl = data.get('ignore_ssl')
+        if ignore_ssl is not None and str(ignore_ssl).lower() in ('true', '1', 'yes'):
+            verify_ssl = False
+        else:
+            verify_ssl = None
+
+        step = (data.get('step') or '').strip().lower()
+        if step in ('auth', 'upload', 'cleanup'):
+            from utils.trellix_cms import test_trellix_cms_step
+            result = test_trellix_cms_step(_get_setting, step, verify_ssl=verify_ssl)
+            audit_log(
+                'admin_trellix_cms_test',
+                f'by={current_user.username} step={step} ok={result.get("overall_success")}',
+            )
+        else:
+            result = test_trellix_cms_connection(_get_setting, verify_ssl=verify_ssl)
+            audit_log(
+                'admin_trellix_cms_test',
+                f'by={current_user.username} ok={result.get("overall_success")}',
+            )
+        return jsonify(result), 200
+    except Exception as e:
+        logging.exception('api_admin_trellix_cms_test failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/trellix-nx/wmps/test', methods=['POST'])
+@admin_required
+def trellix_nx_wmps_test():
+    """Staged test for NX wmps targets (login, upload, cleanup) using saved Integrations settings."""
+    audit_log, _api_error = _from_app('audit_log', '_api_error')
+    try:
+        _get_setting, = _from_app('_get_setting')
+        from utils.trellix_nx import test_trellix_nx_wmps_connection, trellix_nx_wmps_enabled
+
+        if not trellix_nx_wmps_enabled(_get_setting):
+            return jsonify({
+                'success': True,
+                'overall_success': False,
+                'results': [],
+                'message': (
+                    'No NX wmps targets (API style wmps + base URL) or NX automation is disabled. '
+                    'Save settings, then test.'
+                ),
+            })
+
+        data = request.get_json(silent=True) or {}
+        ignore_ssl = data.get('ignore_ssl')
+        if ignore_ssl is not None and str(ignore_ssl).lower() in ('true', '1', 'yes'):
+            verify_ssl = False
+        else:
+            verify_ssl = None
+
+        step = (data.get('step') or '').strip().lower()
+        if step in ('auth', 'upload', 'cleanup'):
+            from utils.trellix_nx import test_trellix_nx_wmps_step
+            result = test_trellix_nx_wmps_step(_get_setting, step, verify_ssl=verify_ssl)
+            audit_log(
+                'admin_trellix_nx_wmps_test',
+                f'by={current_user.username} step={step} ok={result.get("overall_success")}',
+            )
+        else:
+            result = test_trellix_nx_wmps_connection(_get_setting, verify_ssl=verify_ssl)
+            audit_log(
+                'admin_trellix_nx_wmps_test',
+                f'by={current_user.username} ok={result.get("overall_success")}',
+            )
+        return jsonify(result), 200
+    except Exception as e:
+        logging.exception('api_admin_trellix_nx_wmps_test failed')
         return _api_error(str(e), 500)
 
 
@@ -1758,6 +2012,8 @@ def _build_admin_settings_form_context():
         'trellix_ex_content_type': _get_setting('trellix_ex_content_type', 'base'),
         'trellix_ex_csrf_param': _get_setting('trellix_ex_csrf_param', ''),
         'trellix_ex_csrf_token': _get_setting('trellix_ex_csrf_token', ''),
+        'trellix_cms_enabled': _get_setting('trellix_cms_enabled', 'false'),
+        'trellix_cms_targets': _trellix_cms_targets_json_for_form(_get_setting),
         'ioc_push_enabled': _get_setting('ioc_push_enabled', 'false'),
         'ioc_push_ignore_ssl': _get_setting('ioc_push_ignore_ssl', 'false'),
         'ioc_push_targets': _get_setting('ioc_push_targets', '[]'),

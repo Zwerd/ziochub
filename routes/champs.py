@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from flask import Blueprint, request, jsonify, url_for
 from flask_login import current_user
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from extensions import db
 from models import User, UserProfile, UserSession, IOC, YaraRule, ActivityEvent, TeamGoal, ChampRankSnapshot
@@ -302,6 +302,15 @@ def get_champs_leaderboard():
             })
     users_by_id = {u.id: u for u in User.query.all()}
     profiles = {p.user_id: p for p in UserProfile.query.all()}
+    campaign_by_user = {}
+    try:
+        for cr in db.session.execute(text(
+            'SELECT created_by, COUNT(*) FROM campaigns WHERE created_by IS NOT NULL GROUP BY created_by'
+        )).fetchall():
+            if cr[0] is not None:
+                campaign_by_user[int(cr[0])] = int(cr[1] or 0)
+    except Exception:
+        campaign_by_user = {}
     # Presence: only count as online if we saw a heartbeat recently.
     # Prevents stale sessions (browser closed without /logout) from staying green forever.
     online_window_seconds = 90
@@ -360,6 +369,8 @@ def get_champs_leaderboard():
             'score': r['score'],
             'total_iocs': r['total_iocs'],
             'yara_count': r['yara_count'],
+            'deletion_count': r.get('deletion_count', 0),
+            'campaign_create_count': campaign_by_user.get(uid, 0) if uid else 0,
             'last_activity': r['last_activity'],
             'medal': medal,
             'trend': trend,
@@ -623,6 +634,7 @@ def get_champs_analyst(user_id):
             'total_iocs': 0,
             'yara_count': 0,
             'deletion_count': 0,
+            'campaign_create_count': 0,
             'streak_days': 0,
             'nickname': 'Threat Hunter',
             'nickname_emoji': '🎯',

@@ -21,7 +21,7 @@ from extensions import db
 from models import Campaign, IOC, YaraRule, _utcnow
 from utils.decorators import login_required
 from utils.tags import normalize_tags_from_input
-from utils.campaign_tag_sync import parse_tags_field, merge_tag_lists, sync_added_tags_to_campaign_iocs
+from utils.campaign_tag_sync import parse_tags_field, merge_campaign_tags_into_tags_json, sync_added_tags_to_campaign_iocs
 
 
 bp = Blueprint('campaigns_api', __name__, url_prefix='/api')
@@ -258,17 +258,22 @@ def link_ioc_to_campaign():
             old_camp = db.session.get(Campaign, old_campaign_id)
             old_campaign_name = (old_camp.name if old_camp else '')
         old_tags_list = parse_tags_field(ioc.tags)
-        campaign_tag_list = parse_tags_field(getattr(campaign, 'tags', None))
         ioc.campaign_id = campaign_id
         edit_changes = []
         if old_campaign_id != campaign_id:
             edit_changes.append({'field': 'campaign', 'old': old_campaign_name or '\u2014', 'new': campaign.name})
-        merged_tags, newly = merge_tag_lists(old_tags_list, campaign_tag_list)
-        if newly:
-            old_display = ', '.join(old_tags_list) if old_tags_list else ''
-            new_display = ', '.join(merged_tags) if merged_tags else ''
-            ioc.tags = json.dumps(merged_tags)
+        new_tags_json = merge_campaign_tags_into_tags_json(ioc.tags, campaign_id)
+        new_tags_list = parse_tags_field(new_tags_json)
+        valid_merged, tags_err = _campaign_tags_validated_or_error(new_tags_list)
+        if tags_err is not None:
+            db.session.rollback()
+            return tags_err
+        final_tags = list(valid_merged or [])
+        if final_tags != old_tags_list:
+            ioc.tags = json.dumps(final_tags) if final_tags else '[]'
             ioc.modified_at = _utcnow()
+            old_display = ', '.join(old_tags_list) if old_tags_list else ''
+            new_display = ', '.join(final_tags) if final_tags else ''
             edit_changes.append({'field': 'tags', 'old': old_display or '\u2014', 'new': new_display or '\u2014'})
         if edit_changes:
             _log_ioc_history(

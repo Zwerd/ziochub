@@ -1464,6 +1464,8 @@
         const roleDescHtml = roleDesc ? `<p class="text-secondary font-medium mt-0.5">${escapeHtml(roleDesc)}</p>` : '';
         const spotlightInactiveClass = data.is_active === false ? ' grayscale opacity-70' : '';
         const scoreValue = data.score != null ? data.score : 0;
+        const campN = data.campaign_create_count != null ? data.campaign_create_count : 0;
+        const lblCamp = (typeof t === 'function' && t('champs.stat_campaigns')) ? t('champs.stat_campaigns') : 'Campaigns';
         content.innerHTML = `
             <div class="champs-spotlight-card rounded-lg border border-white/10 bg-tertiary/80 p-4 flex-1 min-h-0 flex flex-col overflow-auto">
                 <div class="champs-spotlight-header flex items-stretch gap-4 mb-4 flex-shrink-0">
@@ -1481,6 +1483,7 @@
                 <div class="champs-stats-grid grid grid-cols-2 gap-3">
                     <div class="champs-stat-card rounded-lg p-4 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-1">IOCs</span><span class="font-mono text-lg font-bold accent-green">${data.total_iocs || 0}</span></div>
                     <div class="champs-stat-card rounded-lg p-4 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-1">YARA</span><span class="font-mono text-lg font-bold text-amber-400">${data.yara_count || 0}</span></div>
+                    <div class="champs-stat-card rounded-lg p-4 bg-black/25 border border-white/5 col-span-2"><span class="text-secondary text-xs uppercase tracking-wider block mb-1">${escapeHtml(lblCamp)}</span><span class="font-mono text-lg font-bold text-violet-400">${campN}</span></div>
                 </div>
             </div>`;
         
@@ -1527,6 +1530,7 @@
         const fullSpotlightInactiveClass = a.is_active === false ? ' grayscale opacity-70' : '';
         const analystChartName = (a.display_name || a.nickname || a.analyst || 'You').trim() || 'You';
         const scoreValue = a.score != null ? a.score : 0;
+        const lblCamp = (typeof t === 'function' && t('champs.stat_campaigns')) ? t('champs.stat_campaigns') : 'Campaigns';
         let chartHtml = '';
         champsMispData = (a.misp_per_day && a.misp_per_day.length > 0) ? a.misp_per_day : null;
         champsMispVisible = false;
@@ -1572,6 +1576,7 @@
                     <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">IOCs</span><span class="font-mono text-lg font-bold accent-green truncate block">${a.total_iocs || 0}</span></div>
                     <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">YARA</span><span class="font-mono text-lg font-bold text-amber-400 truncate block">${a.yara_count || 0}</span></div>
                     <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">Deletions</span><span class="font-mono text-lg font-bold truncate block">${a.deletion_count || 0}</span></div>
+                    <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">${escapeHtml(lblCamp)}</span><span class="font-mono text-lg font-bold text-violet-400 truncate block">${a.campaign_create_count != null ? a.campaign_create_count : 0}</span></div>
                     <div class="champs-stat-card rounded-lg p-3 bg-black/25 border border-white/5"><span class="text-secondary text-xs uppercase tracking-wider block mb-0.5">Streak</span><span class="font-mono text-lg font-bold truncate block">${a.streak_days || 0}d</span></div>
                 </div>
                 ${chartHtml}`;

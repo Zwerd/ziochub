@@ -97,6 +97,13 @@ def retry_last_failed_yara_automation(
         push_yara_trellix_ex,
         trellix_ex_enabled,
     )
+    from utils.trellix_cms import (
+        delete_yara_trellix_cms,
+        list_trellix_cms_delete_urls,
+        list_trellix_cms_upload_urls,
+        push_yara_trellix_cms,
+        trellix_cms_enabled,
+    )
     from utils.trellix_nx import (
         delete_yara_nx_wmps,
         list_nx_wmps_delete_urls,
@@ -132,6 +139,18 @@ def retry_last_failed_yara_automation(
                 needs_trellix = True
                 break
 
+    needs_trellix_cms = False
+    if kind_l == 'push' and trellix_cms_enabled(get_setting):
+        for tu in list_trellix_cms_upload_urls(get_setting):
+            if (tu or '').strip() and (tu or '').strip() in failed_urls:
+                needs_trellix_cms = True
+                break
+    if kind_l == 'delete' and trellix_cms_enabled(get_setting):
+        for tu in list_trellix_cms_delete_urls(get_setting):
+            if (tu or '').strip() and (tu or '').strip() in failed_urls:
+                needs_trellix_cms = True
+                break
+
     needs_nx_wmps = False
     if kind_l == 'push' and trellix_nx_wmps_enabled(get_setting):
         for tu in list_nx_wmps_upload_urls(get_setting):
@@ -144,11 +163,13 @@ def retry_last_failed_yara_automation(
                 needs_nx_wmps = True
                 break
 
-    if not targets and not needs_trellix and not needs_nx_wmps:
+    if not targets and not needs_trellix and not needs_trellix_cms and not needs_nx_wmps:
         raise NoMatchingTargetsError('No matching targets found (URLs changed?)')
 
-    verify_ssl = (get_setting('automation_fireeye_ignore_ssl', 'false') or 'false').lower() != 'true'
-    verify_tx = (get_setting('trellix_ex_verify_ssl', 'true') or 'true').lower() in ('true', '1', 'yes')
+    from utils.yara_push_targets import yara_http_push_verify_ssl, yara_session_push_verify_ssl
+
+    verify_ssl = yara_http_push_verify_ssl(get_setting)
+    verify_session = yara_session_push_verify_ssl(get_setting)
 
     if kind_l == 'delete':
         if targets:
@@ -156,13 +177,19 @@ def retry_last_failed_yara_automation(
         else:
             res = {'overall_success': True, 'results': []}
         if needs_trellix:
-            res_tx = delete_yara_trellix_ex(filename, get_setting, audit_log_fn, verify_ssl=verify_tx)
+            res_tx = delete_yara_trellix_ex(filename, get_setting, audit_log_fn, verify_ssl=verify_session)
             res = {
                 'overall_success': bool(res.get('overall_success')) and bool(res_tx.get('overall_success')),
                 'results': (res.get('results') or []) + (res_tx.get('results') or []),
             }
+        if needs_trellix_cms:
+            res_cms = delete_yara_trellix_cms(filename, get_setting, audit_log_fn, verify_ssl=verify_session)
+            res = {
+                'overall_success': bool(res.get('overall_success')) and bool(res_cms.get('overall_success')),
+                'results': (res.get('results') or []) + (res_cms.get('results') or []),
+            }
         if needs_nx_wmps:
-            res_nx = delete_yara_nx_wmps(filename, get_setting, audit_log_fn, verify_ssl=None)
+            res_nx = delete_yara_nx_wmps(filename, get_setting, audit_log_fn, verify_ssl=verify_session)
             res = {
                 'overall_success': bool(res.get('overall_success')) and bool(res_nx.get('overall_success')),
                 'results': (res.get('results') or []) + (res_nx.get('results') or []),
@@ -183,12 +210,18 @@ def retry_last_failed_yara_automation(
             overall = overall and bool(res_fe.get('overall_success'))
         if needs_trellix:
             res_tx = push_yara_trellix_ex(
-                content, filename, get_setting, audit_log_fn, verify_ssl=verify_tx
+                content, filename, get_setting, audit_log_fn, verify_ssl=verify_session
             )
             combined_results.extend(res_tx.get('results', []))
             overall = overall and bool(res_tx.get('overall_success'))
+        if needs_trellix_cms:
+            res_cms = push_yara_trellix_cms(
+                content, filename, get_setting, audit_log_fn, verify_ssl=verify_session
+            )
+            combined_results.extend(res_cms.get('results', []))
+            overall = overall and bool(res_cms.get('overall_success'))
         if needs_nx_wmps:
-            res_nx = push_yara_nx_wmps(content, filename, get_setting, audit_log_fn, verify_ssl=None)
+            res_nx = push_yara_nx_wmps(content, filename, get_setting, audit_log_fn, verify_ssl=verify_session)
             combined_results.extend(res_nx.get('results', []))
             overall = overall and bool(res_nx.get('overall_success'))
         res = {'overall_success': overall, 'results': combined_results}

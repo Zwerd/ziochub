@@ -1626,6 +1626,17 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
     analyst_deletions = {analyst_lower: row.get('deletion_count', 0)}
     badges = _get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id, {analyst_lower: dict(analyst_daily)}, analyst_deletions, scoring_method=scoring_method)
 
+    campaign_create_count = 0
+    if user_id:
+        try:
+            n = db.session.execute(
+                text('SELECT COUNT(*) FROM campaigns WHERE created_by = :uid'),
+                {'uid': user_id},
+            ).scalar()
+            campaign_create_count = int(n or 0)
+        except Exception:
+            campaign_create_count = 0
+
     misp_per_day = None
     if misp_sync_username:
         misp_lower = misp_sync_username.lower()
@@ -1650,6 +1661,7 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
         'total_iocs': row['total_iocs'],
         'yara_count': row['yara_count'],
         'deletion_count': row.get('deletion_count', 0),
+        'campaign_create_count': campaign_create_count,
         'streak_days': row['streak_days'],
         'nickname': nickname,
         'nickname_emoji': emoji,

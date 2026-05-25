@@ -3,7 +3,7 @@
 
 {% block admin_content %}
 <div class="mb-4">
-    <p class="text-secondary text-sm">Built-in integrations: <strong class="text-primary">Trellix EX/NX</strong> (Email + Network YARA), <strong class="text-primary">Cisco ESA</strong> (dictionary sync), <strong class="text-primary">Cortex XDR</strong> and <strong class="text-primary">Google SecOps</strong> (IOC API placeholders - see each tab). Generic HTTP IOC/YARA automations: <a href="{{ url_for('admin_pages.admin_automations') }}" class="text-cyan-400 hover:underline">Automations</a>. LDAP, MISP, Syslog: <a href="{{ url_for('admin_pages.admin_settings') }}" class="text-cyan-400 hover:underline">Settings</a>.</p>
+    <p class="text-secondary text-sm">Built-in integrations: <strong class="text-primary">Trellix EX / CMS / NX</strong> (Email YARA direct, CMS central manager, Network YARA), <strong class="text-primary">Cisco ESA</strong> (dictionary sync), <strong class="text-primary">Cortex XDR</strong> and <strong class="text-primary">Google SecOps</strong> (IOC API placeholders - see each tab). Generic HTTP IOC/YARA automations: <a href="{{ url_for('admin_pages.admin_automations') }}" class="text-cyan-400 hover:underline">Automations</a>. LDAP, MISP, Syslog: <a href="{{ url_for('admin_pages.admin_settings') }}" class="text-cyan-400 hover:underline">Settings</a>.</p>
 </div>
 
 <nav class="settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-6">
@@ -16,18 +16,19 @@
 <!-- Tab: Trellix EX / NX -->
 <div id="settings-tab-trellix-ex-nx" class="settings-tab-pane">
     <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
-        <h3 class="text-lg font-semibold accent-blue mb-2">Trellix EX / NX</h3>
-        <p class="text-secondary text-sm mb-4"><strong class="text-primary">Email Security (EX)</strong> and <strong class="text-primary">Network Security (NX)</strong> are grouped here. Use the buttons below to switch - no extra row of top-level tabs.</p>
+        <h3 class="text-lg font-semibold accent-blue mb-2">Trellix EX / CMS / NX</h3>
+        <p class="text-secondary text-sm mb-4"><strong class="text-primary">Email Security (EX)</strong>, <strong class="text-primary">CMS</strong> (central manager for EX), and <strong class="text-primary">Network Security (NX)</strong> are grouped here. Use the buttons below to switch.</p>
 
         <div class="flex flex-wrap gap-1.5 p-1 rounded-xl bg-black/30 border border-white/10 w-fit max-w-full mb-2">
             <button type="button" class="trellix-exnx-subtab-btn px-3 py-2 rounded-lg text-sm font-medium transition bg-cyan-600 text-white" data-trellix-exnx-sub="ex">Email (EX)</button>
+            <button type="button" class="trellix-exnx-subtab-btn px-3 py-2 rounded-lg text-sm font-medium transition bg-tertiary text-primary hover:bg-white/10" data-trellix-exnx-sub="cms">CMS</button>
             <button type="button" class="trellix-exnx-subtab-btn px-3 py-2 rounded-lg text-sm font-medium transition bg-tertiary text-primary hover:bg-white/10" data-trellix-exnx-sub="nx">Network (NX)</button>
         </div>
 
         <div id="trellix-exnx-sub-ex" class="trellix-exnx-subpane space-y-3">
             <h4 class="text-sm font-semibold text-primary">Email Security (EX)</h4>
             <p class="text-secondary text-sm mb-2">Push approved YARA rules to Trellix Email Security (EX): JSON password login to <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code>, then <code class="px-0.5 rounded bg-white/10 text-xs">multipart/form-data</code> POST (default upload path <code class="px-0.5 rounded bg-white/10 text-xs">/ex/yara_rules_ng/upload_yara</code>). Network Security (NX) web YARA uses <code class="px-0.5 rounded bg-white/10 text-xs">/wmps/yara_rules_ng/upload_yara</code> - configure that under <strong class="text-primary">Network (NX)</strong> with API style <code class="px-0.5 rounded bg-white/10 text-xs">wmps</code>. On ZIoCHub YARA delete, matching <code class="px-0.5 rounded bg-white/10 text-xs">delete_yara_files</code> POSTs run when the integration is enabled. Fields: <code class="px-0.5 rounded bg-white/10 text-xs">yara_file</code>, <code class="px-0.5 rounded bg-white/10 text-xs">f_type</code>, <code class="px-0.5 rounded bg-white/10 text-xs">content_type</code>.</p>
-            <p class="text-secondary text-xs mb-4">If you already have a session cookie from the browser, paste it into <strong class="text-primary">Manual Cookie</strong> to skip login. Otherwise set username and password (login body: <code class="px-0.5 rounded bg-white/10 text-xs">{"auth_method":"password","data":{"username","password"}}</code>). Default login path is <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code> (newer UI); use <code class="px-0.5 rounded bg-white/10 text-xs">/ex/login</code> if your appliance still uses it. Optional: paste <strong class="text-primary">CSRF token</strong> from DevTools when using manual cookie if upload is rejected.</p>
+            <p class="text-secondary text-xs mb-4">If you already have a session cookie from the browser, paste it into <strong class="text-primary">Manual Cookie</strong> to skip login. Otherwise set username and password (EX validates against local/LDAP per appliance). ZIoCHub runs <strong class="text-primary">GET</strong> then <strong class="text-primary">JSON POST</strong> on the login path with <code class="px-0.5 rounded bg-white/10 text-xs">auth_method</code> <code class="px-0.5 rounded bg-white/10 text-xs">password</code>, <code class="px-0.5 rounded bg-white/10 text-xs">ldap</code>, or <code class="px-0.5 rounded bg-white/10 text-xs">auto</code> (tries password then ldap). For <strong class="text-primary">LDAP-backed EX</strong>, use <code class="px-0.5 rounded bg-white/10 text-xs">auto</code> or <code class="px-0.5 rounded bg-white/10 text-xs">ldap</code> and the same username format you use in the web UI (UPN or <code class="px-0.5 rounded bg-white/10 text-xs">DOMAIN\user</code>). Default login path <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code>; upload <code class="px-0.5 rounded bg-white/10 text-xs">/ex/yara_rules_ng/upload_yara</code>. Optional: <strong class="text-primary">CSRF token</strong> from DevTools if upload still returns HTTP 203.</p>
 
             <form id="trellixExForm" class="space-y-4 max-w-3xl">
                 <div>
@@ -45,7 +46,7 @@
                 </div>
                 <div class="flex flex-wrap gap-2 items-center">
                     <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Trellix EX settings</button>
-                    <button type="button" id="trellixExTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-cyan-500/40 hover:bg-cyan-900/30 text-cyan-200 transition">Test login + upload</button>
+                    <button type="button" id="trellixExTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-cyan-500/40 hover:bg-cyan-900/30 text-cyan-200 transition">Test login + upload + cleanup</button>
                     <label class="flex items-center gap-2 text-xs text-secondary cursor-pointer select-none">
                         <input type="checkbox" id="trellixExTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
                         <span>Test only: ignore TLS for all targets</span>
@@ -57,9 +58,42 @@
             <div id="trellixExTestResult" class="hidden rounded-lg border border-white/10 bg-black/30 p-3 text-sm space-y-1 mt-3"></div>
         </div>
 
+        <div id="trellix-exnx-sub-cms" class="trellix-exnx-subpane hidden space-y-3 pt-2 border-t border-white/10 mt-4">
+            <h4 class="text-sm font-semibold text-primary">Trellix CMS (central manager)</h4>
+            <p class="text-secondary text-sm mb-2">Push approved YARA rules through the <strong class="text-primary">CMS</strong> web API (<code class="px-0.5 rounded bg-white/10 text-xs">/cms/yara_rules_ng/...</code>), not the direct EX path (<code class="px-0.5 rounded bg-white/10 text-xs">/ex/...</code>). Use the CMS appliance hostname as <strong class="text-primary">base URL</strong>. Session login uses the same JSON flow as EX (<code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code> by default).</p>
+            <p class="text-secondary text-xs mb-4">Most CMS deployments require a <strong class="text-primary">sensor ID</strong> (from DevTools on the YARA page: <code class="px-0.5 rounded bg-white/10 text-xs">s_s[sensor]</code> in <code class="px-0.5 rounded bg-white/10 text-xs">get_yara_files</code>). Optional: sensor group (<code class="px-0.5 rounded bg-white/10 text-xs">All</code>) and sensor rule list names (comma-separated, maps to <code class="px-0.5 rounded bg-white/10 text-xs">s_s[s_r_l][]</code>). Do not point CMS targets at the EX integration tab.</p>
+
+            <form id="trellixCmsForm" class="space-y-4 max-w-3xl">
+                <div>
+                    <label for="trellix_cms_enabled" class="block text-sm font-semibold text-secondary mb-1">Enable Trellix CMS YARA push on approve</label>
+                    <select id="trellix_cms_enabled" name="trellix_cms_enabled" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                        <option value="false" {% if settings.trellix_cms_enabled == 'false' %}selected{% endif %}>No</option>
+                        <option value="true" {% if settings.trellix_cms_enabled == 'true' %}selected{% endif %}>Yes</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-secondary mb-2">CMS targets</label>
+                    <p class="text-secondary text-xs mb-2">One row per CMS host. Leave password empty when saving to keep the stored password.</p>
+                    <div id="trellixCmsTargetsList" class="space-y-3" data-initial="{{ settings.trellix_cms_targets | e }}"></div>
+                    <button type="button" id="trellixCmsAddTarget" class="mt-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition">+ Add CMS target</button>
+                </div>
+                <div class="flex flex-wrap gap-2 items-center">
+                    <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Trellix CMS settings</button>
+                    <button type="button" id="trellixCmsTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-cyan-500/40 hover:bg-cyan-900/30 text-cyan-200 transition">Test login + upload + cleanup</button>
+                    <label class="flex items-center gap-2 text-xs text-secondary cursor-pointer select-none">
+                        <input type="checkbox" id="trellixCmsTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
+                        <span>Test only: ignore TLS for all targets</span>
+                    </label>
+                </div>
+                <p class="text-secondary text-xs">Test uses <strong class="text-primary">saved</strong> targets and enable flag (save after editing).</p>
+            </form>
+            <div id="trellixCmsMessage" class="mt-2 hidden text-sm"></div>
+            <div id="trellixCmsTestResult" class="hidden rounded-lg border border-white/10 bg-black/30 p-3 text-sm space-y-1 mt-3"></div>
+        </div>
+
         <div id="trellix-exnx-sub-nx" class="trellix-exnx-subpane hidden space-y-3 pt-2 border-t border-white/10 mt-4">
             <h4 class="text-sm font-semibold text-primary">Network Security (NX)</h4>
-            <p class="text-secondary text-xs mb-2">Per appliance: <strong class="text-primary">wsapis</strong> = REST API key targets (same as Automations YARA push). <strong class="text-primary">wmps</strong> = browser-style session login + multipart upload to <code class="px-0.5 rounded bg-white/10 text-xs">/wmps/yara_rules_ng/upload_yara</code> (and delete via ZIoCHub when NX automation is enabled).</p>
+            <p class="text-secondary text-xs mb-2">Per appliance: <strong class="text-primary">wsapis</strong> = REST API key targets (same as Automations YARA push). <strong class="text-primary">wmps</strong> = browser session to <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code>, then multipart upload to <code class="px-0.5 rounded bg-white/10 text-xs">/wmps/yara_rules_ng/upload_yara</code> with <code class="px-0.5 rounded bg-white/10 text-xs">f_type=txt</code> and <code class="px-0.5 rounded bg-white/10 text-xs">content_type=base</code> (delete uses <code class="px-0.5 rounded bg-white/10 text-xs">files[0][type]=txt</code>).</p>
             <p class="text-secondary text-sm mb-4">Appliance HTTPS root and wsapis version. Paths follow Trellix docs (add/remove; remove uses POST). These rows are expanded to generic HTTP targets and merged with your custom YARA list under <a href="{{ url_for('admin_pages.admin_automations') }}" class="text-cyan-400 hover:underline">Automations → YARA push</a> when automation runs.</p>
 
         <form id="trellixNxForm" class="space-y-4">
@@ -85,8 +119,14 @@
             </div>
             <div class="flex flex-wrap gap-2 items-center">
                 <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Trellix NX settings</button>
-                <button type="button" id="trellixNxTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-cyan-500/40 hover:bg-cyan-900/30 text-cyan-200 transition">Test NX targets</button>
+                <button type="button" id="trellixNxTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-cyan-500/40 hover:bg-cyan-900/30 text-cyan-200 transition">Test wmps: login + upload + cleanup</button>
+                <button type="button" id="trellixNxWsapisTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/20 hover:bg-white/10 text-primary transition">Test wsapis (REST)</button>
+                <label class="flex items-center gap-2 text-xs text-secondary cursor-pointer select-none">
+                    <input type="checkbox" id="trellixNxTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
+                    <span>Test only: ignore TLS (wmps)</span>
+                </label>
             </div>
+            <p class="text-secondary text-xs">wmps test uses <strong class="text-primary">saved</strong> targets (save after editing). wsapis test uses the current form rows.</p>
         </form>
         <div id="trellixNxMessage" class="mt-4 hidden text-sm"></div>
         <div id="trellixNxTestResult" class="hidden rounded-lg border border-white/10 bg-black/30 p-3 text-sm space-y-1 mt-4"></div>
@@ -264,7 +304,7 @@
         </form>
         <div id="cortexXdrMessage" class="mt-4 hidden text-sm"></div>
         <p class="text-secondary text-xs mt-2">Test uses <strong class="text-primary">saved</strong> settings (save after changing URL or keys).</p>
-        <div id="cortexXdrTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto max-h-48"></div>
+        <div id="cortexXdrTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto overflow-y-auto max-h-80 whitespace-pre-wrap break-words"></div>
     </div>
 </div>
 
@@ -428,20 +468,27 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                     credentials: 'same-origin',
                     body: JSON.stringify(body)
                 });
-                var data = await res.json().catch(function() { return {}; });
+                var data = await res.json().catch(function() { return { message: 'Response was not JSON (HTTP ' + res.status + ')' }; });
                 var lines = [];
                 if (!res.ok) {
-                    lines.push('API error: ' + (data.message || ('HTTP ' + res.status)));
-                } else if (data.steps && data.steps.length) {
+                    lines.push('HTTP ' + res.status + ' from ZIoCHub');
+                    if (data.error_type) lines.push('Error type: ' + data.error_type);
+                    if (data.message) lines.push('Message: ' + data.message);
+                    if (data.hint) lines.push('Hint: ' + data.hint);
+                }
+                if (data.steps && data.steps.length) {
                     data.steps.forEach(function(s) {
                         lines.push((s.status === 'ok' ? '✓ ' : '✗ ') + (s.step || '') + '  -  ' + (s.message || ''));
                     });
-                } else {
+                } else if (res.ok && !data.steps) {
                     lines.push(JSON.stringify(data, null, 2));
                 }
+                if (!lines.length) {
+                    lines.push(data.message || ('HTTP ' + res.status));
+                }
                 logEl.textContent = lines.join('\n');
-                logEl.classList.toggle('text-green-300', !!data.success);
-                logEl.classList.toggle('text-red-300', !data.success);
+                logEl.classList.toggle('text-green-300', res.ok && !!data.success);
+                logEl.classList.toggle('text-red-300', !res.ok || !data.success);
             } catch (err) {
                 logEl.textContent = 'Network error: ' + (err.message || err);
                 logEl.classList.add('text-red-300');
@@ -572,7 +619,8 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             csrf_param: '',
             csrf_token: '',
             delete_path: '',
-            ex_delete_name_mode: 'same'
+            ex_delete_name_mode: 'same',
+            auth_method: 'auto'
         };
     }
 
@@ -591,6 +639,8 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             var ct = (a.content_type || 'base').trim() || 'base';
             var csp = (a.csrf_param || '').trim();
             var cst = (a.csrf_token || '').trim();
+            var am = (a.auth_method || 'auto').trim().toLowerCase();
+            if (am !== 'password' && am !== 'ldap' && am !== 'auto') am = 'auto';
             var vs = a.verify_ssl === false || a.verify_ssl === 'false' ? 'false' : 'true';
             row.innerHTML =
                 '<div class="flex flex-wrap items-center gap-2">' +
@@ -604,11 +654,17 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                     '<div><label class="block text-xs text-secondary mb-0.5">Upload POST path</label>' +
                     '<input type="text" class="trellix-ex-upload_path w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(up) + '" autocomplete="off"></div>' +
                 '</div>' +
-                '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">' +
+                '<div class="grid grid-cols-1 sm:grid-cols-3 gap-2">' +
                     '<div><label class="block text-xs text-secondary mb-0.5">Username</label>' +
                     '<input type="text" class="trellix-ex-username w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(a.username) + '" autocomplete="off"></div>' +
                     '<div><label class="block text-xs text-secondary mb-0.5">Password</label>' +
                     '<input type="password" class="trellix-ex-password w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" placeholder="' + (a.password ? '••••••••' : '') + '" value="' + escAttr(a.password) + '" autocomplete="new-password"></div>' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">Login auth_method</label>' +
+                    '<select class="trellix-ex-auth_method w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm">' +
+                        '<option value="password"' + (am === 'password' ? ' selected' : '') + '>password</option>' +
+                        '<option value="ldap"' + (am === 'ldap' ? ' selected' : '') + '>ldap</option>' +
+                        '<option value="auto"' + (am === 'auto' ? ' selected' : '') + '>auto (password then ldap)</option>' +
+                    '</select></div>' +
                 '</div>' +
                 '<div><label class="block text-xs text-secondary mb-0.5">Manual cookie (optional)</label>' +
                 '<textarea rows="2" class="trellix-ex-manual_cookie w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-xs" placeholder="session_id=…">' + escHtml(a.manual_cookie) + '</textarea></div>' +
@@ -674,6 +730,7 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             var ct = row.querySelector('.trellix-ex-content_type');
             var csp = row.querySelector('.trellix-ex-csrf_param');
             var cst = row.querySelector('.trellix-ex-csrf_token');
+            var amEl = row.querySelector('.trellix-ex-auth_method');
             var delpEl = row.querySelector('.trellix-ex-delete_path');
             var edmEl = row.querySelector('.trellix-ex-ex_delete_name_mode');
             if (n && u && lp && up && user && pwd && ft && ct) {
@@ -687,7 +744,8 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                     manual_cookie: mc ? (mc.value || '').trim() : '',
                     verify_ssl: vs ? vs.value === 'true' : true,
                     f_type: (ft.value || '').trim(),
-                    content_type: (ct.value || '').trim()
+                    content_type: (ct.value || '').trim(),
+                    auth_method: amEl ? (amEl.value || 'auto').trim() : 'auto'
                 };
                 if (csp && (csp.value || '').trim()) o.csrf_param = (csp.value || '').trim();
                 if (cst && (cst.value || '').trim()) o.csrf_token = (cst.value || '').trim();
@@ -739,90 +797,426 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
 
     var testBtn = document.getElementById('trellixExTestBtn');
     if (testBtn) {
+        var TRELLIX_EX_TEST_FILE = 'ziochub_connection_test.yar';
+        var TRELLIX_EX_STEP_DELAY_MS = 1500;
+
+        function trellixEsc(s) {
+            return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function trellixExSleep(ms) {
+            return new Promise(function(resolve) { setTimeout(resolve, ms); });
+        }
+
+        function trellixExRenderTargetRows(results) {
+            var html = '';
+            if (!results || !results.length) return html;
+            results.forEach(function(r) {
+                var ok = r.success;
+                var icon = ok ? '\u2713' : '\u2717';
+                var color = ok ? 'text-green-400' : 'text-red-400';
+                var phase = '';
+                if (r.phase === 'login') phase = ' <span class="text-secondary text-xs">(authentication)</span>';
+                else if (r.phase === 'upload') phase = ' <span class="text-secondary text-xs">(upload)</span>';
+                else if (r.phase === 'delete') phase = ' <span class="text-secondary text-xs">(cleanup)</span>';
+                var hs = (r.http_status !== undefined && r.http_status !== null && r.http_status !== '')
+                    ? ' <span class="text-cyan-300/90 text-xs">[HTTP ' + String(r.http_status) + ']</span>' : '';
+                html += '<div class="' + color + ' text-xs mt-1.5 pl-2 border-l border-white/10">' +
+                    '<div>[' + icon + '] <strong>' + trellixEsc(r.name || 'Trellix EX') + '</strong>' + phase + hs + '</div>';
+                if (r.message) {
+                    html += '<div class="opacity-85 mt-0.5">' + trellixEsc(r.message) + '</div>';
+                }
+                if (r.hint) {
+                    html += '<div class="text-amber-200/90 mt-0.5">' + trellixEsc(r.hint) + '</div>';
+                }
+                html += '</div>';
+            });
+            return html;
+        }
+
+        function trellixExStepBlock(num, state, headline, subline, detailHtml) {
+            var border = 'border-white/10';
+            var badge = 'text-secondary';
+            if (state === 'running') {
+                border = 'border-cyan-500/40';
+                badge = 'text-cyan-300';
+            } else if (state === 'ok') {
+                border = 'border-green-500/40';
+                badge = 'text-green-400';
+            } else if (state === 'fail') {
+                border = 'border-red-500/40';
+                badge = 'text-red-400';
+            }
+            var statusLabel = state === 'running' ? 'In progress' : (state === 'ok' ? 'Completed' : 'Failed');
+            return '<div class="trellix-ex-step mb-3 p-3 rounded-lg border ' + border + ' bg-black/20">' +
+                '<div class="flex flex-wrap items-baseline gap-2 mb-1">' +
+                '<span class="text-xs font-mono text-secondary">Step ' + num + '</span>' +
+                '<span class="text-xs uppercase tracking-wide ' + badge + '">' + statusLabel + '</span>' +
+                '</div>' +
+                '<div class="text-sm font-semibold text-primary">' + trellixEsc(headline) + '</div>' +
+                (subline ? '<div class="text-xs text-secondary mt-0.5">' + trellixEsc(subline) + '</div>' : '') +
+                (detailHtml || '') +
+                '</div>';
+        }
+
+        function trellixExFinalSummary(allOk, partialNote) {
+            var colorCls = allOk ? 'text-green-400' : 'text-amber-400';
+            var borderCls = allOk ? 'border-green-500/40' : 'border-amber-500/40';
+            var title = allOk
+                ? 'Final result: Trellix EX integration test passed'
+                : 'Final result: Trellix EX integration test completed with errors';
+            var body = allOk
+                ? 'Authentication, test rule upload (' + TRELLIX_EX_TEST_FILE + '), and cleanup completed on all configured targets.'
+                : (partialNote || 'Review the steps above for target-level details.');
+            return '<div class="mt-4 pt-3 border-t border-white/15 p-3 rounded-lg border ' + borderCls + ' bg-black/25">' +
+                '<div class="text-sm font-bold ' + colorCls + '">' + trellixEsc(title) + '</div>' +
+                '<div class="text-xs text-secondary mt-1">' + trellixEsc(body) + '</div></div>';
+        }
+
+        async function trellixExFetchStep(stepKey, ignoreSsl) {
+            var body = { step: stepKey };
+            if (ignoreSsl) body.ignore_ssl = true;
+            var res = await fetch('/api/admin/trellix-ex/test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify(body)
+            });
+            var rawText = await res.text();
+            var data = {};
+            try {
+                data = rawText ? JSON.parse(rawText) : {};
+            } catch (e) {
+                data = { success: false, overall_success: false, headline: 'Invalid response from ZIoCHub', message: (rawText || '').slice(0, 400) };
+            }
+            data._httpStatus = res.status;
+            return data;
+        }
+
         testBtn.addEventListener('click', async function() {
             var outEl = document.getElementById('trellixExTestResult');
             var ign = document.getElementById('trellixExTestIgnoreSsl');
-            outEl.classList.add('hidden');
-            outEl.innerHTML = '';
-            this.disabled = true;
+            var btn = this;
             outEl.classList.remove('hidden');
-            outEl.innerHTML = '<div class="text-secondary">Testing Trellix EX (login + minimal YARA upload)...</div>';
-            try {
-                var body = {};
-                if (ign && ign.checked) {
-                    body.ignore_ssl = true;
-                }
-                var res = await fetch('/api/admin/trellix-ex/test', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'same-origin',
-                    body: JSON.stringify(body)
-                });
-                var rawText = await res.text();
-                var data = {};
-                try {
-                    data = rawText ? JSON.parse(rawText) : {};
-                } catch (parseErr) {
-                    data = { success: false, _parseError: true, _rawPreview: (rawText || '').slice(0, 2000) };
-                }
-                var lines = [];
-                var zioHttp2xx = res.status >= 200 && res.status < 300;
-                lines.push('<div class="text-secondary text-xs mb-2">ZIoCHub response: HTTP ' + res.status + '</div>');
-                if (!zioHttp2xx) {
-                    lines.push('<div class="text-red-400">' + (data.message || ('HTTP ' + res.status)) + '</div>');
-                } else if (data._parseError) {
-                    lines.push('<div class="text-red-400 font-semibold mb-1">Could not parse JSON from ZIoCHub (upload test result lost).</div>');
-                    lines.push('<div class="text-secondary text-xs mb-1">Often caused by a proxy returning HTML or an unusual 2xx (e.g. 203) without JSON. Raw body preview:</div>');
-                    lines.push('<pre class="text-xs text-secondary whitespace-pre-wrap break-all max-h-48 overflow-auto border border-white/10 rounded p-2 bg-black/30">' + String(data._rawPreview || '').replace(/</g, '&lt;') + '</pre>');
-                } else if (data.success !== false) {
-                    if (data.overall_success) {
-                        lines.push('<div class="text-green-400 font-semibold mb-2">Trellix EX test succeeded (login + minimal YARA upload).</div>');
-                    } else {
-                        lines.push('<div class="text-amber-400 font-semibold mb-2">Trellix EX test did not fully succeed  -  see per-target lines below.</div>');
-                    }
-                    if (data.summary) {
-                        lines.push('<div class="text-primary text-sm font-semibold mb-1">' + String(data.summary).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>');
-                    }
-                    if (data.message) {
-                        lines.push('<div class="text-secondary text-xs"><span class="opacity-75">Technical:</span> ' + String(data.message).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>');
-                    }
-                    if (data.hint) {
-                        lines.push('<div class="text-amber-200/95 text-xs mt-1 whitespace-pre-wrap border-l-2 border-amber-500/50 pl-2">' + String(data.hint).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>');
-                    }
-                    if (data.results && data.results.length) {
-                        data.results.forEach(function(r) {
-                            var ok = r.success;
-                            var icon = ok ? '\u2713' : '\u2717';
-                            var color = ok ? 'text-green-400' : 'text-red-400';
-                            var msg = (r.message || '').replace(/</g, '&lt;').replace(/&/g, '&amp;');
-                            var name = (r.name || 'Trellix EX').replace(/</g, '&lt;');
-                            var phase = '';
-                            if (r.phase === 'login') phase = ' <span class="text-secondary text-xs">(login)</span>';
-                            else if (r.phase === 'upload') phase = ' <span class="text-secondary text-xs">(upload)</span>';
-                            else if (r.phase === 'delete') phase = ' <span class="text-secondary text-xs">(delete)</span>';
-                            else if (r.phase === 'config') phase = ' <span class="text-secondary text-xs">(config)</span>';
-                            var hs = (r.http_status !== undefined && r.http_status !== null && r.http_status !== '')
-                                ? ' <span class="text-cyan-300/90 text-xs">[Trellix HTTP ' + String(r.http_status) + ']</span>'
-                                : '';
-                            var sumL = (r.summary) ? '<div class="text-xs font-semibold text-primary/90 mb-0.5">' + String(r.summary).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>' : '';
-                            var hintL = (r.hint) ? '<div class="text-amber-200/95 text-xs mt-1 whitespace-pre-wrap border-l-2 border-amber-500/40 pl-2">' + String(r.hint).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>' : '';
-                            lines.push('<div class="' + color + ' mb-2">' + sumL + '<div>[' + icon + '] <strong>' + name + '</strong>' + phase + hs + '</div><div class="text-xs mt-0.5 opacity-90">' + msg + '</div>' + hintL + '</div>');
-                        });
-                    } else {
-                        lines.push('<div class="text-amber-400 text-xs mt-2">No per-target results in the API payload. Check server logs for <code class="text-xs">admin_trellix_ex_test</code>.</div>');
-                    }
-                } else {
-                    lines.push('<div class="text-red-400 font-semibold">' + (data.summary || 'Test blocked.') + '</div>');
-                    lines.push('<div class="text-red-400 text-sm mt-1">' + (data.message || 'Test failed.').replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>');
-                    if (data.hint) {
-                        lines.push('<div class="text-amber-200/95 text-xs mt-1 whitespace-pre-wrap border-l-2 border-amber-500/50 pl-2">' + String(data.hint).replace(/</g, '&lt;').replace(/&/g, '&amp;') + '</div>');
-                    }
-                }
-                outEl.innerHTML = lines.join('');
-            } catch (err) {
-                outEl.innerHTML = '<div class="text-red-400">Network error: ' + String(err.message || err).replace(/</g, '&lt;') + '</div>';
+            outEl.innerHTML = '';
+            btn.disabled = true;
+            var ignoreSsl = ign && ign.checked;
+            var blocks = [];
+            var allOk = true;
+            var stoppedEarly = '';
+
+            function paint() {
+                outEl.innerHTML = '<div class="text-secondary text-xs mb-3">Trellix EX integration test (staged)</div>' + blocks.join('');
             }
-            this.disabled = false;
+
+            try {
+                blocks.push(trellixExStepBlock(1, 'running', 'Authenticating to Trellix EX', 'Establishing session with configured credentials.', ''));
+                paint();
+                var auth = await trellixExFetchStep('auth', ignoreSsl);
+                var authOk = auth.success !== false && auth.overall_success;
+                blocks.pop();
+                blocks.push(trellixExStepBlock(
+                    1,
+                    authOk ? 'ok' : 'fail',
+                    auth.headline || (authOk ? 'Authentication completed successfully' : 'Authentication failed'),
+                    auth.subline || '',
+                    trellixExRenderTargetRows(auth.results)
+                ));
+                paint();
+                if (!authOk) {
+                    allOk = false;
+                    stoppedEarly = 'Test stopped after authentication failure.';
+                } else {
+                    await trellixExSleep(TRELLIX_EX_STEP_DELAY_MS);
+
+                    blocks.push(trellixExStepBlock(2, 'running', 'Uploading test YARA rule', 'Uploading ' + TRELLIX_EX_TEST_FILE + ' (safe rule, condition: false).', ''));
+                    paint();
+                    var upload = await trellixExFetchStep('upload', ignoreSsl);
+                    var uploadOk = upload.success !== false && upload.overall_success;
+                    blocks.pop();
+                    blocks.push(trellixExStepBlock(
+                        2,
+                        uploadOk ? 'ok' : 'fail',
+                        upload.headline || (uploadOk ? 'Test rule uploaded successfully' : 'Test rule upload failed'),
+                        upload.subline || '',
+                        trellixExRenderTargetRows(upload.results)
+                    ));
+                    paint();
+                    if (!uploadOk) {
+                        allOk = false;
+                        stoppedEarly = 'Test stopped after upload failure. Cleanup was not attempted.';
+                    } else {
+                        await trellixExSleep(TRELLIX_EX_STEP_DELAY_MS);
+
+                        blocks.push(trellixExStepBlock(3, 'running', 'Removing test YARA rule', 'Deleting ' + TRELLIX_EX_TEST_FILE + ' from the appliance.', ''));
+                        paint();
+                        var cleanup = await trellixExFetchStep('cleanup', ignoreSsl);
+                        var cleanupOk = cleanup.success !== false && cleanup.overall_success;
+                        blocks.pop();
+                        blocks.push(trellixExStepBlock(
+                            3,
+                            cleanupOk ? 'ok' : 'fail',
+                            cleanup.headline || (cleanupOk ? 'Test rule cleanup completed successfully' : 'Test rule cleanup failed'),
+                            cleanup.subline || '',
+                            trellixExRenderTargetRows(cleanup.results)
+                        ));
+                        paint();
+                        if (!cleanupOk) allOk = false;
+                        await trellixExSleep(TRELLIX_EX_STEP_DELAY_MS);
+                    }
+                }
+
+                blocks.push(trellixExFinalSummary(allOk, stoppedEarly));
+                paint();
+            } catch (err) {
+                outEl.innerHTML = '<div class="text-red-400">Network error: ' + trellixEsc(err.message || err) + '</div>';
+            }
+            btn.disabled = false;
+        });
+    }
+})();
+
+/* Trellix CMS (central manager for EX) */
+(function() {
+    var form = document.getElementById('trellixCmsForm');
+    if (!form) return;
+
+    function escAttr(s) {
+        return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+    }
+    function escHtml(s) {
+        return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    var cmsListEl = document.getElementById('trellixCmsTargetsList');
+    var cmsTargets = [];
+    if (cmsListEl) {
+        try {
+            cmsTargets = JSON.parse(cmsListEl.getAttribute('data-initial') || '[]');
+            if (!Array.isArray(cmsTargets)) cmsTargets = [];
+        } catch (e) { cmsTargets = []; }
+    }
+
+    function defaultCmsRow() {
+        return {
+            name: '', base_url: '', login_path: '/login/login',
+            upload_path: '/cms/yara_rules_ng/upload_yara',
+            delete_path: '/cms/yara_rules_ng/delete_yara_files',
+            username: '', password: '', manual_cookie: '', verify_ssl: true,
+            f_type: 'common', content_type: 'base', csrf_param: '', csrf_token: '',
+            ex_delete_name_mode: 'same', auth_method: 'auto',
+            sensor_id: '', sensor_group: 'All', sensor_rules_list: ''
+        };
+    }
+
+    function renderCms() {
+        if (!cmsListEl) return;
+        cmsListEl.innerHTML = '';
+        cmsTargets.forEach(function(a, idx) {
+            var row = document.createElement('div');
+            row.className = 'trellix-cms-row space-y-2 p-3 rounded-lg border border-white/10 bg-black/20';
+            var lp = (a.login_path || '/login/login').trim() || '/login/login';
+            var up = (a.upload_path || '/cms/yara_rules_ng/upload_yara').trim() || '/cms/yara_rules_ng/upload_yara';
+            var delp = (a.delete_path || '/cms/yara_rules_ng/delete_yara_files').trim();
+            var sid = (a.sensor_id || '').trim();
+            var sgrp = (a.sensor_group || 'All').trim() || 'All';
+            var srl = a.sensor_rules_list;
+            if (Array.isArray(srl)) srl = srl.join(', ');
+            else srl = (srl || '').trim();
+            var am = (a.auth_method || 'auto').trim().toLowerCase();
+            if (am !== 'password' && am !== 'ldap' && am !== 'auto') am = 'auto';
+            var vs = a.verify_ssl === false || a.verify_ssl === 'false' ? 'false' : 'true';
+            row.innerHTML =
+                '<div class="flex flex-wrap items-center gap-2">' +
+                '<input type="text" class="trellix-cms-name px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary flex-1 min-w-[8rem]" placeholder="Name" value="' + escAttr(a.name) + '">' +
+                '<input type="text" class="trellix-cms-base_url px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary flex-1 min-w-[12rem]" placeholder="https://cms.example.com" value="' + escAttr(a.base_url) + '">' +
+                '<button type="button" class="trellix-cms-remove px-2 py-1.5 rounded text-sm bg-red-600/80 hover:bg-red-500 text-white shrink-0" data-idx="' + idx + '">Remove</button></div>' +
+                '<div class="grid grid-cols-1 sm:grid-cols-3 gap-2">' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Sensor ID (s_s[sensor])</label>' +
+                '<input type="text" class="trellix-cms-sensor_id w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(sid) + '" placeholder="000BABE84AF6" autocomplete="off"></div>' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Sensor group</label>' +
+                '<input type="text" class="trellix-cms-sensor_group w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(sgrp) + '" autocomplete="off"></div>' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Sensor rule list (comma-separated)</label>' +
+                '<input type="text" class="trellix-cms-sensor_rules_list w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(srl) + '" placeholder="Fireeye-eMail1" autocomplete="off"></div></div>' +
+                '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Login POST path</label>' +
+                '<input type="text" class="trellix-cms-login_path w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(lp) + '"></div>' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Upload POST path</label>' +
+                '<input type="text" class="trellix-cms-upload_path w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(up) + '"></div></div>' +
+                '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Delete POST path</label>' +
+                '<input type="text" class="trellix-cms-delete_path w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(delp) + '"></div>' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Login auth_method</label>' +
+                '<select class="trellix-cms-auth_method w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm">' +
+                '<option value="password"' + (am === 'password' ? ' selected' : '') + '>password</option>' +
+                '<option value="ldap"' + (am === 'ldap' ? ' selected' : '') + '>ldap</option>' +
+                '<option value="auto"' + (am === 'auto' ? ' selected' : '') + '>auto</option></select></div></div>' +
+                '<div class="grid grid-cols-1 sm:grid-cols-3 gap-2">' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Username</label>' +
+                '<input type="text" class="trellix-cms-username w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(a.username) + '"></div>' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Password</label>' +
+                '<input type="password" class="trellix-cms-password w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" placeholder="' + (a.password ? '••••••••' : '') + '" value="' + escAttr(a.password) + '"></div>' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Verify TLS</label>' +
+                '<select class="trellix-cms-verify_ssl w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm">' +
+                '<option value="true"' + (vs === 'true' ? ' selected' : '') + '>Yes</option>' +
+                '<option value="false"' + (vs === 'false' ? ' selected' : '') + '>No</option></select></div></div>' +
+                '<div><label class="block text-xs text-secondary mb-0.5">Manual cookie (optional)</label>' +
+                '<textarea rows="2" class="trellix-cms-manual_cookie w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-xs">' + escHtml(a.manual_cookie) + '</textarea></div>';
+            cmsListEl.appendChild(row);
+        });
+        cmsListEl.querySelectorAll('.trellix-cms-remove').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                cmsTargets.splice(parseInt(this.getAttribute('data-idx'), 10), 1);
+                renderCms();
+            });
+        });
+    }
+
+    document.getElementById('trellixCmsAddTarget')?.addEventListener('click', function() {
+        cmsTargets.push(defaultCmsRow());
+        renderCms();
+    });
+    renderCms();
+
+    function collectTrellixCms() {
+        var collected = [];
+        if (!cmsListEl) return collected;
+        cmsListEl.querySelectorAll('.trellix-cms-row').forEach(function(row) {
+            var n = row.querySelector('.trellix-cms-name');
+            var u = row.querySelector('.trellix-cms-base_url');
+            if (!n || !u) return;
+            var o = {
+                name: (n.value || '').trim(),
+                base_url: (u.value || '').trim(),
+                login_path: (row.querySelector('.trellix-cms-login_path')?.value || '').trim(),
+                upload_path: (row.querySelector('.trellix-cms-upload_path')?.value || '').trim(),
+                delete_path: (row.querySelector('.trellix-cms-delete_path')?.value || '').trim(),
+                username: (row.querySelector('.trellix-cms-username')?.value || '').trim(),
+                password: (row.querySelector('.trellix-cms-password')?.value || '').trim(),
+                manual_cookie: (row.querySelector('.trellix-cms-manual_cookie')?.value || '').trim(),
+                verify_ssl: row.querySelector('.trellix-cms-verify_ssl')?.value === 'true',
+                auth_method: (row.querySelector('.trellix-cms-auth_method')?.value || 'auto').trim(),
+                sensor_id: (row.querySelector('.trellix-cms-sensor_id')?.value || '').trim(),
+                sensor_group: (row.querySelector('.trellix-cms-sensor_group')?.value || '').trim(),
+                sensor_rules_list: (row.querySelector('.trellix-cms-sensor_rules_list')?.value || '').trim()
+            };
+            collected.push(o);
+        });
+        return collected;
+    }
+
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var msgEl = document.getElementById('trellixCmsMessage');
+        msgEl.classList.add('hidden');
+        try {
+            var res = await fetch('/api/admin/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    trellix_cms_enabled: document.getElementById('trellix_cms_enabled').value,
+                    trellix_cms_targets: collectTrellixCms()
+                })
+            });
+            var data = await res.json();
+            msgEl.classList.remove('hidden');
+            if (data.success) {
+                msgEl.className = 'mt-2 text-sm text-green-400';
+                msgEl.textContent = 'Trellix CMS settings saved.';
+                cmsListEl.querySelectorAll('.trellix-cms-password').forEach(function(el) {
+                    el.value = '';
+                    el.placeholder = '••••••••';
+                });
+            } else {
+                msgEl.className = 'mt-2 text-sm text-red-400';
+                msgEl.textContent = data.message || 'Failed to save.';
+            }
+        } catch (err) {
+            msgEl.classList.remove('hidden');
+            msgEl.className = 'mt-2 text-sm text-red-400';
+            msgEl.textContent = 'Network error.';
+        }
+    });
+
+    var testBtn = document.getElementById('trellixCmsTestBtn');
+    if (testBtn) {
+        var CMS_TEST_FILE = 'ziochub_connection_test.yar';
+        var CMS_STEP_DELAY_MS = 1500;
+        function cmsEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+        function cmsSleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+        function cmsRenderRows(results) {
+            var html = '';
+            (results || []).forEach(function(r) {
+                var ok = r.success;
+                html += '<div class="' + (ok ? 'text-green-400' : 'text-red-400') + ' text-xs mt-1.5 pl-2 border-l border-white/10">[' +
+                    (ok ? '\u2713' : '\u2717') + '] <strong>' + cmsEsc(r.name || 'CMS') + '</strong>';
+                if (r.message) html += '<div class="opacity-85 mt-0.5">' + cmsEsc(r.message) + '</div>';
+                if (r.hint) html += '<div class="text-amber-200/90 mt-0.5">' + cmsEsc(r.hint) + '</div>';
+                html += '</div>';
+            });
+            return html;
+        }
+        function cmsStepBlock(num, state, headline, subline, detailHtml) {
+            var border = state === 'ok' ? 'border-green-500/40' : (state === 'fail' ? 'border-red-500/40' : 'border-cyan-500/40');
+            return '<div class="mb-3 p-3 rounded-lg border ' + border + ' bg-black/20"><div class="text-sm font-semibold">' + cmsEsc(headline) + '</div>' +
+                (subline ? '<div class="text-xs text-secondary mt-0.5">' + cmsEsc(subline) + '</div>' : '') + (detailHtml || '') + '</div>';
+        }
+        async function cmsFetchStep(stepKey, ignoreSsl) {
+            var body = { step: stepKey };
+            if (ignoreSsl) body.ignore_ssl = true;
+            var res = await fetch('/api/admin/trellix-cms/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(body) });
+            var raw = await res.text();
+            try { return raw ? JSON.parse(raw) : {}; } catch (e) { return { success: false, overall_success: false, headline: 'Invalid response' }; }
+        }
+        testBtn.addEventListener('click', async function() {
+            var outEl = document.getElementById('trellixCmsTestResult');
+            var ign = document.getElementById('trellixCmsTestIgnoreSsl');
+            var btn = this;
+            outEl.classList.remove('hidden');
+            outEl.innerHTML = '';
+            btn.disabled = true;
+            var ignoreSsl = ign && ign.checked;
+            var blocks = [];
+            var allOk = true;
+            function paint() { outEl.innerHTML = blocks.join(''); }
+            try {
+                blocks.push(cmsStepBlock(1, 'running', 'Authenticating to Trellix CMS', 'Establishing session…', ''));
+                paint();
+                var auth = await cmsFetchStep('auth', ignoreSsl);
+                var authOk = auth.success !== false && auth.overall_success;
+                blocks.pop();
+                blocks.push(cmsStepBlock(1, authOk ? 'ok' : 'fail', auth.headline || 'Authentication', auth.subline || '', cmsRenderRows(auth.results)));
+                paint();
+                if (!authOk) { allOk = false; }
+                else {
+                    await cmsSleep(CMS_STEP_DELAY_MS);
+                    blocks.push(cmsStepBlock(2, 'running', 'Uploading test YARA rule', CMS_TEST_FILE, ''));
+                    paint();
+                    var upload = await cmsFetchStep('upload', ignoreSsl);
+                    var uploadOk = upload.success !== false && upload.overall_success;
+                    blocks.pop();
+                    blocks.push(cmsStepBlock(2, uploadOk ? 'ok' : 'fail', upload.headline || 'Upload', upload.subline || '', cmsRenderRows(upload.results)));
+                    paint();
+                    if (!uploadOk) allOk = false;
+                    else {
+                        await cmsSleep(CMS_STEP_DELAY_MS);
+                        blocks.push(cmsStepBlock(3, 'running', 'Removing test YARA rule', CMS_TEST_FILE, ''));
+                        paint();
+                        var cleanup = await cmsFetchStep('cleanup', ignoreSsl);
+                        var cleanupOk = cleanup.success !== false && cleanup.overall_success;
+                        blocks.pop();
+                        blocks.push(cmsStepBlock(3, cleanupOk ? 'ok' : 'fail', cleanup.headline || 'Cleanup', cleanup.subline || '', cmsRenderRows(cleanup.results)));
+                        paint();
+                        if (!cleanupOk) allOk = false;
+                    }
+                }
+                blocks.push('<div class="mt-4 pt-3 border-t border-white/15 text-sm ' + (allOk ? 'text-green-400' : 'text-amber-400') + '">' +
+                    (allOk ? 'Final result: Trellix CMS integration test passed' : 'Final result: Trellix CMS test completed with errors') + '</div>');
+                paint();
+            } catch (err) {
+                outEl.innerHTML = '<div class="text-red-400">Network error: ' + cmsEsc(err.message || err) + '</div>';
+            }
+            btn.disabled = false;
         });
     }
 })();
@@ -909,7 +1303,7 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             var ft = (a.yara_file_type || 'yar').trim() || 'yar';
             var wlp = (a.login_path || '/login/login').trim() || '/login/login';
             var wup = (a.upload_path || '/wmps/yara_rules_ng/upload_yara').trim() || '/wmps/yara_rules_ng/upload_yara';
-            var wft = (a.f_type || 'common').trim() || 'common';
+            var wft = (a.f_type || 'txt').trim() || 'txt';
             var wct = (a.content_type || 'base').trim() || 'base';
             var wvs = a.verify_ssl === false || a.verify_ssl === 'false' ? 'false' : 'true';
             var wdel = (a.delete_path || '').trim();
@@ -939,12 +1333,18 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                     '<div><label class="block text-xs text-secondary mb-0.5">Upload POST path</label>' +
                     '<input type="text" class="trellix-nx-wmps-upload_path w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-sm" value="' + escAttr(wup) + '" autocomplete="off"></div>' +
                 '</div>' +
-                '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">' +
+                '<div class="grid grid-cols-1 sm:grid-cols-3 gap-2">' +
                     '<div><label class="block text-xs text-secondary mb-0.5">Username</label>' +
                     '<input type="text" class="trellix-nx-wmps-username w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(a.username) + '" autocomplete="off"></div>' +
                     '<div><label class="block text-xs text-secondary mb-0.5">Password</label>' +
                     '<input type="password" class="trellix-nx-wmps-password w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" placeholder="' + (a.password ? '••••••••' : '') + '" value="' + escAttr(a.password) + '" autocomplete="new-password"></div>' +
-                '</div>' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">Login auth_method</label>' +
+                    '<select class="trellix-nx-wmps-auth_method w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm">' +
+                    '<option value="password"' + (((a.auth_method || 'auto') === 'password') ? ' selected' : '') + '>password</option>' +
+                    '<option value="ldap"' + (((a.auth_method || '') === 'ldap') ? ' selected' : '') + '>ldap</option>' +
+                    '<option value="auto"' + (((a.auth_method || 'auto') === 'auto') ? ' selected' : '') + '>auto</option>' +
+                    '</select></div></div>' +
+                '<div class="grid grid-cols-1 sm:grid-cols-2 gap-2">' +
                 '<div><label class="block text-xs text-secondary mb-0.5">Manual cookie (optional)</label>' +
                 '<textarea rows="2" class="trellix-nx-wmps-manual_cookie w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary font-mono text-xs" placeholder="session_id=…">' + escHtml(a.manual_cookie) + '</textarea></div>' +
                 '<div class="grid grid-cols-1 sm:grid-cols-3 gap-2">' +
@@ -952,8 +1352,8 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                     '<select class="trellix-nx-wmps-verify_ssl w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm">' +
                     '<option value="true"' + (wvs === 'true' ? ' selected' : '') + '>Yes</option>' +
                     '<option value="false"' + (wvs === 'false' ? ' selected' : '') + '>No</option></select></div>' +
-                    '<div><label class="block text-xs text-secondary mb-0.5">f_type</label>' +
-                    '<input type="text" class="trellix-nx-wmps-f_type w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(wft) + '"></div>' +
+                    '<div><label class="block text-xs text-secondary mb-0.5">f_type (NX default txt)</label>' +
+                    '<input type="text" class="trellix-nx-wmps-f_type w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(wft) + '" placeholder="txt"></div>' +
                     '<div><label class="block text-xs text-secondary mb-0.5">content_type</label>' +
                     '<input type="text" class="trellix-nx-wmps-content_type w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" value="' + escAttr(wct) + '"></div>' +
                 '</div>' +
@@ -1026,6 +1426,7 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                 var wcst = row.querySelector('.trellix-nx-wmps-csrf_token');
                 var wdel = row.querySelector('.trellix-nx-wmps-delete_path');
                 var edm = row.querySelector('.trellix-nx-wmps-ex_delete_name_mode');
+                var wam = row.querySelector('.trellix-nx-wmps-auth_method');
                 collected.push({
                     name: (n.value || '').trim(),
                     base_url: (u.value || '').trim(),
@@ -1036,8 +1437,9 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                     password: wp ? (wp.value || '').trim() : '',
                     manual_cookie: wmc ? (wmc.value || '').trim() : '',
                     verify_ssl: wvs ? (wvs.value || 'true').trim().toLowerCase() !== 'false' : true,
-                    f_type: wft ? (wft.value || '').trim() : 'common',
+                    f_type: wft ? (wft.value || '').trim() : 'txt',
                     content_type: wct ? (wct.value || '').trim() : 'base',
+                    auth_method: wam ? (wam.value || 'auto').trim() : 'auto',
                     csrf_param: wcsp ? (wcsp.value || '').trim() : '',
                     csrf_token: wcst ? (wcst.value || '').trim() : '',
                     delete_path: wdel ? (wdel.value || '').trim() : '',
@@ -1095,27 +1497,108 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
         }
     });
 
+    var NX_WMPS_TEST_FILE = 'ziochub_connection_test.yar';
+    var NX_WMPS_STEP_DELAY_MS = 1500;
+    function nxEsc(s) {
+        return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    function nxWmpsSleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+    function nxRenderTargetRows(results) {
+        var html = '';
+        (results || []).forEach(function(r) {
+            var ok = r.success;
+            var phase = r.phase === 'login' ? ' (authentication)' : (r.phase === 'upload' ? ' (upload)' : (r.phase === 'delete' ? ' (cleanup)' : ''));
+            var hs = (r.http_status != null && r.http_status !== '') ? ' [HTTP ' + r.http_status + ']' : '';
+            html += '<div class="' + (ok ? 'text-green-400' : 'text-red-400') + ' text-xs mt-1.5 pl-2 border-l border-white/10">[' +
+                (ok ? '\u2713' : '\u2717') + '] <strong>' + nxEsc(r.name || 'NX') + '</strong>' + phase + hs;
+            if (r.message) html += '<div class="opacity-85 mt-0.5">' + nxEsc(r.message) + '</div>';
+            if (r.hint) html += '<div class="text-amber-200/90 mt-0.5">' + nxEsc(r.hint) + '</div>';
+            html += '</div>';
+        });
+        return html;
+    }
+    function nxWmpsStepBlock(num, state, headline, subline, detailHtml) {
+        var border = state === 'ok' ? 'border-green-500/40' : (state === 'fail' ? 'border-red-500/40' : 'border-cyan-500/40');
+        return '<div class="mb-3 p-3 rounded-lg border ' + border + ' bg-black/20"><div class="text-xs text-secondary">Step ' + num + '</div>' +
+            '<div class="text-sm font-semibold text-primary">' + nxEsc(headline) + '</div>' +
+            (subline ? '<div class="text-xs text-secondary mt-0.5">' + nxEsc(subline) + '</div>' : '') + (detailHtml || '') + '</div>';
+    }
+    async function nxWmpsFetchStep(stepKey, ignoreSsl) {
+        var body = { step: stepKey };
+        if (ignoreSsl) body.ignore_ssl = true;
+        var res = await fetch('/api/admin/trellix-nx/wmps/test', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin', body: JSON.stringify(body)
+        });
+        var raw = await res.text();
+        try { return raw ? JSON.parse(raw) : {}; } catch (e) { return { success: false, overall_success: false, headline: 'Invalid response' }; }
+    }
+
     var nxTestBtn = document.getElementById('trellixNxTestBtn');
     if (nxTestBtn) {
         nxTestBtn.addEventListener('click', async function() {
             var outEl = document.getElementById('trellixNxTestResult');
-            var appliances = expandTrellixNxToAppliances(collectTrellixNx());
-            outEl.classList.add('hidden');
+            var ign = document.getElementById('trellixNxTestIgnoreSsl');
+            var btn = this;
+            outEl.classList.remove('hidden');
             outEl.innerHTML = '';
+            btn.disabled = true;
+            var ignoreSsl = ign && ign.checked;
+            var blocks = [];
+            var allOk = true;
+            function paint() { outEl.innerHTML = blocks.join(''); }
+            try {
+                blocks.push(nxWmpsStepBlock(1, 'running', 'Authenticating to Trellix NX (wmps)', 'Login + YARA UI warmup GETs…', ''));
+                paint();
+                var auth = await nxWmpsFetchStep('auth', ignoreSsl);
+                var authOk = auth.success !== false && auth.overall_success;
+                blocks.pop();
+                blocks.push(nxWmpsStepBlock(1, authOk ? 'ok' : 'fail', auth.headline || 'Authentication', auth.subline || '', nxRenderTargetRows(auth.results)));
+                paint();
+                if (!authOk) allOk = false;
+                else {
+                    await nxWmpsSleep(NX_WMPS_STEP_DELAY_MS);
+                    blocks.push(nxWmpsStepBlock(2, 'running', 'Uploading test YARA rule', NX_WMPS_TEST_FILE, ''));
+                    paint();
+                    var upload = await nxWmpsFetchStep('upload', ignoreSsl);
+                    var uploadOk = upload.success !== false && upload.overall_success;
+                    blocks.pop();
+                    blocks.push(nxWmpsStepBlock(2, uploadOk ? 'ok' : 'fail', upload.headline || 'Upload', upload.subline || '', nxRenderTargetRows(upload.results)));
+                    paint();
+                    if (!uploadOk) allOk = false;
+                    else {
+                        await nxWmpsSleep(NX_WMPS_STEP_DELAY_MS);
+                        blocks.push(nxWmpsStepBlock(3, 'running', 'Removing test YARA rule', NX_WMPS_TEST_FILE, ''));
+                        paint();
+                        var cleanup = await nxWmpsFetchStep('cleanup', ignoreSsl);
+                        var cleanupOk = cleanup.success !== false && cleanup.overall_success;
+                        blocks.pop();
+                        blocks.push(nxWmpsStepBlock(3, cleanupOk ? 'ok' : 'fail', cleanup.headline || 'Cleanup', cleanup.subline || '', nxRenderTargetRows(cleanup.results)));
+                        paint();
+                        if (!cleanupOk) allOk = false;
+                    }
+                }
+                blocks.push('<div class="mt-4 pt-3 border-t border-white/15 text-sm ' + (allOk ? 'text-green-400' : 'text-amber-400') + '">' +
+                    (allOk ? 'Final result: NX wmps integration test passed' : 'Final result: NX wmps test completed with errors') + '</div>');
+                paint();
+            } catch (err) {
+                outEl.innerHTML = '<div class="text-red-400">Network error: ' + nxEsc(err.message || err) + '</div>';
+            }
+            btn.disabled = false;
+        });
+    }
+
+    var nxWsapisBtn = document.getElementById('trellixNxWsapisTestBtn');
+    if (nxWsapisBtn) {
+        nxWsapisBtn.addEventListener('click', async function() {
+            var outEl = document.getElementById('trellixNxTestResult');
+            var appliances = expandTrellixNxToAppliances(collectTrellixNx());
+            outEl.classList.remove('hidden');
             if (!appliances.length) {
-                outEl.classList.remove('hidden');
-                var rows = collectTrellixNx().filter(function(r) { return (r.base_url || '').trim(); });
-                var onlyWmps = rows.length && rows.every(function(r) {
-                    return (r.api_style || 'wsapis').trim().toLowerCase() === 'wmps';
-                });
-                outEl.innerHTML = onlyWmps
-                    ? '<div class="text-amber-400">wmps (web session) targets are not probed here. Save settings and verify with a test YARA approve, or add a wsapis row to test the REST API.</div>'
-                    : '<div class="text-amber-400">Add an NX appliance with a base URL (wsapis), or switch API style to wmps for web UI upload.</div>';
+                outEl.innerHTML = '<div class="text-amber-400">Add an NX row with API style wsapis and base URL to test REST.</div>';
                 return;
             }
             this.disabled = true;
-            outEl.classList.remove('hidden');
-            outEl.innerHTML = '<div class="text-secondary">Testing ' + appliances.length + ' NX target(s)…</div>';
+            outEl.innerHTML = '<div class="text-secondary">Testing ' + appliances.length + ' wsapis target(s)…</div>';
             try {
                 var res = await fetch('/api/admin/automation-test', {
                     method: 'POST',
@@ -1129,29 +1612,20 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                 var data = await res.json().catch(function() { return {}; });
                 var lines = [];
                 if (!res.ok) {
-                    lines.push('<div class="text-red-400">' + (data.message || ('HTTP ' + res.status)) + '</div>');
+                    lines.push('<div class="text-red-400">' + nxEsc(data.message || ('HTTP ' + res.status)) + '</div>');
                 } else if (data.success) {
-                    if (data.overall_success) {
-                        lines.push('<div class="text-green-400 font-semibold mb-2">All NX targets responded successfully.</div>');
-                    } else {
-                        lines.push('<div class="text-amber-400 font-semibold mb-2">One or more targets failed  -  see below.</div>');
-                    }
-                    if (data.results && data.results.length) {
-                        data.results.forEach(function(r) {
-                            var ok = r.success;
-                            var icon = ok ? '\u2713' : '\u2717';
-                            var color = ok ? 'text-green-400' : 'text-red-400';
-                            var msg = (r.message || '').replace(/</g, '&lt;').replace(/&/g, '&amp;');
-                            var name = (r.name || 'Target').replace(/</g, '&lt;');
-                            lines.push('<div class="' + color + '">[' + icon + '] <strong>' + name + '</strong>  -  ' + msg + '</div>');
-                        });
-                    }
+                    lines.push('<div class="' + (data.overall_success ? 'text-green-400' : 'text-amber-400') + ' font-semibold mb-2">wsapis: ' +
+                        (data.overall_success ? 'all targets OK' : 'one or more failed') + '</div>');
+                    (data.results || []).forEach(function(r) {
+                        lines.push('<div class="' + (r.success ? 'text-green-400' : 'text-red-400') + '">[' + (r.success ? '\u2713' : '\u2717') + '] ' +
+                            nxEsc(r.name) + ' — ' + nxEsc(r.message) + '</div>');
+                    });
                 } else {
-                    lines.push('<div class="text-red-400">' + (data.message || 'Test failed.') + '</div>');
+                    lines.push('<div class="text-red-400">' + nxEsc(data.message || 'Test failed.') + '</div>');
                 }
                 outEl.innerHTML = lines.join('');
             } catch (err) {
-                outEl.innerHTML = '<div class="text-red-400">Network error: ' + String(err.message || err).replace(/</g, '&lt;') + '</div>';
+                outEl.innerHTML = '<div class="text-red-400">Network error</div>';
             }
             this.disabled = false;
         });

@@ -145,6 +145,7 @@ async function loadAuthState() {
                 is_admin: !!data.is_admin,
                 avatar_url: data.avatar_url || null
             };
+            window.authState = authState;
         }
     } catch (e) {
         console.error('Failed to load auth state:', e);
@@ -484,9 +485,6 @@ async function switchTab(tabId, skipHash) {
         } catch (e) {
             console.error('Failed to load tab scripts:', e);
             showToast('Failed to load tab resources', 'error');
-            try {
-                closeNavDrawer();
-            } catch (_) {}
             return;
         }
     }
@@ -547,14 +545,11 @@ async function switchTab(tabId, skipHash) {
         const firstTab = document.querySelector('#playbookTabs .playbook-tab-item');
         if (firstTab) firstTab.click();
     }
-
-    closeNavDrawer();
 }
 
 document.querySelectorAll('.tab-button').forEach(btn => {
     btn.addEventListener('click', () => switchTab(btn.getAttribute('data-tab')));
 });
-// nav drawer removed
 
 window.addEventListener('hashchange', () => {
     const tab = _getTabFromHash();

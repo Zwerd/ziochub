@@ -157,6 +157,7 @@
     "delete_all": "Delete All",
     "found_items": "Found 0 items",
     "found_count": "Found {count} item(s)",
+    "staging_unified_hint": "Queue is shared across Single, TXT, CSV, and Paste. Approve All uses TTL, campaign, and tags (for all) from the mode selected above.",
     "info_txt_title": "TXT Format & Parsing Logic",
     "info_txt_desc": "Upload raw log files or IOC lists. Parser detects IOCs automatically. Format: IOC_VALUE # Metadata. Extracts Ticket ID, Analyst, Timestamps.",
     "info_csv_title": "CSV Format",
@@ -168,6 +169,7 @@
     "staging_col": {
       "ioc": "IOC",
       "type": "Type",
+      "sanity": "Sanity check",
       "ticket": "Ticket",
       "analyst": "Analyst",
       "date": "Date",
@@ -289,6 +291,7 @@
     "msg_dir_ltr": "LTR",
     "msg_dir_rtl": "RTL",
     "ticker_label": "MSG",
+    "stat_campaigns": "Campaigns created",
     "sessions_title": "Login & Session Activity",
     "col": {
       "rank": "Rank",
@@ -471,6 +474,8 @@
     "edit_metadata": "Edit metadata",
     "go_to_yara": "Go to YARA tab",
     "edit_row": "Edit row",
+    "done_editing": "Done",
+    "edit_row_active": "Finish editing — saves your changes to this row (not submitted yet)",
     "delete_row": "Delete row",
     "note": "Note"
   },

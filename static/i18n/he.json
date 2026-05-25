@@ -157,6 +157,7 @@
     "delete_all": "מחק הכל",
     "found_items": "נמצאו 0 פריטים",
     "found_count": "נמצאו {count} פריט(ים)",
+    "staging_unified_hint": "התור משותף ל-Single, TXT, CSV והדבקה. \"אשר הכל\" משתמש ב-TTL, קמפיין ותגיות (לכולם) מהמצב שנבחר למעלה.",
     "info_txt_title": "פורמט TXT ולוגיקת ניתוח",
     "info_txt_desc": "העלה קבצי לוגים גולמיים או רשימות IOC. המנתח מזהה IOCs אוטומטית. פורמט: IOC_VALUE # Metadata. מחלץ מספר כרטיס, אנליסט, חותמות זמן.",
     "info_csv_title": "פורמט CSV",
@@ -168,6 +169,7 @@
     "staging_col": {
       "ioc": "IOC",
       "type": "סוג",
+      "sanity": "בדיקת Sanity",
       "ticket": "כרטיס",
       "analyst": "אנליסט",
       "date": "תאריך",
@@ -289,6 +291,7 @@
     "msg_dir_ltr": "שמאל לימין",
     "msg_dir_rtl": "ימין לשמאל",
     "ticker_label": "MSG",
+    "stat_campaigns": "קמפיינים שנוצרו",
     "sessions_title": "פעילות התחברות ומשתמשים",
     "col": {
       "rank": "דירוג",
@@ -471,6 +474,8 @@
     "edit_metadata": "ערוך מטא-דאטה",
     "go_to_yara": "עבור ללשונית YARA",
     "edit_row": "ערוך שורה",
+    "done_editing": "סיום",
+    "edit_row_active": "סיום עריכה — שומר את השינויים בשורה (עדיין לא נשלח לשרת)",
     "delete_row": "מחק שורה",
     "note": "הערה"
   },

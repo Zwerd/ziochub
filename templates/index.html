@@ -505,18 +505,32 @@
                     </div>
 
                     <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
-                        <div id="txtStagingArea" class="hidden flex flex-col h-full min-h-0">
+                        <div id="unifiedStagingArea" class="hidden flex flex-col h-full min-h-0">
                             <div class="flex-shrink-0 flex flex-wrap gap-3 items-center py-2 border-b border-white/10">
-                                <button type="button" id="txtApproveAllBtn" class="btn-cmd-primary" data-i18n="bulk.approve_all">Approve All Valid</button>
-                                <button type="button" id="txtDeleteAllBtn" class="btn-cmd-danger" data-i18n="bulk.delete_all">Delete All</button>
-                                <span id="txtStagingCount" class="text-xs text-secondary" data-i18n="bulk.found_items">Found 0 items</span>
+                                <button type="button" id="unifiedApproveAllBtn" class="btn-cmd-primary" data-i18n="bulk.approve_all">Approve All Valid</button>
+                                <button type="button" id="unifiedDeleteAllBtn" class="btn-cmd-danger" data-i18n="bulk.delete_all">Delete All</button>
+                                <span id="unifiedStagingCount" class="text-xs text-secondary" data-i18n="bulk.found_items">Found 0 items</span>
+                                <span class="text-xs text-secondary/80 max-w-xl" data-i18n="bulk.staging_unified_hint">Queue is shared across Single, TXT, CSV, and Paste. Approve All uses TTL, campaign, and tags (for all) from the mode selected above.</span>
                             </div>
-                            <div class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-white/10">
-                                <table class="w-full border-collapse">
+                            <div class="flex-1 min-h-0 overflow-auto rounded-lg border border-white/10 ioc-staging-table-wrap">
+                                <table class="ioc-staging-table w-full border-collapse">
+                                    <colgroup>
+                                        <col class="ioc-staging-col-ioc">
+                                        <col class="ioc-staging-col-type">
+                                        <col class="ioc-staging-col-sanity">
+                                        <col class="ioc-staging-col-tags">
+                                        <col class="ioc-staging-col-ticket">
+                                        <col class="ioc-staging-col-analyst">
+                                        <col class="ioc-staging-col-date">
+                                        <col class="ioc-staging-col-comment">
+                                        <col class="ioc-staging-col-expiration">
+                                        <col class="ioc-staging-col-actions">
+                                    </colgroup>
                                     <thead class="sticky top-0 bg-tertiary z-10">
                                         <tr>
                                             <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ioc">IOC</th>
                                             <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.type">Type</th>
+                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.sanity">Sanity check</th>
                                             <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="search.col.tags">Tags</th>
                                             <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ticket">Ticket</th>
                                             <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.analyst">Analyst</th>
@@ -526,82 +540,7 @@
                                             <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.actions">Actions</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="txtStagingTableBody"></tbody>
-                                </table>
-                            </div>
-                        </div>
-                        <div id="csvStagingArea" class="hidden flex flex-col h-full min-h-0">
-                            <div class="flex-shrink-0 flex flex-wrap gap-3 items-center py-2 border-b border-white/10">
-                                <button type="button" id="csvApproveAllBtn" class="btn-cmd-primary" data-i18n="bulk.approve_all">Approve All Valid</button>
-                                <button type="button" id="csvDeleteAllBtn" class="btn-cmd-danger" data-i18n="bulk.delete_all">Delete All</button>
-                                <span id="csvStagingCount" class="text-xs text-secondary" data-i18n="bulk.found_items">Found 0 items</span>
-                            </div>
-                            <div class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-white/10">
-                                <table class="w-full border-collapse">
-                                    <thead class="sticky top-0 bg-tertiary z-10">
-                                        <tr>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ioc">IOC</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.type">Type</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="search.col.tags">Tags</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ticket">Ticket</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.analyst">Analyst</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.date">Date</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.comment">Comment</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.expiration">Expiration</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.actions">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="csvStagingTableBody"></tbody>
-                                </table>
-                            </div>
-                        </div>
-                        <div id="singleStagingArea" class="hidden flex flex-col h-full min-h-0">
-                            <div class="flex-shrink-0 flex flex-wrap gap-3 items-center py-2 border-b border-white/10">
-                                <button type="button" id="singleApproveAllBtn" class="btn-cmd-primary" data-i18n="bulk.approve_all">Approve All Valid</button>
-                                <button type="button" id="singleDeleteAllBtn" class="btn-cmd-danger" data-i18n="bulk.delete_all">Delete All</button>
-                                <span id="singleStagingCount" class="text-xs text-secondary" data-i18n="bulk.found_items">Found 0 items</span>
-                            </div>
-                            <div class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-white/10">
-                                <table class="w-full border-collapse">
-                                    <thead class="sticky top-0 bg-tertiary z-10">
-                                        <tr>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ioc">IOC</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.type">Type</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="search.col.tags">Tags</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ticket">Ticket</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.analyst">Analyst</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.date">Date</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.comment">Comment</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.expiration">Expiration</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.actions">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="singleStagingTableBody"></tbody>
-                                </table>
-                            </div>
-                        </div>
-                        <div id="pasteStagingArea" class="hidden flex flex-col h-full min-h-0">
-                            <div class="flex-shrink-0 flex flex-wrap gap-3 items-center py-2 border-b border-white/10">
-                                <button type="button" id="pasteApproveAllBtn" class="btn-cmd-primary" data-i18n="bulk.approve_all">Approve All Valid</button>
-                                <button type="button" id="pasteDeleteAllBtn" class="btn-cmd-danger" data-i18n="bulk.delete_all">Delete All</button>
-                                <span id="pasteStagingCount" class="text-xs text-secondary" data-i18n="bulk.found_items">Found 0 items</span>
-                            </div>
-                            <div class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-white/10">
-                                <table class="w-full border-collapse">
-                                    <thead class="sticky top-0 bg-tertiary z-10">
-                                        <tr>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ioc">IOC</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.type">Type</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="search.col.tags">Tags</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.ticket">Ticket</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.analyst">Analyst</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.date">Date</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.comment">Comment</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.expiration">Expiration</th>
-                                            <th class="border border-white/10 px-3 py-2 text-left text-sm font-semibold" data-i18n="bulk.staging_col.actions">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="pasteStagingTableBody"></tbody>
+                                    <tbody id="unifiedStagingTableBody"></tbody>
                                 </table>
                             </div>
                         </div>

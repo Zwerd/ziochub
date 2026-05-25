@@ -1,5 +1,5 @@
 """
-Trellix Email Security (EX): YARA upload/delete via session cookie after JSON password auth.
+Trellix Email Security (EX): YARA upload/delete via browser-style session (CookieJar).
 
 Upload (multipart POST): yara_file, f_type, content_type - **default** path
 ``/ex/yara_rules_ng/upload_yara`` (Email Security web UI).
@@ -10,11 +10,11 @@ Delete: POST ``application/x-www-form-urlencoded`` to ``.../yara_rules_ng/delete
 Session-style push/delete for additional targets reuse ``push_yara_session_targets`` /
 ``delete_yara_session_targets`` (used by Trellix NX ``api_style: wmps`` in ``utils.trellix_nx``).
 
-Auth (JSON POST): ``{"auth_method": "password", "data": {"username", "password"}}``
-to configurable ``login_path`` (default ``/login/login``).
-
-After login, parses JSON for CSRF and sends X-CSRF-Token, X-CSRF-Param, X-Requested-With,
-Accept ``application/json, text/plain, */*``, and Referer ``{prefix}/settings/yara_rules``.
+Auth flow (per target):
+1. GET ``login_path`` (default ``/login/login``) to seed session cookies + optional CSRF from HTML.
+2. JSON POST login: ``{"auth_method": "<password|ldap>", "data": {"username", "password"}}``.
+   LDAP-backed appliances often still accept ``password``; use ``ldap`` or ``auto`` when needed.
+3. Multipart upload with cookies from the same CookieJar (+ X-CSRF-* when available).
 
 Optional manual Cookie; optional per-target csrf_*; ``ex_delete_name_mode: yar_txt`` maps
 ``rule.yar`` -> ``rule.yar.txt`` for delete payloads when EX stores that suffix.
@@ -25,6 +25,7 @@ and ``hint`` (likely cause for operators) on failures.
 
 from __future__ import annotations
 
+import http.cookiejar
 import json
 import logging
 import random
@@ -33,6 +34,7 @@ import ssl
 import string
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from urllib.parse import urlencode
 from typing import Any, Callable, List, Optional
 
@@ -46,6 +48,28 @@ _DEFAULT_EX_CONTENT_TYPE = 'base'
 # EX (Email Security) web UI - NX IPS uses /wmps/... (see utils.trellix_nx, api_style wmps).
 _DEFAULT_EX_UPLOAD_PATH = '/ex/yara_rules_ng/upload_yara'
 _EX_ACCEPT = 'application/json, text/plain, */*'
+_EX_USER_AGENT = 'Mozilla/5.0 (compatible; ZIoCHub/2.0; Trellix-EX-YARA)'
+_VALID_AUTH_METHODS = frozenset(('password', 'ldap', 'auto'))
+_EX_CONNECTION_TEST_FILENAME = 'ziochub_connection_test.yar'
+_EX_CONNECTION_TEST_YARA = """rule ziochub_connection_test {
+    meta:
+        description = "ZIoCHub connectivity test (safe; condition is false)"
+    condition:
+        false
+}
+"""
+
+
+@dataclass
+class _ExAuthResult:
+    ok: bool
+    message: str
+    opener: Optional[urllib.request.OpenerDirector] = None
+    jar: Optional[http.cookiejar.CookieJar] = None
+    cookie_header: str = ''
+    csrf_param: Optional[str] = None
+    csrf_token: Optional[str] = None
+    verify_ssl: bool = True
 
 
 def _http_code_from_message(msg: str) -> Optional[int]:
@@ -106,6 +130,11 @@ def _trellix_ex_operator_hint(
             return "Likely: username is empty on the EX target - fill it in and save."
         if "missing" in msg_l and "password" in msg_l:
             return "Likely: password is empty - set it, or paste a manual session Cookie from a browser login if SSO is required."
+        if "no session cookies" in msg_l or "no set-cookie" in msg_l:
+            return (
+                "Likely: LDAP/SSO login JSON succeeded but EX did not issue session cookies to ZIoCHub — "
+                "set auth_method to ldap or auto, use DOMAIN\\user or UPN if required, or paste Manual Cookie + CSRF from the browser."
+            )
         if "no set-cookie" in msg_l or ("cookie" in msg_l and "upload" in msg_l):
             return "Likely: login returned no session cookie - paste Cookie + CSRF from a browser session on this appliance."
 
@@ -128,8 +157,18 @@ def _trellix_ex_operator_hint(
         if code == 429:
             return "Likely: throttling on the appliance - reduce how often you run the test or automation."
         if code is not None and code >= 500:
+            if "application status" in msg_l or "trellix application status" in msg_l:
+                return (
+                    "Likely: Trellix returned an application status page (HTTP 500) - wrong API path for this host "
+                    "(CMS needs /cms/yara_rules_ng/..., EX needs /ex/...), missing CMS sensor fields, or the YARA service is down."
+                )
             return "Likely: server-side fault on Trellix EX - check appliance health and application logs."
         if code == 203:
+            if "login" in msg_l or "not authenticated" in msg_l:
+                return (
+                    "Likely: session not accepted — use Manual Cookie (+ CSRF) from a browser on this EX, "
+                    "or verify username/password and that base_url matches the host you log into."
+                )
             return (
                 "Likely: HTTP 203 is unusual for this API - a proxy may be rewriting the response; "
                 "hit the EX host directly if possible and compare with the technical line above."
@@ -224,6 +263,196 @@ def _extract_csrf_from_login_body(body_bytes: bytes) -> tuple[Optional[str], Opt
     return None, None
 
 
+def _extract_csrf_from_html(html: str) -> tuple[Optional[str], Optional[str]]:
+    """Parse login page HTML for CSRF meta tags (common before JSON LDAP/password login)."""
+    if not html:
+        return None, None
+    patterns = (
+        r'<meta[^>]+name=["\']csrf-token["\'][^>]+content=["\']([^"\']+)',
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']csrf-token["\']',
+        r'name=["\']csrf-token["\']\s+content=["\']([^"\']+)',
+    )
+    for pat in patterns:
+        m = re.search(pat, html, re.I)
+        if m and m.group(1).strip():
+            return 'authenticity_token', m.group(1).strip()
+    return None, None
+
+
+def _resolve_auth_methods(target: dict) -> List[str]:
+    """Order of auth_method values to try on JSON login POST."""
+    raw = (target.get('auth_method') or '').strip().lower()
+    if raw == 'ldap':
+        return ['ldap']
+    if raw == 'auto':
+        return ['password', 'ldap']
+    return ['password']
+
+
+def _build_ex_opener(verify_ssl: bool) -> tuple[urllib.request.OpenerDirector, http.cookiejar.CookieJar]:
+    jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar),
+        urllib.request.HTTPSHandler(context=_ssl_context(verify_ssl)),
+    )
+    return opener, jar
+
+
+def _jar_cookie_header_for_url(jar: http.cookiejar.CookieJar, url: str) -> str:
+    """Serialize cookies in jar applicable to url as a Cookie request header."""
+    req = urllib.request.Request(url)
+    jar.add_cookie_header(req)
+    return (req.get_header('Cookie') or '').strip()
+
+
+def _apply_ex_browser_headers(
+    req: urllib.request.Request,
+    *,
+    base_url: str = '',
+    referer: str = '',
+) -> None:
+    req.add_header('User-Agent', _EX_USER_AGENT)
+    if referer:
+        req.add_header('Referer', referer)
+    if base_url:
+        req.add_header('Origin', base_url.rstrip('/'))
+
+
+def _ex_open(auth: _ExAuthResult, req: urllib.request.Request, *, timeout: int):
+    """Open request using session opener (CookieJar) or manual cookie + TLS context."""
+    if auth.opener is not None:
+        return auth.opener.open(req, timeout=timeout)
+    ctx = _ssl_context(auth.verify_ssl)
+    if auth.cookie_header:
+        req.add_header('Cookie', auth.cookie_header)
+    return urllib.request.urlopen(req, timeout=timeout, context=ctx)
+
+
+def _ex_authenticate_for_target(
+    target: dict,
+    *,
+    verify_ssl: Optional[bool] = None,
+    cookie_header: Optional[str] = None,
+) -> _ExAuthResult:
+    """
+    Establish EX web session: manual cookie, or GET warm-up + JSON login with shared CookieJar.
+    Fails when login JSON is OK but no session cookies were stored (common LDAP mis-match).
+    """
+    vs = verify_ssl if verify_ssl is not None else bool(target.get('verify_ssl', True))
+    manual = _normalize_manual_cookie(cookie_header or target.get('manual_cookie') or '')
+    if manual:
+        cp, ct = _csrf_from_target_only(target)
+        return _ExAuthResult(
+            ok=True,
+            message='Using manual Cookie (login skipped)',
+            cookie_header=manual,
+            csrf_param=cp,
+            csrf_token=ct,
+            verify_ssl=vs,
+        )
+
+    base = (target.get('base_url') or '').strip().rstrip('/')
+    if not base:
+        return _ExAuthResult(ok=False, message='Missing Trellix EX base URL', verify_ssl=vs)
+    login_path = (target.get('login_path') or _DEFAULT_EX_LOGIN_PATH).strip()
+    login_url = _join_url(base, login_path)
+    upload_url = trellix_ex_upload_url_for_target(target) or base
+    user = (target.get('username') or '').strip()
+    password = str(target.get('password') or '')
+    if not user:
+        return _ExAuthResult(ok=False, message='Missing Trellix EX username', verify_ssl=vs)
+    if not (password or '').strip():
+        return _ExAuthResult(ok=False, message='Missing Trellix EX password (or set a manual Cookie)', verify_ssl=vs)
+
+    opener, jar = _build_ex_opener(vs)
+    csrf_p: Optional[str] = None
+    csrf_t: Optional[str] = None
+
+    # Seed session cookies (and CSRF) like the browser before JSON login.
+    try:
+        warm_req = urllib.request.Request(login_url, method='GET')
+        _apply_ex_browser_headers(warm_req, base_url=base, referer=login_url)
+        warm_req.add_header('Accept', 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8')
+        with opener.open(warm_req, timeout=30) as warm_resp:
+            warm_bytes = warm_resp.read(_MAX_RESPONSE_BODY_BYTES)
+        html = warm_bytes.decode('utf-8', errors='replace')
+        csrf_p, csrf_t = _extract_csrf_from_html(html)
+    except Exception as e:
+        logging.warning('Trellix EX login warm-up GET %s failed (continuing): %s', login_url, e)
+
+    tp0, tt0 = _csrf_from_target_only(target)
+    if tt0:
+        csrf_t = tt0
+    if tp0:
+        csrf_p = tp0
+
+    last_err = ''
+    for auth_method in _resolve_auth_methods(target):
+        body_obj = {'auth_method': auth_method, 'data': {'username': user, 'password': password}}
+        body = json.dumps(body_obj, ensure_ascii=False).encode('utf-8')
+        req = urllib.request.Request(login_url, data=body, method='POST')
+        req.add_header('Content-Type', 'application/json; charset=utf-8')
+        req.add_header('Accept', 'application/json, */*;q=0.8')
+        req.add_header('X-Requested-With', 'XMLHttpRequest')
+        _apply_ex_browser_headers(req, base_url=base, referer=login_url)
+        if csrf_t:
+            req.add_header('X-CSRF-Token', csrf_t)
+            req.add_header('X-CSRF-Param', csrf_p or 'authenticity_token')
+        try:
+            with opener.open(req, timeout=30) as resp:
+                code = resp.getcode()
+                body_bytes = resp.read(_MAX_RESPONSE_BODY_BYTES)
+            if not (200 <= code < 300):
+                last_err = f'Login HTTP {code} (auth_method={auth_method})'
+                continue
+            logical_ok, detail = _evaluate_http_response_body(code, body_bytes)
+            if not logical_ok:
+                last_err = detail or f'Login HTTP {code} rejected (auth_method={auth_method})'
+                continue
+            lp, lt = _merge_csrf_after_login(target, body_bytes)
+            if lt:
+                csrf_t = lt
+            if lp:
+                csrf_p = lp
+            cookie_hdr = _jar_cookie_header_for_url(jar, upload_url)
+            if not cookie_hdr:
+                return _ExAuthResult(
+                    ok=False,
+                    message=(
+                        f'Login accepted (auth_method={auth_method}) but no session cookies received. '
+                        'LDAP/SSO appliances often require Manual Cookie from a browser session, '
+                        'or auth_method ldap/auto on this target.'
+                    ),
+                    verify_ssl=vs,
+                )
+            return _ExAuthResult(
+                ok=True,
+                message=detail or f'Login OK (auth_method={auth_method})',
+                opener=opener,
+                jar=jar,
+                cookie_header=cookie_hdr,
+                csrf_param=csrf_p,
+                csrf_token=csrf_t,
+                verify_ssl=vs,
+            )
+        except urllib.error.HTTPError as e:
+            err_body = ''
+            try:
+                eb = e.read()
+                if eb:
+                    err_body = eb.decode('utf-8', errors='replace')[:2000]
+            except Exception:
+                pass
+            last_err = _truncate_msg(f'Login HTTP {e.code} (auth_method={auth_method}); {err_body}')
+        except urllib.error.URLError as e:
+            last_err = str(e.reason or e)
+        except Exception as e:
+            logging.exception('Trellix EX login auth_method=%s', auth_method)
+            last_err = str(e)
+
+    return _ExAuthResult(ok=False, message=last_err or 'Login failed', verify_ssl=vs)
+
+
 def parse_trellix_ex_targets_json(raw: str | None) -> List[dict]:
     """Parse stored JSON list of EX targets; invalid input -> []."""
     if not raw or not str(raw).strip():
@@ -290,6 +519,9 @@ def normalize_ex_target_row(r: dict, get_setting: Callable[[str, str], str]) -> 
     ex_delete_name_mode = (r.get('ex_delete_name_mode') or 'same').strip().lower()
     if ex_delete_name_mode not in ('same', 'yar_txt'):
         ex_delete_name_mode = 'same'
+    auth_method = (r.get('auth_method') or 'password').strip().lower()
+    if auth_method not in _VALID_AUTH_METHODS:
+        auth_method = 'password'
     return {
         'name': name,
         'base_url': base_url,
@@ -305,6 +537,7 @@ def normalize_ex_target_row(r: dict, get_setting: Callable[[str, str], str]) -> 
         'csrf_token': csrf_token,
         'delete_path': delete_path,
         'ex_delete_name_mode': ex_delete_name_mode,
+        'auth_method': auth_method,
     }
 
 
@@ -427,31 +660,6 @@ def _verify_ssl_from_settings(get_setting: Callable[[str, str], str]) -> bool:
     return (get_setting("trellix_ex_verify_ssl", "true") or "true").lower() in ("true", "1", "yes")
 
 
-def _collect_set_cookie_values(resp: urllib.response.addinfourl) -> str:
-    """Build a single Cookie header value from Set-Cookie response headers."""
-    pairs: list[str] = []
-    # get_all exists on HTTPMessage in modern Python
-    try:
-        raw_list = resp.headers.get_all("Set-Cookie")  # type: ignore[attr-defined]
-    except Exception:
-        raw_list = None
-    if raw_list:
-        for raw in raw_list:
-            if not raw:
-                continue
-            first = raw.split(";", 1)[0].strip()
-            if first and "=" in first:
-                pairs.append(first)
-        return "; ".join(pairs)
-    # Fallback: single header line
-    one = resp.headers.get("Set-Cookie")
-    if one:
-        first = one.split(";", 1)[0].strip()
-        if first and "=" in first:
-            return first
-    return ""
-
-
 def _normalize_manual_cookie(raw: str) -> str:
     s = (raw or "").strip()
     if not s:
@@ -491,69 +699,17 @@ def trellix_ex_login_for_target(
     verify_ssl: Optional[bool] = None,
 ) -> tuple[bool, str, str, tuple[Optional[str], Optional[str]]]:
     """
-    JSON password login for one resolved target dict.
+    Establish session for one EX target (GET warm-up + JSON login, or manual cookie).
 
     Returns (ok, cookie_header_or_empty, message, (csrf_param, csrf_token)).
     """
-    no_csrf: tuple[Optional[str], Optional[str]] = (None, None)
-    manual = _normalize_manual_cookie(target.get("manual_cookie") or "")
-    if manual:
-        cp, ct = _csrf_from_target_only(target)
-        return True, manual, "Using manual Cookie (login skipped)", (cp, ct)
-
-    base = (target.get("base_url") or "").strip().rstrip("/")
-    if not base:
-        return False, "", "Missing Trellix EX base URL", no_csrf
-    login_path = (target.get("login_path") or _DEFAULT_EX_LOGIN_PATH).strip()
-    url = _join_url(base, login_path)
-    user = (target.get("username") or "").strip()
-    password = str(target.get("password") or "")
-    if not user:
-        return False, "", "Missing Trellix EX username", no_csrf
-    if not (password or "").strip():
-        return False, "", "Missing Trellix EX password (or set a manual Cookie)", no_csrf
-
-    if verify_ssl is None:
-        verify_ssl = bool(target.get("verify_ssl", True))
-
-    body_obj = {"auth_method": "password", "data": {"username": user, "password": password}}
-    body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
-    ctx = _ssl_context(verify_ssl)
-    req = urllib.request.Request(url, data=body, method="POST")
-    req.add_header("Content-Type", "application/json; charset=utf-8")
-    req.add_header("Accept", "application/json, */*;q=0.8")
-    try:
-        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-            code = resp.getcode()
-            cookie = _collect_set_cookie_values(resp)
-            body_bytes = b""
-            try:
-                body_bytes = resp.read(_MAX_RESPONSE_BODY_BYTES)
-            except Exception:
-                pass
-            if not (200 <= code < 300):
-                return False, "", f"Login HTTP {code}", no_csrf
-            logical_ok, detail = _evaluate_http_response_body(code, body_bytes)
-            if not logical_ok:
-                return False, cookie, detail or f"Login HTTP {code} rejected", no_csrf
-            if not cookie:
-                logging.warning("Trellix EX login: no Set-Cookie in response; upload may fail without manual Cookie")
-            csrf_p, csrf_t = _merge_csrf_after_login(target, body_bytes)
-            return True, cookie, detail or "Login OK", (csrf_p, csrf_t)
-    except urllib.error.HTTPError as e:
-        err_body = ""
-        try:
-            eb = e.read()
-            if eb:
-                err_body = eb.decode("utf-8", errors="replace")[:2000]
-        except Exception:
-            pass
-        return False, "", _truncate_msg(f"Login HTTP {e.code} {e.reason}; {err_body}"), no_csrf
-    except urllib.error.URLError as e:
-        return False, "", str(e.reason or e), no_csrf
-    except Exception as e:
-        logging.exception("Trellix EX login")
-        return False, "", str(e), no_csrf
+    auth = _ex_authenticate_for_target(target, verify_ssl=verify_ssl)
+    return (
+        auth.ok,
+        auth.cookie_header,
+        auth.message,
+        (auth.csrf_param, auth.csrf_token),
+    )
 
 
 def trellix_ex_login(
@@ -570,11 +726,52 @@ def trellix_ex_login(
     return trellix_ex_login_for_target(t0, verify_ssl=vs)
 
 
+def _session_product_name(target: dict) -> str:
+    """Human label for session-style push/delete (EX, NX wmps, CMS)."""
+    return ((target.get("product_name") or target.get("name") or "Trellix EX").strip() or "Trellix EX")
+
+
+def _maybe_wmps_session_warmup(auth: _ExAuthResult, target: dict) -> None:
+    """Prime NX wmps YARA UI session (GET file types / list / errors) before upload/delete."""
+    up = (target.get("upload_path") or "").strip()
+    if "/wmps/" not in up:
+        return
+    if not target.get("wmps_warmup", True):
+        return
+    try:
+        from utils.trellix_nx import wmps_yara_ui_warmup
+
+        wmps_yara_ui_warmup(auth, target)
+    except Exception:
+        logging.debug("wmps session warmup skipped or failed", exc_info=True)
+
+
+def _target_form_extra_pairs(target: dict) -> list[tuple[str, str]]:
+    """Optional extra multipart/urlencoded fields from target (e.g. Trellix CMS sensor scope)."""
+    out: list[tuple[str, str]] = []
+    raw = target.get('form_extra')
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict):
+                name = str(item.get('name') or '').strip()
+                if not name:
+                    continue
+                val = item.get('value')
+                out.append((name, '' if val is None else str(val)))
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                name = str(item[0]).strip()
+                if name:
+                    out.append((name, str(item[1])))
+    return out
+
+
 def _multipart_body(
     filename: str,
     content: str,
     f_type: str,
     content_type_val: str,
+    *,
+    extra_fields: Optional[list[tuple[str, str]]] = None,
 ) -> tuple[str, bytes]:
     boundary = "----ziochubTrellixEx" + "".join(
         random.choice(string.ascii_letters + string.digits) for _ in range(24)
@@ -590,6 +787,8 @@ def _multipart_body(
         parts.append(value.encode("utf-8") + crlf)
 
     fn = (filename or "rule.yar").replace("\r", "").replace("\n", "").replace('"', "").strip() or "rule.yar"
+    for ename, evalue in extra_fields or []:
+        add_field(ename, evalue)
     add_field("f_type", f_type)
     add_field("content_type", content_type_val)
 
@@ -639,33 +838,30 @@ def _push_yara_trellix_ex_one(
     f_type = (target.get("f_type") or "common").strip() or "common"
     ct_val = (target.get("content_type") or _DEFAULT_EX_CONTENT_TYPE).strip() or _DEFAULT_EX_CONTENT_TYPE
 
-    csrf_p: Optional[str] = None
-    csrf_t: Optional[str] = None
-    cookie = (cookie_header or "").strip()
-    if not cookie:
-        ok_login, cookie, login_msg, (csrf_p, csrf_t) = trellix_ex_login_for_target(target, verify_ssl=vs)
-        if not ok_login:
-            audit_log_fn("yara_push_fail", f"file={filename} target=EX name={name} login={login_msg[:300]}")
-            return {
-                "overall_success": False,
-                "results": [
-                    _trellix_ex_failure_row(
-                        name,
-                        upload_url,
-                        phase="login",
-                        summary="Trellix EX login failed.",
-                        message=login_msg,
-                    )
-                ],
-            }
-    else:
-        csrf_p, csrf_t = _csrf_from_target_only(target)
+    product = _session_product_name(target)
+    auth = _ex_authenticate_for_target(target, verify_ssl=vs, cookie_header=cookie_header)
+    if not auth.ok:
+        audit_log_fn("yara_push_fail", f"file={filename} target={product} name={name} login={auth.message[:300]}")
+        return {
+            "overall_success": False,
+            "results": [
+                _trellix_ex_failure_row(
+                    name,
+                    upload_url,
+                    phase="login",
+                    summary=f"{product} login failed.",
+                    message=auth.message,
+                )
+            ],
+        }
 
-    boundary, body = _multipart_body(filename, content, f_type, ct_val)
-    ctx = _ssl_context(vs)
+    _maybe_wmps_session_warmup(auth, target)
+    csrf_p, csrf_t = auth.csrf_param, auth.csrf_token
+    boundary, body = _multipart_body(
+        filename, content, f_type, ct_val, extra_fields=_target_form_extra_pairs(target)
+    )
     req = urllib.request.Request(upload_url, data=body, method="POST")
     req.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
-    req.add_header("Cookie", cookie)
     req.add_header("Accept", _EX_ACCEPT)
     req.add_header("X-Requested-With", "XMLHttpRequest")
     if csrf_t:
@@ -673,11 +869,13 @@ def _push_yara_trellix_ex_one(
         req.add_header("X-CSRF-Param", csrf_p or "authenticity_token")
     base_ref = (target.get("base_url") or "").strip().rstrip("/")
     up_path = (target.get("upload_path") or "").strip()
-    if base_ref:
-        req.add_header("Referer", _join_url(base_ref, trellix_ex_referer_path(up_path)))
+    referer = _join_url(base_ref, trellix_ex_referer_path(up_path)) if base_ref else ''
+    _apply_ex_browser_headers(req, base_url=base_ref, referer=referer)
+    if auth.opener is None and auth.cookie_header:
+        req.add_header("Cookie", auth.cookie_header)
 
     try:
-        with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+        with _ex_open(auth, req, timeout=60) as resp:
             code = resp.getcode()
             body_bytes = b""
             try:
@@ -803,6 +1001,37 @@ def _ex_delete_remote_filename(filename: str, target: dict) -> str:
     return fn
 
 
+def _delete_yara_trellix_ex_one_with_fallbacks(
+    filename: str,
+    target: dict,
+    audit_log_fn,
+    *,
+    verify_ssl: Optional[bool] = None,
+    cookie_header: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Delete on EX; if the configured ex_delete_name_mode does not match how the rule
+    was stored, retry with the alternate mode (yar <-> yar.txt).
+    """
+    primary = _delete_yara_trellix_ex_one(
+        filename, target, audit_log_fn, verify_ssl=verify_ssl, cookie_header=cookie_header
+    )
+    if primary.get("overall_success"):
+        return primary
+    fn = (filename or "").strip()
+    if not fn.lower().endswith(".yar"):
+        return primary
+    mode = (target.get("ex_delete_name_mode") or "same").strip().lower()
+    alt_mode = "same" if mode == "yar_txt" else "yar_txt"
+    alt_target = {**target, "ex_delete_name_mode": alt_mode}
+    alt = _delete_yara_trellix_ex_one(
+        filename, alt_target, audit_log_fn, verify_ssl=verify_ssl, cookie_header=cookie_header
+    )
+    if alt.get("overall_success"):
+        return alt
+    return primary
+
+
 def _delete_yara_trellix_ex_one(
     filename: str,
     target: dict,
@@ -837,39 +1066,36 @@ def _delete_yara_trellix_ex_one(
     ct_val = (target.get("content_type") or _DEFAULT_EX_CONTENT_TYPE).strip() or _DEFAULT_EX_CONTENT_TYPE
     remote_name = _ex_delete_remote_filename(filename, target)
 
-    csrf_p: Optional[str] = None
-    csrf_t: Optional[str] = None
-    cookie = (cookie_header or "").strip()
-    if not cookie:
-        ok_login, cookie, login_msg, (csrf_p, csrf_t) = trellix_ex_login_for_target(target, verify_ssl=vs)
-        if not ok_login:
-            audit_log_fn("yara_delete_fail", f"file={filename} target=EX name={name} login={login_msg[:300]}")
-            return {
-                "overall_success": False,
-                "results": [
-                    _trellix_ex_failure_row(
-                        name,
-                        delete_url,
-                        phase="login",
-                        summary="Trellix EX login failed (delete not attempted).",
-                        message=login_msg,
-                    )
-                ],
-            }
-    else:
-        csrf_p, csrf_t = _csrf_from_target_only(target)
+    product = _session_product_name(target)
+    auth = _ex_authenticate_for_target(target, verify_ssl=vs, cookie_header=cookie_header)
+    if not auth.ok:
+        audit_log_fn("yara_delete_fail", f"file={filename} target={product} name={name} login={auth.message[:300]}")
+        return {
+            "overall_success": False,
+            "results": [
+                _trellix_ex_failure_row(
+                    name,
+                    delete_url,
+                    phase="login",
+                    summary=f"{product} login failed (delete not attempted).",
+                    message=auth.message,
+                )
+            ],
+        }
 
-    body = urlencode(
+    _maybe_wmps_session_warmup(auth, target)
+    csrf_p, csrf_t = auth.csrf_param, auth.csrf_token
+    delete_pairs: list[tuple[str, str]] = list(_target_form_extra_pairs(target))
+    delete_pairs.extend(
         [
             ("files[0][name]", remote_name),
             ("files[0][c_type]", ct_val),
             ("files[0][type]", f_type),
         ]
-    ).encode("utf-8")
-    ctx = _ssl_context(vs)
+    )
+    body = urlencode(delete_pairs).encode("utf-8")
     req = urllib.request.Request(delete_url, data=body, method="POST")
     req.add_header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-    req.add_header("Cookie", cookie)
     req.add_header("Accept", _EX_ACCEPT)
     req.add_header("X-Requested-With", "XMLHttpRequest")
     if csrf_t:
@@ -877,11 +1103,13 @@ def _delete_yara_trellix_ex_one(
         req.add_header("X-CSRF-Param", csrf_p or "authenticity_token")
     base_ref = (target.get("base_url") or "").strip().rstrip("/")
     up_path = (target.get("upload_path") or "").strip()
-    if base_ref:
-        req.add_header("Referer", _join_url(base_ref, trellix_ex_referer_path(up_path)))
+    referer = _join_url(base_ref, trellix_ex_referer_path(up_path)) if base_ref else ''
+    _apply_ex_browser_headers(req, base_url=base_ref, referer=referer)
+    if auth.opener is None and auth.cookie_header:
+        req.add_header("Cookie", auth.cookie_header)
 
     try:
-        with urllib.request.urlopen(req, timeout=60, context=ctx) as resp:
+        with _ex_open(auth, req, timeout=60) as resp:
             code = resp.getcode()
             body_bytes = b""
             try:
@@ -1046,7 +1274,9 @@ def delete_yara_session_targets(
     n = len(targets)
     for _i, t in enumerate(targets):
         ck = shared if (shared and n == 1) else None
-        one = _delete_yara_trellix_ex_one(filename, t, audit_log_fn, verify_ssl=verify_ssl, cookie_header=ck)
+        one = _delete_yara_trellix_ex_one_with_fallbacks(
+            filename, t, audit_log_fn, verify_ssl=verify_ssl, cookie_header=ck
+        )
         row = (one.get("results") or [{}])[0]
         results.append(row)
         overall = overall and bool(one.get("overall_success"))
@@ -1146,46 +1376,56 @@ def push_yara_trellix_ex(
     )
 
 
-def test_trellix_ex_connection(get_setting: Callable[[str, str], str], *, verify_ssl: Optional[bool] = None) -> dict[str, Any]:
-    """Admin test: login + POST minimal safe YARA (same as FireEye test rule shape)."""
-    _test_yara = """rule ziochub_connection_test {
-    meta:
-        description = "ZIoCHub connectivity test (safe; condition is false)"
-    condition:
-        false
-}
-"""
-
+def _test_ex_precheck(get_setting: Callable[[str, str], str]) -> Optional[dict[str, Any]]:
+    """Return an error payload when the integration cannot be tested, else None."""
     if not trellix_ex_enabled(get_setting):
         return {
             "success": False,
             "overall_success": False,
             "results": [],
-            "summary": "Trellix EX integration is disabled.",
-            "message": "Trellix EX is disabled. Enable it or use Save first.",
-            "hint": "Likely: set \"Enable Trellix EX YARA push\" to Yes under Integrations -> Email (EX), save, then test.",
+            "headline": "Trellix EX integration is disabled.",
+            "summary": "Enable Trellix EX under Integrations, save settings, then run the test again.",
+            "message": "Trellix EX is disabled.",
+            "hint": "Set Enable Trellix EX YARA push to Yes, save, then retry.",
         }
     if not list_trellix_ex_targets(get_setting):
         return {
             "success": True,
             "overall_success": False,
             "results": [],
-            "summary": "No Trellix EX targets configured.",
-            "message": "Add at least one EX target with a base URL, then save.",
-            "hint": "Likely: add a target row with base_url and credentials, save Integrations, then run the test again.",
+            "headline": "No Trellix EX targets configured.",
+            "summary": "Add at least one target with a base URL, save, then run the test again.",
+            "message": "No targets in trellix_ex_targets.",
         }
-    res = push_yara_trellix_ex(
-        _test_yara,
-        "ziochub_connection_test.yar",
-        get_setting,
-        audit_log_fn=lambda *a, **k: None,
-        verify_ssl=verify_ssl,
-    )
-    ok = bool(res.get("overall_success"))
-    msgs = []
+    return None
+
+
+def _auth_row_from_target(target: dict, *, verify_ssl: Optional[bool]) -> dict[str, Any]:
+    """One per-target authentication result for the staged admin test."""
+    name = ((target.get("name") or "Trellix EX").strip() or "Trellix EX")
+    vs = verify_ssl if verify_ssl is not None else bool(target.get("verify_ssl", True))
+    auth = _ex_authenticate_for_target(target, verify_ssl=vs)
+    ok = auth.ok
+    hint = ""
+    if not ok:
+        hint = _trellix_ex_operator_hint(phase="login", message=auth.message)
+    return {
+        "name": name,
+        "url": _join_url((target.get("base_url") or "").strip().rstrip("/"), (target.get("login_path") or _DEFAULT_EX_LOGIN_PATH).strip()),
+        "success": ok,
+        "phase": "login",
+        "summary": "Authentication succeeded." if ok else "Authentication failed.",
+        "message": auth.message,
+        "hint": hint or None,
+    }
+
+
+def _aggregate_step_messages(results: list[dict[str, Any]]) -> tuple[str, str, str]:
+    """Return (technical_message, combined_hints, combined_summaries) from per-target rows."""
+    msgs: list[str] = []
     hints: list[str] = []
     summaries: list[str] = []
-    for r in res.get("results") or []:
+    for r in results:
         if not isinstance(r, dict):
             continue
         if (r.get("message") or "").strip():
@@ -1200,16 +1440,199 @@ def test_trellix_ex_connection(get_setting: Callable[[str, str], str], *, verify
     agg_hint = "\n".join(hints)[:2000] if hints else ""
     agg_summary = ""
     if summaries:
-        agg_summary = summaries[0] if len(summaries) == 1 else " - ".join(list(dict.fromkeys(summaries)))[:500]
+        agg_summary = summaries[0] if len(summaries) == 1 else "; ".join(list(dict.fromkeys(summaries)))[:500]
+    return msg, agg_hint, agg_summary
+
+
+def _step_response(
+    *,
+    step: str,
+    step_number: int,
+    overall_success: bool,
+    headline: str,
+    subline: str,
+    results: list[dict[str, Any]],
+    message: str = "",
+    hint: str = "",
+    summary: str = "",
+    test_filename: str = "",
+) -> dict[str, Any]:
     out: dict[str, Any] = {
         "success": True,
-        "overall_success": ok,
-        "results": res.get("results", []),
-        "message": msg,
+        "step": step,
+        "step_number": step_number,
+        "overall_success": overall_success,
+        "headline": headline,
+        "subline": subline,
+        "results": results,
+        "message": message,
     }
+    if hint:
+        out["hint"] = hint
+    if summary:
+        out["summary"] = summary
+    if test_filename:
+        out["test_filename"] = test_filename
+    return out
+
+
+def test_trellix_ex_step(
+    get_setting: Callable[[str, str], str],
+    step: str,
+    *,
+    verify_ssl: Optional[bool] = None,
+) -> dict[str, Any]:
+    """
+    Run one staged Trellix EX integration test step: auth | upload | cleanup.
+    Used by the Admin UI to show progress with a pause between each operation.
+    """
+    step_l = (step or "").strip().lower()
+    pre = _test_ex_precheck(get_setting)
+    if pre:
+        pre["step"] = step_l
+        return pre
+
+    targets = list_trellix_ex_targets(get_setting)
+    n = len(targets)
+
+    if step_l == "auth":
+        rows = [_auth_row_from_target(t, verify_ssl=verify_ssl) for t in targets]
+        ok = bool(rows) and all(r.get("success") for r in rows)
+        msg, hint, summ = _aggregate_step_messages(rows)
+        if ok:
+            headline = "Authentication completed successfully"
+            subline = f"Session established for {n} target{'s' if n != 1 else ''}."
+        else:
+            headline = "Authentication failed"
+            subline = "Could not establish a valid session on one or more targets."
+        return _step_response(
+            step="auth",
+            step_number=1,
+            overall_success=ok,
+            headline=headline,
+            subline=subline,
+            results=rows,
+            message=msg,
+            hint=hint,
+            summary=summ or headline,
+        )
+
+    if step_l == "upload":
+        res = push_yara_trellix_ex(
+            _EX_CONNECTION_TEST_YARA,
+            _EX_CONNECTION_TEST_FILENAME,
+            get_setting,
+            audit_log_fn=lambda *a, **k: None,
+            verify_ssl=verify_ssl,
+        )
+        rows = list(res.get("results") or [])
+        ok = bool(res.get("overall_success"))
+        msg, hint, summ = _aggregate_step_messages(rows)
+        fn = _EX_CONNECTION_TEST_FILENAME
+        if ok:
+            headline = "Test rule uploaded successfully"
+            subline = f"Uploaded {fn} to {n} target{'s' if n != 1 else ''} (condition: false, no matches)."
+        else:
+            headline = "Test rule upload failed"
+            subline = f"Could not upload {fn} to all configured targets."
+        return _step_response(
+            step="upload",
+            step_number=2,
+            overall_success=ok,
+            headline=headline,
+            subline=subline,
+            results=rows,
+            message=msg,
+            hint=hint,
+            summary=summ or headline,
+            test_filename=fn,
+        )
+
+    if step_l == "cleanup":
+        res = delete_yara_trellix_ex(
+            _EX_CONNECTION_TEST_FILENAME,
+            get_setting,
+            audit_log_fn=lambda *a, **k: None,
+            verify_ssl=verify_ssl,
+        )
+        rows = list(res.get("results") or [])
+        ok = bool(res.get("overall_success"))
+        msg, hint, summ = _aggregate_step_messages(rows)
+        fn = _EX_CONNECTION_TEST_FILENAME
+        if ok:
+            headline = "Test rule cleanup completed successfully"
+            subline = f"Removed {fn} from {n} target{'s' if n != 1 else ''}."
+        else:
+            headline = "Test rule cleanup failed"
+            subline = (
+                f"{fn} may still be present on the appliance. "
+                "Try Delete name mode yar_txt if rules are stored as .yar.txt."
+            )
+        return _step_response(
+            step="cleanup",
+            step_number=3,
+            overall_success=ok,
+            headline=headline,
+            subline=subline,
+            results=rows,
+            message=msg,
+            hint=hint,
+            summary=summ or headline,
+            test_filename=fn,
+        )
+
+    return {
+        "success": False,
+        "overall_success": False,
+        "step": step_l,
+        "headline": "Unknown test step.",
+        "message": f"Invalid step: {step!r}. Use auth, upload, or cleanup.",
+    }
+
+
+def test_trellix_ex_connection(get_setting: Callable[[str, str], str], *, verify_ssl: Optional[bool] = None) -> dict[str, Any]:
+    """Admin test (single request): auth, upload, cleanup combined. Prefer staged steps in the UI."""
+    pre = _test_ex_precheck(get_setting)
+    if pre:
+        return pre
+
+    auth = test_trellix_ex_step(get_setting, "auth", verify_ssl=verify_ssl)
+    if not auth.get("overall_success"):
+        auth["cleanup_success"] = None
+        return auth
+
+    upload = test_trellix_ex_step(get_setting, "upload", verify_ssl=verify_ssl)
+    cleanup_ok = None
+    cleanup_message = ""
+    cleanup_hint = ""
+    if upload.get("overall_success"):
+        cleanup = test_trellix_ex_step(get_setting, "cleanup", verify_ssl=verify_ssl)
+        cleanup_ok = bool(cleanup.get("overall_success"))
+        cleanup_message = (cleanup.get("subline") or cleanup.get("headline") or "")[:500]
+        cleanup_hint = (cleanup.get("hint") or "")[:2000]
+
+    ok = bool(upload.get("overall_success"))
+    out: dict[str, Any] = {
+        "success": True,
+        "overall_success": ok and (cleanup_ok is not False),
+        "results": upload.get("results", []),
+        "message": upload.get("message", ""),
+        "headline": "Trellix EX integration test completed successfully" if ok and cleanup_ok is not False else "Trellix EX integration test completed with errors",
+    }
+    if upload.get("hint"):
+        out["hint"] = upload["hint"]
+    if upload.get("summary"):
+        out["summary"] = upload["summary"]
+    if cleanup_ok is not None:
+        out["cleanup_success"] = cleanup_ok
+        out["cleanup_message"] = cleanup_message
+    if ok and cleanup_ok is False and cleanup_hint:
+        out["cleanup_hint"] = cleanup_hint
+        out["hint"] = f"{out.get('hint', '')}\n{cleanup_hint}".strip()
     if not ok:
-        if agg_summary:
-            out["summary"] = agg_summary
-        if agg_hint:
-            out["hint"] = agg_hint
+        out["overall_success"] = False
+        if upload.get("summary"):
+            out["summary"] = upload["summary"]
+        if upload.get("hint"):
+            out["hint"] = upload["hint"]
     return out

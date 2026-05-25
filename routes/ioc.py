@@ -157,6 +157,37 @@ def _sanity_should_block_else_warn(is_blocked: bool, is_admin: bool, mode: str) 
     return False, True  # warn_all
 
 
+def _preview_staging_sanity_summary(
+    value: str,
+    ioc_type: str,
+    *,
+    is_admin: bool,
+    sanity_mode: str,
+    data_dir: str,
+) -> str:
+    """
+    Short text for Submit IOC staging tables: critical warn (when applicable) + get_sanity_warnings,
+    joined for display (max ~260 chars).
+    """
+    is_crit, crit_msg = check_sanity_critical(value, ioc_type, data_dir)
+    _, should_warn = _sanity_should_block_else_warn(is_crit, is_admin, sanity_mode)
+    bits: list[str] = []
+    if should_warn and crit_msg:
+        cm = crit_msg.strip()
+        if cm:
+            bits.append(cm)
+    for w in get_sanity_warnings(value, ioc_type):
+        w = (w or '').strip()
+        if w and w not in bits:
+            bits.append(w)
+    if not bits:
+        return ''
+    s = ' · '.join(bits[:4])
+    if len(s) > 260:
+        return s[:257] + '…'
+    return s
+
+
 def _tags_governance(_get_setting):
     """Return (restricted_enabled, allowed_tags_list, allow_suggest)."""
     restricted = (_get_setting('tags_restricted_enabled', 'false') or 'false').strip().lower() == 'true'
@@ -387,6 +418,33 @@ def _extract_iocs_from_text(text: str):
     return out
 
 
+def _extract_atomic_ioc_candidates(fragment: str) -> list[tuple[str, str]]:
+    """
+    One TXT line prefix (before #) or one CSV cell as a single IOC candidate.
+    Returns 0 or 1 (value, type) pairs — no scanning inside URLs for extra domains/hashes.
+    Caller should pass text already passed through prepare_text_for_ioc_extraction when applicable.
+    """
+    s = (fragment or '').replace('\ufeff', '').strip()
+    if not s:
+        return []
+    ioc_cleaned, _ = refanger(s)
+    ioc_cleaned = (ioc_cleaned or '').strip()
+    if not ioc_cleaned:
+        return []
+    ioc_cleaned, ioc_type = _normalize_txt_ioc(ioc_cleaned)
+    if not ioc_type:
+        return []
+    if ioc_type == 'IP':
+        try:
+            ipaddress.ip_address(ioc_cleaned)
+        except ValueError:
+            return []
+    else:
+        if not validate_ioc(ioc_cleaned, ioc_type):
+            return []
+    return [(ioc_cleaned, ioc_type)]
+
+
 # Column titles that indicate row 1 is a spreadsheet header (not an IOC line)
 _CSV_KNOWN_HEADER_LABELS = frozenset({
     'ioc', 'iocvalue', 'ioc_value', 'value', 'values', 'indicator', 'indicators', 'type', 'ioctype',
@@ -449,16 +507,17 @@ def _csv_first_row_is_data_not_header(row: list) -> bool:
 
 def _extract_iocs_from_csv_cell(cell: str) -> list:
     """
-    Extract IOCs from one CSV cell using the same pipeline as Paste / bulk paste:
-    URL and other high-priority types before bare domains; deduped within the cell.
+    One CSV cell → at most one IOC row (whole cell normalized/classified).
+    Does not mine substrings inside URLs (unlike Paste, which uses _extract_iocs_from_text).
     """
     if not (cell or '').strip():
         return []
+    cell = (cell or '').replace('\ufeff', '').strip()
     expanded = prepare_text_for_ioc_extraction(cell)
-    text = (expanded if expanded else cell or '').strip()
-    if not text:
+    fragment = ((expanded if expanded else cell) or '').strip()
+    if not fragment:
         return []
-    return _extract_iocs_from_text(text)
+    return _extract_atomic_ioc_candidates(fragment)
 
 
 def _preview_staging_dedup_key(ioc_type: str, ioc_cleaned: str):
@@ -1110,7 +1169,7 @@ def bulk_csv():
                 if not ticket_id:
                     ticket_id = None
             
-            # Process every cell: same IOC extraction as Paste (URL before bare domain, deduped per cell)
+            # Process every cell: one IOC per cell (no substring mining inside URLs)
             for cell in row:
                 cell = (cell or '').replace('\ufeff', '').strip()
                 if not cell:
@@ -1272,7 +1331,7 @@ def preview_csv():
     Parse CSV using same logic as bulk_csv; return JSON items for staging (no DB write).
     Accepts: file, ttl, comment, optional ticket_id, optional assign_to (analyst username; empty = submitter).
     For each IOC: existing_permanent=True only if an active IOC exists (not revoked, not expired).
-    Per-cell IOC extraction matches Paste (URL before bare domain, deduped within the cell).
+    Per-cell: one IOC candidate per CSV cell (whole cell); Paste mode still mines inside text.
     """
     (
         check_allowlist, calculate_expiration_date,
@@ -1379,7 +1438,10 @@ def preview_csv():
                     'expiration': expiration_display,
                     'existing_permanent': existing_permanent,
                     'existing_analyst': existing_analyst,
-                    'existing_comment': existing_comment
+                    'existing_comment': existing_comment,
+                    'sanity_check': _preview_staging_sanity_summary(
+                        value, ioc_type, is_admin=is_admin, sanity_mode=sanity_mode, data_dir=_data_dir
+                    ),
                 })
 
         return jsonify({'success': True, 'items': items, 'count': len(items)})
@@ -1393,6 +1455,7 @@ def preview_txt():
     """
     Parse TXT file with smart metadata logic; fill missing fields from form defaults.
     Returns JSON array of { ioc, type, ticket_id, analyst, date, comment } for staging table.
+    One IOC per IOC line prefix (before #): the whole token is classified, not mined for inner domains/URLs.
     Deduplicates by (ioc_type, value) case-insensitively: first occurrence order, last line wins metadata.
     """
     (
@@ -1443,7 +1506,8 @@ def preview_txt():
                 metadata_raw = ''
 
             expanded = prepare_text_for_ioc_extraction(ioc_raw)
-            extracted = _extract_iocs_from_text(expanded)
+            fragment = ((expanded if expanded else ioc_raw) or '').strip()
+            extracted = _extract_atomic_ioc_candidates(fragment)
             parsed = _parse_txt_metadata(metadata_raw)
             analyst = (parsed['analyst'] or default_analyst).lower()
             ticket_id = parsed['ticket_id'] or default_ticket
@@ -1451,7 +1515,7 @@ def preview_txt():
             comment = sanitize_comment(parsed['comment'] or default_comment or '') or ''
 
             if not extracted:
-                ioc_cleaned, _ = refanger(ioc_raw.strip())
+                ioc_cleaned, _ = refanger(fragment)
                 if not ioc_cleaned:
                     continue
                 ioc_cleaned, ioc_type = _normalize_txt_ioc(ioc_cleaned)
@@ -1506,7 +1570,10 @@ def preview_txt():
                     'expiration': expiration_display,
                     'existing_permanent': existing_permanent,
                     'existing_analyst': existing_analyst,
-                    'existing_comment': existing_comment
+                    'existing_comment': existing_comment,
+                    'sanity_check': _preview_staging_sanity_summary(
+                        ioc_cleaned, ioc_type, is_admin=is_admin, sanity_mode=sanity_mode, data_dir=_data_dir
+                    ),
                 }
 
         items = [_by_key[k] for k in _key_order]
@@ -1522,6 +1589,7 @@ def preview_paste():
     Extract IOCs from pasted text (IPs, domains, URLs, emails, hashes).
     JSON body: { text, default_ticket?, default_ttl?, default_comment?, assign_to? }.
     Returns same format as preview_txt for staging table.
+    Aggressive extraction: multiple IOCs per blob (including inside URLs) — unlike TXT/CSV file modes.
     Deduplicates by (ioc_type, value) after normalize/refang (last match wins if types collide).
     """
     (
@@ -1600,7 +1668,10 @@ def preview_paste():
                 'expiration': expiration_display,
                 'existing_permanent': existing_permanent,
                 'existing_analyst': existing_analyst,
-                'existing_comment': existing_comment
+                'existing_comment': existing_comment,
+                'sanity_check': _preview_staging_sanity_summary(
+                    ioc_cleaned, ioc_type, is_admin=is_admin, sanity_mode=sanity_mode, data_dir=_data_dir
+                ),
             }
 
         items = [_by_key[k] for k in _key_order]
@@ -1674,6 +1745,9 @@ def preview_single():
         if should_warn and crit_msg:
             warnings.append(crit_msg)
         warnings.extend(get_sanity_warnings(value, ioc_type))
+        sanity_cell = _preview_staging_sanity_summary(
+            value, ioc_type, is_admin=is_admin, sanity_mode=sanity_mode, data_dir=_data_dir
+        )
         ticket_id = (data.get('ticket_id') or '').strip() or _auto_ticket_id(current_user.id)
         ttl = (data.get('ttl') or 'Permanent').strip()
         comment = sanitize_comment((data.get('comment') or '').strip() or '') or ''
@@ -1706,7 +1780,8 @@ def preview_single():
             'expiration': expiration_display,
             'existing_permanent': existing_permanent,
             'existing_analyst': existing_analyst,
-            'existing_comment': existing_comment
+            'existing_comment': existing_comment,
+            'sanity_check': sanity_cell,
         }
         if tags_list:
             item['tags'] = tags_list
@@ -2063,9 +2138,10 @@ def upload_txt():
             comment_sanitized = sanitize_comment(parsed['comment'] or '')
 
             expanded = prepare_text_for_ioc_extraction(ioc_raw)
-            extracted = _extract_iocs_from_text(expanded)
+            fragment = ((expanded if expanded else ioc_raw) or '').strip()
+            extracted = _extract_atomic_ioc_candidates(fragment)
             if not extracted:
-                ioc_cleaned, _ = refanger(ioc_raw.strip())
+                ioc_cleaned, _ = refanger(fragment)
                 if ioc_cleaned:
                     ioc_cleaned, ioc_type = _normalize_txt_ioc(ioc_cleaned)
                     if ioc_type:

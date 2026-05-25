@@ -21,6 +21,45 @@ function getBulkUploadInfoPaste() {
                 <p class="mb-1" data-i18n="bulk.info_paste_desc">${t('bulk.info_paste_desc')}</p>`;
 }
 
+const UNIFIED_STAGING_TBODY = 'unifiedStagingTableBody';
+const UNIFIED_STAGING_AREA = 'unifiedStagingArea';
+const UNIFIED_STAGING_COUNT = 'unifiedStagingCount';
+
+function getUnifiedStagingTbody() {
+    return document.getElementById(UNIFIED_STAGING_TBODY);
+}
+
+/** Show/hide staging panel and refresh count from unified tbody row count. */
+function updateUnifiedStagingChrome() {
+    const tbody = getUnifiedStagingTbody();
+    const area = document.getElementById(UNIFIED_STAGING_AREA);
+    const countEl = document.getElementById(UNIFIED_STAGING_COUNT);
+    const n = tbody ? tbody.querySelectorAll('tr').length : 0;
+    if (countEl) countEl.textContent = n ? t('bulk.found_count', { count: n }) : t('bulk.found_items');
+    if (area) area.classList.toggle('hidden', n === 0);
+}
+
+function getActiveBulkMode() {
+    const s = document.getElementById('btnModeSingle');
+    if (s && s.classList.contains('bg-blue-600')) return 'single';
+    const txtBtn = document.getElementById('btnModeTxt');
+    if (txtBtn && txtBtn.classList.contains('bg-blue-600')) return 'txt';
+    const csvBtn = document.getElementById('btnModeCsv');
+    if (csvBtn && csvBtn.classList.contains('bg-blue-600')) return 'csv';
+    const pasteBtn = document.getElementById('btnModePaste');
+    if (pasteBtn && pasteBtn.classList.contains('bg-blue-600')) return 'paste';
+    return 'single';
+}
+
+/** TTL / campaign / tags-for-all / source for Approve All — taken from the visible mode toolbar. */
+function getActiveBulkStagingContext() {
+    const mode = getActiveBulkMode();
+    if (mode === 'txt') return { ttlId: 'txtTTL', campaignId: 'txtCampaignSelect', tagsId: 'txtTagsForAll', source: 'txt' };
+    if (mode === 'csv') return { ttlId: 'csvTTL', campaignId: 'csvCampaignSelect', tagsId: 'csvTagsForAll', source: 'csv' };
+    if (mode === 'paste') return { ttlId: 'pasteTTL', campaignId: 'pasteCampaignSelect', tagsId: 'pasteTagsForAll', source: 'paste' };
+    return { ttlId: 'iocTTL', campaignId: 'iocCampaignSelect', tagsId: null, source: 'single' };
+}
+
 function setBulkUploadMode(mode) {
     const isSingle = mode === 'single';
     const isTxt = mode === 'txt';
@@ -37,19 +76,11 @@ function setBulkUploadMode(mode) {
     const infoCard = document.getElementById('bulkUploadInfoCard');
     const csvFile = document.getElementById('csvFile');
     const txtFile = document.getElementById('txtFile');
-    const txtStaging = document.getElementById('txtStagingArea');
-    const csvStaging = document.getElementById('csvStagingArea');
-    const singleStaging = document.getElementById('singleStagingArea');
-    const pasteStaging = document.getElementById('pasteStagingArea');
 
     if (wrapperSingle) wrapperSingle.classList.toggle('hidden', !isSingle);
     if (wrapperTxt) wrapperTxt.classList.toggle('hidden', !isTxt);
     if (wrapperCsv) wrapperCsv.classList.toggle('hidden', !isCsv);
     if (wrapperPaste) wrapperPaste.classList.toggle('hidden', !isPaste);
-    if (txtStaging) txtStaging.classList.toggle('hidden', !isTxt);
-    if (csvStaging) csvStaging.classList.toggle('hidden', !isCsv);
-    if (singleStaging) singleStaging.classList.toggle('hidden', !isSingle);
-    if (pasteStaging) pasteStaging.classList.toggle('hidden', !isPaste);
 
     function setActive(btn, active) {
         if (!btn) return;
@@ -340,9 +371,9 @@ async function addSingleToStaging() {
             : tagsInput.value.trim())
         : '';
 
-    const tbody = document.getElementById('singleStagingTableBody');
-    const countEl = document.getElementById('singleStagingCount');
-    const area = document.getElementById('singleStagingArea');
+    const tbody = getUnifiedStagingTbody();
+    const countEl = document.getElementById(UNIFIED_STAGING_COUNT);
+    const area = document.getElementById(UNIFIED_STAGING_AREA);
     if (!tbody || !countEl || !area) return;
 
     try {
@@ -386,15 +417,20 @@ async function addSingleToStaging() {
         const row = document.createElement('tr');
         row.className = rowClass;
         if (dataPerm) row.setAttribute('data-existing-permanent', 'true');
+        const privateParts = getClientPrivateWarnings(value, type);
+        const serverSanity = (item.sanity_check || '').trim();
+        const sanityDisplay = [serverSanity, ...privateParts].filter(Boolean).join(' · ');
+        const sanityCol = formatStagingSanityHtml(sanityDisplay);
         row.innerHTML = `
             <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="ioc">${ioc}</td>
-            <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="type">${typeEsc}</td>
+            <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="type">${typeEsc}</td>
+            <td class="border border-white/10 px-2 py-2 text-sm align-top">${sanityCol}</td>
             <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="tags">${tagsEsc}</td>
             <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="ticket_id">${ticketEsc}</td>
             <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="analyst">${analystEsc}</td>
             <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="date">${dateEsc}</td>
-            <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="comment" dir="${typeof detectTextDir==='function'?detectTextDir(commentEsc):'auto'}">${commentEsc}</td>
-            <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="expiration">${expirationEsc}</td>
+            <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="comment" dir="${typeof detectTextDir==='function'?detectTextDir(item.comment||''):'auto'}">${formatStagingCommentHtml(item.comment || '')}</td>
+            <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="expiration">${expirationEsc}</td>
             <td class="border border-white/10 px-3 py-2">
                 <div class="flex items-center gap-1.5 justify-center flex-wrap">
                     ${permBadge}
@@ -404,9 +440,8 @@ async function addSingleToStaging() {
                 </div>
             </td>`;
         tbody.appendChild(row);
-        const n = tbody.querySelectorAll('tr').length;
-        countEl.textContent = t('bulk.found_count', { count: n });
-        area.classList.remove('hidden');
+        row.setAttribute('data-staging-bound', '1');
+        updateUnifiedStagingChrome();
         attachStagingRowActionsForRow(row, 'iocTTL', 'iocCampaignSelect', 'single');
         fetchStagingAnalystUsers().catch(() => {});
         const privateWarnings = getClientPrivateWarnings(value, type);
@@ -454,6 +489,24 @@ document.getElementById('csvForm').addEventListener('submit', (e) => { e.prevent
 const TXT_STAGING_TTL_OPTIONS = ['Permanent', '1 Week', '1 Month', '3 Months', '1 Year'];
 const STAGING_EDITABLE_FIELDS = new Set(['ticket_id', 'comment', 'expiration', 'tags']);
 
+/** Staging table: sanity column HTML (cell has no data-field so getTxtStagingRowData indices stay correct). */
+function formatStagingSanityHtml(raw) {
+    const s = (raw == null ? '' : String(raw)).trim();
+    if (!s) return '<span class="text-secondary/80 text-xs">—</span>';
+    const esc = typeof escapeHtml === 'function' ? escapeHtml(s) : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const titleEsc = typeof escapeAttr === 'function' ? escapeAttr(s) : esc.replace(/"/g, '&quot;');
+    return '<span class="staging-sanity-text text-amber-200/90 text-xs leading-snug block align-top" title="' + titleEsc + '">' + esc + '</span>';
+}
+
+/** Staging table: comment cell — wrap long text; title tooltip on hover. */
+function formatStagingCommentHtml(raw) {
+    const s = (raw == null ? '' : String(raw)).trim();
+    if (!s) return '';
+    const esc = typeof escapeHtml === 'function' ? escapeHtml(s) : String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    const titleEsc = typeof escapeAttr === 'function' ? escapeAttr(s) : esc.replace(/"/g, '&quot;');
+    return '<span class="staging-comment-text text-xs leading-snug" title="' + titleEsc + '">' + esc + '</span>';
+}
+
 let _cachedStagingAnalystUsers = null;
 
 /** Load analysts for staging row edit (same source as Assign-to dropdowns). Cached until invalidateStagingAnalystCache. */
@@ -500,6 +553,28 @@ function validateStagingItem(item) {
     return validateIocFormat(cleaned, item.type);
 }
 
+/** Toggle Edit button label/style while row is in edit mode. */
+function _setStagingEditButtonState(btn, editing) {
+    if (!btn) return;
+    const label = editing
+        ? (typeof t === 'function' ? t('actions.done_editing') : 'Done')
+        : (typeof t === 'function' ? t('actions.edit') : 'Edit');
+    const title = editing
+        ? (typeof t === 'function' ? t('actions.edit_row_active') : 'Finish editing — saves changes to this row')
+        : (typeof t === 'function' ? t('actions.edit_row') : 'Edit row');
+    btn.textContent = label;
+    btn.title = title;
+    btn.setAttribute('aria-pressed', editing ? 'true' : 'false');
+    btn.classList.toggle('txt-staging-edit--active', !!editing);
+}
+
+/** If row is mid-edit, commit inline edits to the staging row (same as clicking Done). */
+function _finishStagingEditIfOpen(row) {
+    if (!row || !row.classList.contains('txt-staging-row-editing')) return;
+    const editBtn = row.querySelector('.txt-staging-edit');
+    if (editBtn) _disableStagingEdit(row, editBtn);
+}
+
 async function _enableStagingEdit(row, btn) {
     row.classList.add('txt-staging-row-editing');
     await fetchStagingAnalystUsers();
@@ -514,9 +589,16 @@ async function _enableStagingEdit(row, btn) {
         const field = c.getAttribute('data-field');
         if (!STAGING_EDITABLE_FIELDS.has(field)) return;
         if (field === 'expiration') return;
+        if (field === 'comment') {
+            const rawComment = (c.textContent || '').trim();
+            c.textContent = rawComment;
+            if (typeof detectTextDir === 'function') c.dir = detectTextDir(rawComment);
+        }
         c.setAttribute('contenteditable', 'true');
         if (field === 'comment' && typeof detectTextDir === 'function') {
-            c.addEventListener('input', function() { this.dir = detectTextDir(this.textContent); });
+            c.addEventListener('input', function commentDirInput() {
+                this.dir = detectTextDir(this.textContent);
+            });
         }
     });
     if (expCell) {
@@ -531,7 +613,7 @@ async function _enableStagingEdit(row, btn) {
         const firstEditable = row.querySelector('td[data-field="ticket_id"]');
         if (firstEditable) firstEditable.focus();
     }
-    btn.classList.add('ring-2', 'ring-blue-400');
+    _setStagingEditButtonState(btn, true);
 }
 
 function _disableStagingEdit(row, btn) {
@@ -551,7 +633,13 @@ function _disableStagingEdit(row, btn) {
         const sel = expCell.querySelector('select');
         if (sel) expCell.textContent = sel.value;
     }
-    btn.classList.remove('ring-2', 'ring-blue-400');
+    const commentCell = row.querySelector('td[data-field="comment"]');
+    if (commentCell) {
+        const rawComment = (commentCell.textContent || '').trim();
+        commentCell.innerHTML = formatStagingCommentHtml(rawComment);
+        if (typeof detectTextDir === 'function') commentCell.dir = detectTextDir(rawComment);
+    }
+    _setStagingEditButtonState(btn, false);
 }
 
 function attachStagingRowActionsForRow(tr, ttlSelectId, campaignSelectId, source) {
@@ -561,6 +649,7 @@ function attachStagingRowActionsForRow(tr, ttlSelectId, campaignSelectId, source
     [tr].forEach(row => {
         row.querySelectorAll('.txt-staging-approve').forEach(btn => {
             btn.addEventListener('click', async () => {
+                _finishStagingEditIfOpen(row);
                 const item = getTxtStagingRowData(row);
                 if (!item) { showToast(t('toast.invalid_row'), 'error'); return; }
                 const valErr = validateStagingItem(item);
@@ -580,9 +669,7 @@ function attachStagingRowActionsForRow(tr, ttlSelectId, campaignSelectId, source
                         showToast(t('toast.item_imported'), 'success');
                         if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
                         row.remove();
-                        const n = tbody ? tbody.querySelectorAll('tr').length : 0;
-                        const countEl = document.getElementById('singleStagingCount');
-                        if (countEl) countEl.textContent = n ? t('bulk.found_count', { count: n }) : t('bulk.found_items');
+                        updateUnifiedStagingChrome();
                         loadStats();
                         loadLiveFeed();
                     } else {
@@ -606,9 +693,7 @@ function attachStagingRowActionsForRow(tr, ttlSelectId, campaignSelectId, source
         row.querySelectorAll('.txt-staging-delete').forEach(btn => {
             btn.addEventListener('click', () => {
                 row.remove();
-                const n = tbody ? tbody.querySelectorAll('tr').length : 0;
-                const countEl = document.getElementById('singleStagingCount');
-                if (countEl) countEl.textContent = n ? t('bulk.found_count', { count: n }) : t('bulk.found_items');
+                updateUnifiedStagingChrome();
             });
         });
     });
@@ -630,65 +715,74 @@ function getBulkAssignToValue(selectId) {
     return (el && el.value) ? el.value.trim() : '';
 }
 
-/** Attach Approve/Edit/Delete to staging rows in a tbody. ttlSelectId, campaignSelectId, source; optional tagsInputId for "Tags (for all)". */
+/** Attach Approve/Edit/Delete to staging rows in a tbody. Only rows without data-staging-bound are wired (avoids duplicate handlers when appending). */
 function attachStagingRowActions(tbody, ttlSelectId, campaignSelectId, source, tagsInputId) {
     if (!tbody) return;
     const _src = source || 'single';
-    tbody.querySelectorAll('.txt-staging-approve').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const tr = btn.closest('tr');
-            if (!tr) return;
-            const item = getTxtStagingRowData(tr);
-            if (!item) { showToast(t('toast.invalid_row'), 'error'); return; }
-            const valErr = validateStagingItem(item);
-            if (valErr) { showToast(valErr, 'error'); return; }
-            const ttlEl = document.getElementById(ttlSelectId);
-            const campaignSel = document.getElementById(campaignSelectId);
-            const ttl = ttlEl ? ttlEl.value : 'Permanent';
-            const campaign_name = campaignSel && campaignSel.value ? campaignSel.value : '';
-            const payload = { items: [item], ttl, campaign_name, source: _src };
-            if (tagsInputId) payload.tags = getTagsForAllFromInput(tagsInputId);
-            try {
-                const response = await fetch('/api/submit-staging', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const result = await response.json().catch(() => ({}));
-                if (result.success) {
-                    showToast(t('toast.item_imported'), 'success');
-                    if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
-                    tr.style.opacity = '0';
-                    tr.style.transition = 'opacity 0.25s ease';
-                    setTimeout(() => { tr.remove(); }, 250);
-                    loadStats();
-                    loadLiveFeed();
-                    const feedPulseTab = document.getElementById('tab-feed-pulse');
-                    if (feedPulseTab && !feedPulseTab.classList.contains('hidden')) {
-                        loadFeedPulse();
+    const rows = tbody.querySelectorAll('tr:not([data-staging-bound])');
+    rows.forEach((tr) => {
+        tr.setAttribute('data-staging-bound', '1');
+        tr.querySelectorAll('.txt-staging-approve').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                if (!tr) return;
+                _finishStagingEditIfOpen(tr);
+                const item = getTxtStagingRowData(tr);
+                if (!item) { showToast(t('toast.invalid_row'), 'error'); return; }
+                const valErr = validateStagingItem(item);
+                if (valErr) { showToast(valErr, 'error'); return; }
+                const ttlEl = document.getElementById(ttlSelectId);
+                const campaignSel = document.getElementById(campaignSelectId);
+                const ttl = ttlEl ? ttlEl.value : 'Permanent';
+                const campaign_name = campaignSel && campaignSel.value ? campaignSel.value : '';
+                const payload = { items: [item], ttl, campaign_name, source: _src };
+                if (tagsInputId) payload.tags = getTagsForAllFromInput(tagsInputId);
+                try {
+                    const response = await fetch('/api/submit-staging', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const result = await response.json().catch(() => ({}));
+                    if (result.success) {
+                        showToast(t('toast.item_imported'), 'success');
+                        if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
+                        tr.style.opacity = '0';
+                        tr.style.transition = 'opacity 0.25s ease';
+                        setTimeout(() => {
+                            tr.remove();
+                            updateUnifiedStagingChrome();
+                        }, 250);
+                        loadStats();
+                        loadLiveFeed();
+                        const feedPulseTab = document.getElementById('tab-feed-pulse');
+                        if (feedPulseTab && !feedPulseTab.classList.contains('hidden')) {
+                            loadFeedPulse();
+                        }
+                    } else {
+                        showToast(result.message || 'Import failed', 'error');
                     }
-                } else {
-                    showToast(result.message || 'Import failed', 'error');
+                } catch (e) {
+                    showToast(t('toast.error_generic') + ': ' + e.message, 'error');
                 }
-            } catch (e) {
-                showToast(t('toast.error_generic') + ': ' + e.message, 'error');
-            }
+            });
         });
-    });
-    tbody.querySelectorAll('.txt-staging-edit').forEach(btn => {
-        btn.addEventListener('click', async () => {
-            const tr = btn.closest('tr');
-            if (!tr) return;
-            const isEditing = tr.classList.contains('txt-staging-row-editing');
-            if (isEditing) {
-                _disableStagingEdit(tr, btn);
-            } else {
-                await _enableStagingEdit(tr, btn);
-            }
+        tr.querySelectorAll('.txt-staging-edit').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                if (!tr) return;
+                const isEditing = tr.classList.contains('txt-staging-row-editing');
+                if (isEditing) {
+                    _disableStagingEdit(tr, btn);
+                } else {
+                    await _enableStagingEdit(tr, btn);
+                }
+            });
         });
-    });
-    tbody.querySelectorAll('.txt-staging-delete').forEach(btn => {
-        btn.addEventListener('click', () => { btn.closest('tr').remove(); });
+        tr.querySelectorAll('.txt-staging-delete').forEach(btn => {
+            btn.addEventListener('click', () => {
+                tr.remove();
+                updateUnifiedStagingChrome();
+            });
+        });
     });
 }
 
@@ -717,12 +811,10 @@ document.getElementById('csvPreviewBtn').addEventListener('click', async () => {
         const response = await fetch('/api/preview-csv', { method: 'POST', body: formData });
         const result = await response.json().catch(() => ({}));
         if (result.success && result.items) {
-            const tbody = document.getElementById('csvStagingTableBody');
-            const countEl = document.getElementById('csvStagingCount');
-            const area = document.getElementById('csvStagingArea');
-            if (!tbody || !countEl || !area) return;
+            const tbody = getUnifiedStagingTbody();
+            if (!tbody) return;
 
-            tbody.innerHTML = result.items.map((item, idx) => {
+            const rowsHtml = result.items.map((item, idx) => {
                 const conflict = !!item.existing_permanent;
                 const rowClass = conflict ? 'txt-staging-row txt-staging-row-conflict bg-amber-900/20' : 'txt-staging-row';
                 const dataPerm = conflict ? ' data-existing-permanent="true"' : '';
@@ -735,6 +827,7 @@ document.getElementById('csvPreviewBtn').addEventListener('click', async () => {
                 const date = escapeHtml(item.date || '');
                 const comment = escapeHtml(item.comment || '');
                 const expiration = escapeHtml(item.expiration || 'Permanent');
+                const sanityCol = formatStagingSanityHtml(item.sanity_check || '');
                 const permTip = conflict ? (item.existing_analyst || item.existing_comment ? 'Existing: ' + (item.existing_analyst || '').replace(/"/g, '') + ' | ' + (item.existing_comment || '').substring(0, 60).replace(/"/g, '') : 'Already in DB') : '';
                 const permTitle = permTip ? ' title="' + permTip.replace(/"/g, '&quot;') + '"' : '';
                 const approveDisabled = conflict ? ' disabled' : '';
@@ -742,13 +835,14 @@ document.getElementById('csvPreviewBtn').addEventListener('click', async () => {
                 const permBadge = conflict ? `<span class="txt-staging-perm-badge text-amber-400 text-xs mr-1"${permTitle}>⚠️ Already exists</span>` : '';
                 return `<tr data-idx="${idx}" class="${rowClass}"${dataPerm}>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="ioc">${ioc}</td>
-                    <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="type">${type}</td>
+                    <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="type">${type}</td>
+                    <td class="border border-white/10 px-2 py-2 text-sm align-top">${sanityCol}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="tags">${tags}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="ticket_id">${ticket}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="analyst">${analyst}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="date">${date}</td>
-                    <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="comment" dir="${typeof detectTextDir==='function'?detectTextDir(comment):'auto'}">${comment}</td>
-                    <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="expiration">${expiration}</td>
+                    <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="comment" dir="${typeof detectTextDir==='function'?detectTextDir(item.comment||''):'auto'}">${formatStagingCommentHtml(item.comment || '')}</td>
+                    <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="expiration">${expiration}</td>
                     <td class="border border-white/10 px-3 py-2">
                         <div class="flex items-center gap-1.5 justify-center flex-wrap">
                             ${permBadge}
@@ -759,8 +853,8 @@ document.getElementById('csvPreviewBtn').addEventListener('click', async () => {
                     </td>
                 </tr>`;
             }).join('');
-            countEl.textContent = t('bulk.found_count', {count: result.items.length});
-            area.classList.remove('hidden');
+            tbody.insertAdjacentHTML('beforeend', rowsHtml);
+            updateUnifiedStagingChrome();
             attachStagingRowActions(tbody, 'csvTTL', 'csvCampaignSelect', 'csv', 'csvTagsForAll');
             fetchStagingAnalystUsers().catch(() => {});
         } else {
@@ -771,65 +865,15 @@ document.getElementById('csvPreviewBtn').addEventListener('click', async () => {
     }
 });
 
-// Bulk CSV: Approve All Valid
-document.getElementById('csvApproveAllBtn').addEventListener('click', async () => {
-    const tbody = document.getElementById('csvStagingTableBody');
+// Unified queue: Approve All Valid (uses TTL / campaign / tags from the active mode toolbar)
+document.getElementById('unifiedApproveAllBtn').addEventListener('click', async () => {
+    const tbody = getUnifiedStagingTbody();
     if (!tbody) return;
     const rows = tbody.querySelectorAll('tr');
     const items = [];
     rows.forEach(tr => {
         if (tr.querySelector('.txt-staging-approve[disabled]')) return;
-        const item = getTxtStagingRowData(tr);
-        if (item && !validateStagingItem(item)) items.push(item);
-    });
-    if (items.length === 0) {
-        showToast(t('toast.no_items'), 'error');
-        return;
-    }
-    const ttl = document.getElementById('csvTTL').value;
-    const campaignSel = document.getElementById('csvCampaignSelect');
-    const campaign_name = campaignSel && campaignSel.value ? campaignSel.value : '';
-    const tags = getTagsForAllFromInput('csvTagsForAll');
-    try {
-        showToast(t('toast.importing_items', {count: items.length}), 'success');
-        const itemsWithExp = items.map(it => ({ ...it, expiration: it.expiration || ttl }));
-        const body = { items: itemsWithExp, ttl, campaign_name, source: 'csv' };
-        if (tags.length) body.tags = tags;
-        const response = await fetch('/api/submit-staging', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        const result = await response.json().catch(() => ({}));
-        if (result.success) {
-            showToast(result.message || 'Import complete', 'success');
-            if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
-            tbody.innerHTML = '';
-            document.getElementById('csvStagingArea').classList.add('hidden');
-            loadStats();
-            loadLiveFeed();
-            // Refresh Feed Pulse if its tab is active
-            const feedPulseTab = document.getElementById('tab-feed-pulse');
-            if (feedPulseTab && !feedPulseTab.classList.contains('hidden')) {
-                loadFeedPulse();
-            }
-        } else {
-            showToast(result.message || 'Import failed', 'error');
-        }
-    } catch (error) {
-        showToast(t('toast.error_generic') + ': ' + error.message, 'error');
-    }
-});
-
-// ---- Single Approve All ----
-
-document.getElementById('singleApproveAllBtn').addEventListener('click', async () => {
-    const tbody = document.getElementById('singleStagingTableBody');
-    if (!tbody) return;
-    const rows = tbody.querySelectorAll('tr');
-    const items = [];
-    rows.forEach(tr => {
-        if (tr.querySelector('.txt-staging-approve[disabled]')) return;
+        _finishStagingEditIfOpen(tr);
         const item = getTxtStagingRowData(tr);
         if (item && !validateStagingItem(item)) items.push(item);
     });
@@ -841,27 +885,30 @@ document.getElementById('singleApproveAllBtn').addEventListener('click', async (
     if (privateInBatch.length > 0) {
         showToast(t('toast.private_ip_warning') || 'Contains private/internal IPs - blocking may cut internal access', 'warning');
     }
-    const ttl = (document.getElementById('iocTTL') && document.getElementById('iocTTL').value) ? document.getElementById('iocTTL').value : 'Permanent';
-    const campaignSel = document.getElementById('iocCampaignSelect');
+    const ctx = getActiveBulkStagingContext();
+    const ttlEl = document.getElementById(ctx.ttlId);
+    const ttl = ttlEl ? ttlEl.value : 'Permanent';
+    const campaignSel = document.getElementById(ctx.campaignId);
     const campaign_name = campaignSel && campaignSel.value ? campaignSel.value : '';
+    const tags = ctx.tagsId ? getTagsForAllFromInput(ctx.tagsId) : [];
     try {
         showToast(t('toast.importing_items', { count: items.length }), 'success');
         const itemsWithExp = items.map(it => ({ ...it, expiration: it.expiration || ttl }));
+        const body = { items: itemsWithExp, ttl, campaign_name, source: ctx.source };
+        if (tags.length) body.tags = tags;
         const response = await fetch('/api/submit-staging', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items: itemsWithExp, ttl, campaign_name, source: 'single' })
+            body: JSON.stringify(body)
         });
         const result = await response.json().catch(() => ({}));
         if (result.success) {
             showToast(result.message || 'Import complete', 'success');
             if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
             tbody.innerHTML = '';
-            document.getElementById('singleStagingArea').classList.add('hidden');
-            document.getElementById('singleStagingCount').textContent = t('bulk.found_items');
+            updateUnifiedStagingChrome();
             loadStats();
             loadLiveFeed();
-            // Refresh Feed Pulse if its tab is active
             const feedPulseTab = document.getElementById('tab-feed-pulse');
             if (feedPulseTab && !feedPulseTab.classList.contains('hidden')) {
                 loadFeedPulse();
@@ -927,12 +974,10 @@ document.getElementById('txtPreviewBtn').addEventListener('click', async () => {
         const response = await fetch('/api/preview-txt', { method: 'POST', body: formData });
         const result = await response.json().catch(() => ({}));
         if (result.success && result.items) {
-            const tbody = document.getElementById('txtStagingTableBody');
-            const countEl = document.getElementById('txtStagingCount');
-            const area = document.getElementById('txtStagingArea');
-            if (!tbody || !countEl || !area) return;
+            const tbody = getUnifiedStagingTbody();
+            if (!tbody) return;
 
-            tbody.innerHTML = result.items.map((item, idx) => {
+            const rowsHtml = result.items.map((item, idx) => {
                 const conflict = !!item.existing_permanent;
                 const rowClass = conflict ? 'txt-staging-row txt-staging-row-conflict bg-amber-900/20' : 'txt-staging-row';
                 const dataPerm = conflict ? ' data-existing-permanent="true"' : '';
@@ -945,6 +990,7 @@ document.getElementById('txtPreviewBtn').addEventListener('click', async () => {
                 const date = escapeHtml(item.date || '');
                 const comment = escapeHtml(item.comment || '');
                 const expiration = escapeHtml(item.expiration || 'Permanent');
+                const sanityCol = formatStagingSanityHtml(item.sanity_check || '');
                 const permTip = conflict ? (item.existing_analyst || item.existing_comment ? 'Existing: ' + (item.existing_analyst || '').replace(/"/g, '') + ' | ' + (item.existing_comment || '').substring(0, 60).replace(/"/g, '') : 'Already in DB') : '';
                 const permTitle = permTip ? ' title="' + permTip.replace(/"/g, '&quot;') + '"' : '';
                 const approveDisabled = conflict ? ' disabled' : '';
@@ -952,13 +998,14 @@ document.getElementById('txtPreviewBtn').addEventListener('click', async () => {
                 const permBadge = conflict ? `<span class="txt-staging-perm-badge text-amber-400 text-xs mr-1"${permTitle}>⚠️ Already exists</span>` : '';
                 return `<tr data-idx="${idx}" class="${rowClass}"${dataPerm}>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="ioc">${ioc}</td>
-                    <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="type">${type}</td>
+                    <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="type">${type}</td>
+                    <td class="border border-white/10 px-2 py-2 text-sm align-top">${sanityCol}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="tags">${tags}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="ticket_id">${ticket}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="analyst">${analyst}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="date">${date}</td>
-                    <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="comment" dir="${typeof detectTextDir==='function'?detectTextDir(comment):'auto'}">${comment}</td>
-                    <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="expiration">${expiration}</td>
+                    <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="comment" dir="${typeof detectTextDir==='function'?detectTextDir(item.comment||''):'auto'}">${formatStagingCommentHtml(item.comment || '')}</td>
+                    <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="expiration">${expiration}</td>
                     <td class="border border-white/10 px-3 py-2">
                         <div class="flex items-center gap-1.5 justify-center flex-wrap">
                             ${permBadge}
@@ -969,58 +1016,12 @@ document.getElementById('txtPreviewBtn').addEventListener('click', async () => {
                     </td>
                 </tr>`;
             }).join('');
-            countEl.textContent = t('bulk.found_count', {count: result.items.length});
-            area.classList.remove('hidden');
+            tbody.insertAdjacentHTML('beforeend', rowsHtml);
+            updateUnifiedStagingChrome();
             attachStagingRowActions(tbody, 'txtTTL', 'txtCampaignSelect', 'txt', 'txtTagsForAll');
             fetchStagingAnalystUsers().catch(() => {});
         } else {
             showToast(result.message || 'Preview failed', 'error');
-        }
-    } catch (error) {
-        showToast(t('toast.error_generic') + ': ' + error.message, 'error');
-    }
-});
-
-// Bulk TXT Staging: Approve All Valid (skip rows with Approve disabled = existing Permanent)
-document.getElementById('txtApproveAllBtn').addEventListener('click', async () => {
-    const tbody = document.getElementById('txtStagingTableBody');
-    if (!tbody) return;
-    const rows = tbody.querySelectorAll('tr');
-    const items = [];
-    rows.forEach(tr => {
-        if (tr.querySelector('.txt-staging-approve[disabled]')) return;
-        const item = getTxtStagingRowData(tr);
-        if (item && !validateStagingItem(item)) items.push(item);
-    });
-    if (items.length === 0) {
-        showToast(t('toast.no_items'), 'error');
-        return;
-    }
-    const ttl = document.getElementById('txtTTL').value;
-    const campaignSel = document.getElementById('txtCampaignSelect');
-    const campaign_name = campaignSel && campaignSel.value ? campaignSel.value : '';
-    const tags = getTagsForAllFromInput('txtTagsForAll');
-    try {
-        showToast(t('toast.importing_items', {count: items.length}), 'success');
-        const ttlVal = document.getElementById('txtTTL').value;
-        const itemsWithExp = items.map(it => ({ ...it, expiration: it.expiration || ttlVal }));
-        const body = { items: itemsWithExp, ttl: ttlVal, campaign_name, source: 'txt' };
-        if (tags.length) body.tags = tags;
-        const response = await fetch('/api/submit-staging', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        const result = await response.json().catch(() => ({}));
-        if (result.success) {
-            showToast(result.message || 'Import complete', 'success');
-            if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
-            tbody.innerHTML = '';
-            document.getElementById('txtStagingArea').classList.add('hidden');
-            loadStats();
-            loadLiveFeed();
-        } else {
-            showToast(result.message || 'Import failed', 'error');
         }
     } catch (error) {
         showToast(t('toast.error_generic') + ': ' + error.message, 'error');
@@ -1055,11 +1056,9 @@ document.getElementById('pastePreviewBtn').addEventListener('click', async () =>
         });
         const result = await response.json().catch(() => ({}));
         if (result.success && result.items) {
-            const tbody = document.getElementById('pasteStagingTableBody');
-            const countEl = document.getElementById('pasteStagingCount');
-            const area = document.getElementById('pasteStagingArea');
-            if (!tbody || !countEl || !area) return;
-            tbody.innerHTML = result.items.map((item, idx) => {
+            const tbody = getUnifiedStagingTbody();
+            if (!tbody) return;
+            const rowsHtml = result.items.map((item, idx) => {
                 const conflict = !!item.existing_permanent;
                 const rowClass = conflict ? 'txt-staging-row txt-staging-row-conflict bg-amber-900/20' : 'txt-staging-row';
                 const dataPerm = conflict ? ' data-existing-permanent="true"' : '';
@@ -1072,6 +1071,7 @@ document.getElementById('pastePreviewBtn').addEventListener('click', async () =>
                 const date = escapeHtml(item.date || '');
                 const comment = escapeHtml(item.comment || '');
                 const expiration = escapeHtml(item.expiration || 'Permanent');
+                const sanityCol = formatStagingSanityHtml(item.sanity_check || '');
                 const permTip = conflict ? (item.existing_analyst || item.existing_comment ? 'Existing: ' + (item.existing_analyst || '').replace(/"/g, '') + ' | ' + (item.existing_comment || '').substring(0, 60).replace(/"/g, '') : 'Already in DB') : '';
                 const permTitle = permTip ? ' title="' + permTip.replace(/"/g, '&quot;') + '"' : '';
                 const approveDisabled = conflict ? ' disabled' : '';
@@ -1079,13 +1079,14 @@ document.getElementById('pastePreviewBtn').addEventListener('click', async () =>
                 const permBadge = conflict ? `<span class="txt-staging-perm-badge text-amber-400 text-xs mr-1"${permTitle}>⚠️ Already exists</span>` : '';
                 return `<tr data-idx="${idx}" class="${rowClass}"${dataPerm}>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="ioc">${ioc}</td>
-                    <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="type">${type}</td>
+                    <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="type">${type}</td>
+                    <td class="border border-white/10 px-2 py-2 text-sm align-top">${sanityCol}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="tags">${tags}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="ticket_id">${ticket}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="analyst">${analyst}</td>
                     <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="date">${date}</td>
-                    <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="comment" dir="${typeof detectTextDir==='function'?detectTextDir(comment):'auto'}">${comment}</td>
-                    <td class="border border-white/10 px-3 py-2 text-sm" contenteditable="false" data-field="expiration">${expiration}</td>
+                    <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="comment" dir="${typeof detectTextDir==='function'?detectTextDir(item.comment||''):'auto'}">${formatStagingCommentHtml(item.comment || '')}</td>
+                    <td class="border border-white/10 px-3 py-2 text-sm align-top" contenteditable="false" data-field="expiration">${expiration}</td>
                     <td class="border border-white/10 px-3 py-2">
                         <div class="flex items-center gap-1.5 justify-center flex-wrap">
                             ${permBadge}
@@ -1096,8 +1097,8 @@ document.getElementById('pastePreviewBtn').addEventListener('click', async () =>
                     </td>
                 </tr>`;
             }).join('');
-            countEl.textContent = t('bulk.found_count', { count: result.items.length });
-            area.classList.remove('hidden');
+            tbody.insertAdjacentHTML('beforeend', rowsHtml);
+            updateUnifiedStagingChrome();
             attachStagingRowActions(tbody, 'pasteTTL', 'pasteCampaignSelect', 'paste', 'pasteTagsForAll');
             fetchStagingAnalystUsers().catch(() => {});
         } else {
@@ -1108,63 +1109,16 @@ document.getElementById('pastePreviewBtn').addEventListener('click', async () =>
     }
 });
 
-// Bulk Paste: Approve All Valid
-document.getElementById('pasteApproveAllBtn').addEventListener('click', async () => {
-    const tbody = document.getElementById('pasteStagingTableBody');
-    if (!tbody) return;
-    const rows = tbody.querySelectorAll('tr');
-    const items = [];
-    rows.forEach(tr => {
-        if (tr.querySelector('.txt-staging-approve[disabled]')) return;
-        const item = getTxtStagingRowData(tr);
-        if (item && !validateStagingItem(item)) items.push(item);
-    });
-    if (items.length === 0) {
-        showToast(t('toast.no_items'), 'error');
-        return;
-    }
-    const ttl = document.getElementById('pasteTTL').value;
-    const campaignSel = document.getElementById('pasteCampaignSelect');
-    const campaign_name = campaignSel && campaignSel.value ? campaignSel.value : '';
-    const tags = getTagsForAllFromInput('pasteTagsForAll');
-    try {
-        showToast(t('toast.importing_items', {count: items.length}), 'success');
-        const itemsWithExp = items.map(it => ({ ...it, expiration: it.expiration || ttl }));
-        const body = { items: itemsWithExp, ttl, campaign_name, source: 'paste' };
-        if (tags.length) body.tags = tags;
-        const response = await fetch('/api/submit-staging', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
-        const result = await response.json().catch(() => ({}));
-        if (result.success) {
-            showToast(result.message || 'Import complete', 'success');
-            if (result.new_badges || result.level_up || result.rank_up || result.points_earned !== undefined || result.level_info || result.new_nickname) showAchievementModal(result);
-            tbody.innerHTML = '';
-            document.getElementById('pasteStagingArea').classList.add('hidden');
-            loadStats();
-            loadLiveFeed();
-        } else {
-            showToast(result.message || 'Import failed', 'error');
-        }
-    } catch (error) {
-        showToast(t('toast.error_generic') + ': ' + error.message, 'error');
-    }
-});
-
-// ---- Delete All ----
+// ---- Delete All (unified queue) ----
 
 function _clearStagingArea(tbodyId, countId) {
     const tbody = document.getElementById(tbodyId);
     if (tbody) tbody.innerHTML = '';
     const countEl = countId && document.getElementById(countId);
     if (countEl) countEl.textContent = t('bulk.found_count', { count: 0 });
+    updateUnifiedStagingChrome();
 }
-document.getElementById('txtDeleteAllBtn').addEventListener('click', () => _clearStagingArea('txtStagingTableBody', 'txtStagingCount'));
-document.getElementById('csvDeleteAllBtn').addEventListener('click', () => _clearStagingArea('csvStagingTableBody', 'csvStagingCount'));
-document.getElementById('singleDeleteAllBtn').addEventListener('click', () => _clearStagingArea('singleStagingTableBody', 'singleStagingCount'));
-document.getElementById('pasteDeleteAllBtn').addEventListener('click', () => _clearStagingArea('pasteStagingTableBody', 'pasteStagingCount'));
+document.getElementById('unifiedDeleteAllBtn').addEventListener('click', () => _clearStagingArea(UNIFIED_STAGING_TBODY, UNIFIED_STAGING_COUNT));
 
 // ---- Expose on window for cross-file references ----
 

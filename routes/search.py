@@ -25,6 +25,7 @@ from utils.validation_messages import (
 from constants import IOC_FILES, DEFAULT_PAGE_SIZE, DEFAULT_IOC_LIMIT
 from utils.tags import normalize_tags_from_input
 from utils.tags import parse_allowed_tags_setting, enforce_allowed_tags
+from utils.campaign_tag_sync import merge_campaign_tags_into_tags_json, parse_tags_field
 
 logger = logging.getLogger(__name__)
 
@@ -1949,8 +1950,17 @@ def edit_ioc():
             except Exception:
                 pass
             row.tags = json.dumps(tags_list) if tags_list else '[]'
-        else:
-            tags_list = old_tags_list
+        if row.campaign_id:
+            from routes.ioc import _validate_tags_or_reject
+
+            merged_json = merge_campaign_tags_into_tags_json(row.tags, row.campaign_id)
+            merged_list = parse_tags_field(merged_json)
+            valid, err = _validate_tags_or_reject(merged_list, _get_setting)
+            if err is not None:
+                body, code = err
+                return body, code
+            row.tags = json.dumps(valid) if valid else '[]'
+        tags_list = parse_tags_field(row.tags)
         assign_to = data.get('user_id') or data.get('analyst')
         if assign_to is not None and str(assign_to).strip() != '':
             resolved = _resolve_analyst_to_user(assign_to)

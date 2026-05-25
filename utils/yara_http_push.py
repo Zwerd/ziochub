@@ -149,6 +149,15 @@ def _evaluate_http_response_body(http_code: int, body_bytes: bytes) -> tuple[boo
         return True, _truncate_msg(f'HTTP {http_code}; body: {text}')
 
     if isinstance(data, dict):
+        # JSON redirect to login (Trellix EX / similar UIs): session not accepted for this API call.
+        loc = data.get('location')
+        if isinstance(loc, str) and loc.strip():
+            loc_low = loc.strip().lower()
+            if '/login' in loc_low or loc_low.rstrip('/').endswith('/login'):
+                return False, _truncate_msg(
+                    f'HTTP {http_code}; not authenticated — response points to login ({loc.strip()}). '
+                    f'Use Trellix EX manual Cookie (+ CSRF if required) from a browser, or fix JSON login / base_url.'
+                )
         # Explicit success:false
         if data.get('success') is False:
             return False, _truncate_msg(_format_json_rejection('HTTP 200 but success=false', data))

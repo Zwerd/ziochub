@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from sqlalchemy import func
 from extensions import db
-from models import YaraRule, Campaign, User
+from models import YaraRule, Campaign, User, iso_utc
 from utils.yara_utils import yara_safe_path, validate_yara_syntax, yara_content_sha256
 from utils.decorators import login_required, admin_required
 from utils.refanger import sanitize_comment
@@ -366,7 +366,7 @@ def delete_yara():
             'original_analyst': (rule.analyst or '') if rule else '',
             'original_comment': (rule.comment or '') if rule else '',
             'ticket_id': (rule.ticket_id or '') if rule else '',
-            'original_uploaded_at': rule.uploaded_at.isoformat() if rule and rule.uploaded_at else None,
+            'original_uploaded_at': iso_utc(rule.uploaded_at) if rule else None,
             'deleted_by_admin': is_admin,
         }
         _log_ioc_history('YARA', safe, 'deleted', current_user.username, hist_payload)

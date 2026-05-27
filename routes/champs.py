@@ -13,7 +13,7 @@ from flask_login import current_user
 from sqlalchemy import func, text
 
 from extensions import db
-from models import User, UserProfile, UserSession, IOC, YaraRule, ActivityEvent, TeamGoal, ChampRankSnapshot
+from models import User, UserProfile, UserSession, IOC, YaraRule, ActivityEvent, TeamGoal, ChampRankSnapshot, iso_utc
 from utils.champs import (
     compute_analyst_scores,
     compute_analyst_scores_aggregated,
@@ -195,7 +195,7 @@ def get_analyst_activity():
             'user_id': uid,
             'username': username,
             'login_count': login_count,
-            'last_seen': last_seen.isoformat() if last_seen else None,
+            'last_seen': iso_utc(last_seen),
             'ioc_count': ioc_count,
             'yara_count': yara_count,
         })
@@ -517,7 +517,7 @@ def get_champs_ticker():
             p = json.loads(ev.payload or '{}')
         except (json.JSONDecodeError, TypeError):
             p = {}
-        ts = ev.created_at.isoformat() if ev.created_at else None
+        ts = iso_utc(ev.created_at)
         if ev.event_type == 'ioc_submit':
             messages.append({'text': f"{display_name(ev.user_id)} added a new IOC", 'ts': ts, 'category': 'analyst_success'})
         elif ev.event_type == 'yara_upload':

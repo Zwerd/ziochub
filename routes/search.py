@@ -14,7 +14,7 @@ from sqlalchemy import func, cast, String, text, case
 from sqlalchemy.orm import joinedload, aliased
 
 from extensions import db
-from models import Campaign, IOC, IocHistory, IocNote, YaraRule, User, UserProfile, _utcnow
+from models import Campaign, IOC, IocHistory, IocNote, YaraRule, User, UserProfile, _utcnow, iso_utc
 from utils.decorators import login_required
 from utils.refanger import refanger, sanitize_comment
 from utils.validation import validate_ioc
@@ -274,7 +274,7 @@ def api_tags_suggest():
                 'id': uuid.uuid4().hex,
                 'tag': tag,
                 'suggested_by': current_user.username or '',
-                'suggested_at': _utcnow().isoformat(),
+                'suggested_at': iso_utc(_utcnow()),
             })
             pending_set.add(tag)
             added.append(tag)
@@ -309,7 +309,7 @@ def _campaign_to_search_result_dict(campaign):
         meta_parts.append('Reference image: no')
     meta_line = ' | '.join(meta_parts)
     comment = (desc + '\n\n' + meta_line) if desc else meta_line
-    date_s = campaign.created_at.isoformat() if campaign.created_at else None
+    date_s = iso_utc(campaign.created_at)
     return {
         'ioc': campaign.name,
         'value': campaign.name,
@@ -640,7 +640,7 @@ def build_ioc_history_events_list(ioc_type: str, value: str) -> list:
         events.append({
             'event_type': r.event_type,
             'username': r.username or '',
-            'at': r.at.isoformat() if r.at else None,
+            'at': iso_utc(r.at),
             'payload': payload or {},
         })
     has_created = any(e.get('event_type') == 'created' for e in events)
@@ -678,7 +678,7 @@ def build_ioc_history_events_list(ioc_type: str, value: str) -> list:
                     events.append({
                         'event_type': 'created',
                         'username': yr.analyst or '',
-                        'at': yr.uploaded_at.isoformat() if yr.uploaded_at else None,
+                        'at': iso_utc(yr.uploaded_at),
                         'payload': {
                             'comment': yr.comment or '',
                             'ticket_id': yr.ticket_id or '',
@@ -694,7 +694,7 @@ def build_ioc_history_events_list(ioc_type: str, value: str) -> list:
             if ioc_row:
                 payload_hist = {}
                 if ioc_row.expiration_date:
-                    payload_hist['expiration_date'] = ioc_row.expiration_date.isoformat()
+                    payload_hist['expiration_date'] = iso_utc(ioc_row.expiration_date)
                 if ioc_row.comment:
                     payload_hist['comment'] = ioc_row.comment
                 if ioc_row.ticket_id:
@@ -711,7 +711,7 @@ def build_ioc_history_events_list(ioc_type: str, value: str) -> list:
                 events.append({
                     'event_type': 'created',
                     'username': (ioc_row.analyst or '') or '',
-                    'at': ioc_row.created_at.isoformat() if ioc_row.created_at else None,
+                    'at': iso_utc(ioc_row.created_at),
                     'payload': payload_hist,
                 })
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -795,10 +795,10 @@ def stix_ioc_lookup():
         'type': row.type,
         'value': row.value,
         'revoked': bool(getattr(row, 'revoked', False)),
-        'revoked_at': row.revoked_at.isoformat() if getattr(row, 'revoked_at', None) else None,
-        'expiration_date': row.expiration_date.isoformat() if row.expiration_date else None,
-        'modified_at': row.modified_at.isoformat() if getattr(row, 'modified_at', None) else None,
-        'created_at': row.created_at.isoformat() if row.created_at else None,
+        'revoked_at': iso_utc(getattr(row, 'revoked_at', None)),
+        'expiration_date': iso_utc(row.expiration_date),
+        'modified_at': iso_utc(getattr(row, 'modified_at', None)),
+        'created_at': iso_utc(row.created_at),
         'analyst': row.analyst or '',
         'is_active_for_plain_feeds': ioc_row_is_active(row),
     }
@@ -853,7 +853,7 @@ def get_ioc_notes():
             'id': r.id,
             'username': user.username if user else '?',
             'content': r.content,
-            'created_at': r.created_at.isoformat() if r.created_at else None,
+            'created_at': iso_utc(r.created_at),
         })
     return jsonify({'success': True, 'notes': notes})
 
@@ -918,7 +918,7 @@ def add_ioc_note():
             'id': note.id,
             'username': current_user.username,
             'content': note.content,
-            'created_at': note.created_at.isoformat() if note.created_at else None,
+            'created_at': iso_utc(note.created_at),
         },
     }
     try:
@@ -1381,7 +1381,7 @@ def _search_ioc_impl():
                 'ioc': rule.filename,
                 'value': rule.filename,
                 'file_type': 'YARA',
-                'date': rule.uploaded_at.isoformat() if rule.uploaded_at else None,
+                'date': iso_utc(rule.uploaded_at),
                 'user': rule.analyst or '',
                 'ref': rule.ticket_id or '',
                 'comment': rule.comment or '',
@@ -1806,7 +1806,7 @@ def _search_ioc_impl():
                 'ioc': rule.filename,
                 'value': rule.filename,
                 'file_type': 'YARA',
-                'date': rule.uploaded_at.isoformat() if rule.uploaded_at else None,
+                'date': iso_utc(rule.uploaded_at),
                 'user': rule.analyst or '',
                 'ref': rule.ticket_id or '',
                 'comment': rule.comment or '',
@@ -1927,7 +1927,7 @@ def get_all_iocs():
         exp_status = check_expiration_status(exp_str)
         item = {
             'ioc': row.value,
-            'date': row.created_at.isoformat() if row.created_at else None,
+            'date': iso_utc(row.created_at),
             'user': row.analyst or '',
             'ref': row.ticket_id or '',
             'comment': row.comment or '',
@@ -1994,7 +1994,7 @@ def export_iocs():
         for row in rows:
             item = {'value': row.value, 'type': row.type, 'analyst': row.analyst or '', 'ticket_id': row.ticket_id or '',
                     'comment': row.comment or '', 'expiration': row.expiration_date.strftime('%Y-%m-%d') if row.expiration_date else 'Permanent',
-                    'created_at': row.created_at.isoformat() if row.created_at else None}
+                    'created_at': iso_utc(row.created_at)}
             if getattr(row, 'tags', None):
                 try:
                     item['tags'] = json.loads(row.tags) if isinstance(row.tags, str) else (row.tags or [])
@@ -2017,7 +2017,7 @@ def export_iocs():
         writer.writerow([
             row.value, row.type, row.analyst or '', row.ticket_id or '', row.comment or '',
             row.expiration_date.strftime('%Y-%m-%d') if row.expiration_date else 'Permanent',
-            row.created_at.isoformat() if row.created_at else '',
+            iso_utc(row.created_at) or '',
             tags_str
         ])
     return Response(
@@ -2380,7 +2380,7 @@ def get_recent():
             'type': row.type,
             'value': row.value,
             'analyst': row.analyst or '',
-            'date': dt.isoformat() if dt else None,
+            'date': iso_utc(dt),
             'ioc': row.value,
             'user': row.analyst or '',
             'ref': row.ticket_id or '',
@@ -2400,7 +2400,7 @@ def get_recent():
             'type': 'YARA',
             'value': row.filename,
             'analyst': row.analyst or '',
-            'date': dt.isoformat() if dt else None,
+            'date': iso_utc(dt),
             'ioc': row.filename,
             'user': row.analyst or '',
             'ref': row.ticket_id or '',

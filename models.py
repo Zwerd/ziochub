@@ -17,6 +17,24 @@ def _utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def iso_utc(dt):
+    """
+    Serialize a datetime for JSON output as ISO-8601 with explicit UTC offset.
+
+    The codebase stores DB datetimes as naive UTC (see ``_utcnow``); this helper
+    annotates the offset (``+00:00``) so frontend ``new Date(s)`` parses the moment
+    correctly and ``toLocaleString()`` converts to the viewer's local timezone with
+    DST handled automatically by the browser's IANA tz data. Without an offset the
+    browser interprets the string as local time and the display drifts by the local
+    UTC offset (e.g., 22:15 IDT shown as 19:15).
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc).isoformat()
+    return dt.astimezone(timezone.utc).isoformat()
+
+
 class Campaign(db.Model):
     __tablename__ = 'campaigns'
     id = db.Column(db.Integer, primary_key=True)

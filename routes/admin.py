@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import OperationalError
 
 from extensions import db
-from models import User, UserProfile, SystemSetting, IOC
+from models import User, UserProfile, SystemSetting, IOC, iso_utc
 from utils.auth import hash_password
 from utils.decorators import admin_required, admin_required_page
 from utils.allowlist import clear_allowlist_cache
@@ -119,7 +119,7 @@ def admin_inbox():
             'original_filename': getattr(r, 'original_filename', None) or None,
             'display_name': (getattr(r, 'original_filename', None) or r.filename),
             'analyst': r.analyst or '',
-            'uploaded_at': r.uploaded_at.isoformat() if r.uploaded_at else '',
+            'uploaded_at': iso_utc(r.uploaded_at) or '',
             'ticket_id': r.ticket_id or '',
             'comment': (r.comment or '')[:200],
         } for r in yara_pending_rows]
@@ -493,6 +493,7 @@ _SETTINGS_DEFAULTS = {
     'cortex_xdr_verify_ssl': 'true',
     'cortex_xdr_hash_blocklist_enabled': 'true',
     'cortex_xdr_display_name': '',
+    'cortex_xdr_security_level': 'advanced',
     'google_secops_enabled': 'false',
     'google_secops_base_url': '',
     'google_secops_chronicle_api_base': '',
@@ -932,6 +933,7 @@ def save_settings():
             'cortex_xdr_api_key',
             'cortex_xdr_verify_ssl',
             'cortex_xdr_hash_blocklist_enabled',
+            'cortex_xdr_security_level',
             'google_secops_enabled',
             'google_secops_display_name',
             'google_secops_base_url',
@@ -1030,6 +1032,9 @@ def save_settings():
                         'google_secops_verify_ssl',
                     ):
                         _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
+                    elif key == 'cortex_xdr_security_level':
+                        lvl = str(val or '').strip().lower()
+                        _set_setting(key, 'standard' if lvl == 'standard' else 'advanced')
                     elif key == 'google_secops_credentials_json':
                         _set_setting(key, str(val) if val is not None else '')
                     elif key == 'cortex_xdr_base_url':
@@ -1220,6 +1225,7 @@ _CORTEX_XDR_TEST_SETTING_KEYS = (
     'cortex_xdr_api_key_id',
     'cortex_xdr_api_key',
     'cortex_xdr_verify_ssl',
+    'cortex_xdr_security_level',
 )
 
 
@@ -1240,6 +1246,8 @@ def _merge_cortex_xdr_test_settings(saved: dict, override) -> dict:
         if key == 'cortex_xdr_base_url':
             from utils.cortex_xdr import sanitize_cortex_base_url
             s = sanitize_cortex_base_url(s)
+        elif key == 'cortex_xdr_security_level':
+            s = 'standard' if s.lower() == 'standard' else 'advanced'
         merged[key] = s
     return merged
 
@@ -1253,6 +1261,7 @@ def _cortex_xdr_settings_from_db(_get_setting) -> dict:
         'cortex_xdr_api_key',
         'cortex_xdr_verify_ssl',
         'cortex_xdr_hash_blocklist_enabled',
+        'cortex_xdr_security_level',
     )
     return {k: (_get_setting(k, '') or '') for k in keys}
 
@@ -1673,8 +1682,8 @@ def list_users():
             'must_change_password': getattr(u, 'must_change_password', False),
             'display_name': (profile and profile.display_name) or u.username,
             'avatar_url': _avatar_url(profile),
-            'last_login_at': u.last_login_at.isoformat() if u.last_login_at else None,
-            'created_at': u.created_at.isoformat() if u.created_at else None,
+            'last_login_at': iso_utc(u.last_login_at),
+            'created_at': iso_utc(u.created_at),
         })
     return _api_ok(data={'users': result})
 
@@ -1957,7 +1966,7 @@ def misp_sync_now():
 
         import json
         from datetime import datetime, timezone
-        now_str = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
+        now_str = iso_utc(datetime.now(timezone.utc).replace(tzinfo=None))
         _set_setting('misp_last_sync', now_str)
         _set_setting('misp_last_sync_result', json.dumps(result)[:1000])
 
@@ -2152,6 +2161,7 @@ def _build_admin_settings_form_context():
         'cortex_xdr_api_key': _get_setting('cortex_xdr_api_key', ''),
         'cortex_xdr_verify_ssl': _get_setting('cortex_xdr_verify_ssl', 'true'),
         'cortex_xdr_hash_blocklist_enabled': _get_setting('cortex_xdr_hash_blocklist_enabled', 'true'),
+        'cortex_xdr_security_level': _get_setting('cortex_xdr_security_level', 'advanced'),
         'google_secops_enabled': _get_setting('google_secops_enabled', 'false'),
         'google_secops_display_name': _get_setting('google_secops_display_name', ''),
         'google_secops_base_url': _get_setting('google_secops_base_url', ''),

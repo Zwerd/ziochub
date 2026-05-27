@@ -18,7 +18,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from extensions import db
-from models import Campaign, IOC, YaraRule, _utcnow
+from models import Campaign, IOC, YaraRule, _utcnow, iso_utc
 from utils.decorators import login_required
 from utils.tags import normalize_tags_from_input
 from utils.campaign_tag_sync import parse_tags_field, merge_campaign_tags_into_tags_json, sync_added_tags_to_campaign_iocs
@@ -137,7 +137,7 @@ def list_campaigns():
                     'name': c.name,
                     'description': c.description,
                     'dir': getattr(c, 'dir', None) or 'ltr',
-                    'created_at': c.created_at.isoformat() if c.created_at else None,
+                    'created_at': iso_utc(c.created_at),
                     'has_reference_image': bool(getattr(c, 'reference_image_ext', None)),
                     'tags': parse_tags_field(getattr(c, 'tags', None)),
                 }
@@ -203,7 +203,7 @@ def create_campaign():
                 'name': c.name,
                 'description': c.description,
                 'dir': c.dir or 'ltr',
-                'created_at': c.created_at.isoformat() if c.created_at else None,
+                'created_at': iso_utc(c.created_at),
                 'has_reference_image': bool(getattr(c, 'reference_image_ext', None)),
                 'tags': parse_tags_field(getattr(c, 'tags', None)),
             }
@@ -929,7 +929,7 @@ def campaign_graph_investigate_ioc(campaign_id, ioc_id):
                 'ticket_id': ioc.ticket_id or '',
                 'analyst': ioc.analyst or '',
                 'expiration': ioc.expiration_date.strftime('%Y-%m-%d') if ioc.expiration_date else None,
-                'created_at': ioc.created_at.isoformat() if ioc.created_at else None,
+                'created_at': iso_utc(ioc.created_at),
                 'revoked': bool(getattr(ioc, 'revoked', False)),
             },
             'events': events,

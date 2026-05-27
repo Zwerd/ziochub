@@ -252,20 +252,20 @@
 <div id="settings-tab-cortex-xdr" class="settings-tab-pane hidden">
     <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
         <h3 class="text-lg font-semibold accent-blue mb-2">Cortex XDR</h3>
-        <p class="text-secondary text-sm mb-4">Uses the Cortex XDR <strong class="text-primary">public API</strong> (same host as <code class="px-0.5 rounded bg-white/10 text-xs">https://api-…paloaltonetworks.com</code>): TIM indicators (<code class="px-0.5 rounded bg-white/10 text-xs">tim_insert_jsons</code> / <code class="px-0.5 rounded bg-white/10 text-xs">disable_iocs</code>) and, for <strong class="text-primary">Hash</strong> IOCs only, optional Action Center <strong class="text-primary">file block list</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>). When <strong class="text-primary">Enable</strong> is Yes, outbound IOC events call <code class="px-0.5 rounded bg-white/10 text-xs">cortex_xdr_push_ioc_from_context</code> in the background.</p>
+        <p class="text-secondary text-sm mb-4">Uses the documented Cortex XDR <strong class="text-primary">Platform API</strong> (same host as <code class="px-0.5 rounded bg-white/10 text-xs">https://api-…paloaltonetworks.com</code>): IOC management via <code class="px-0.5 rounded bg-white/10 text-xs">indicators/insert_jsons</code> (push) and <code class="px-0.5 rounded bg-white/10 text-xs">indicators/delete</code> (revoke), and for <strong class="text-primary">Hash</strong> IOCs only, optional Action Center <strong class="text-primary">file block list</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>). When <strong class="text-primary">Enable</strong> is Yes, outbound IOC events call <code class="px-0.5 rounded bg-white/10 text-xs">cortex_xdr_push_ioc_from_context</code> in the background. Supported types on push: <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">Hash</strong> (URL/Email are skipped).</p>
 
         <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary open:border-cyan-500/50">
-            <summary class="cursor-pointer font-semibold text-cyan-300 select-none">How to create a Cortex XDR API key (Advanced)</summary>
+            <summary class="cursor-pointer font-semibold text-cyan-300 select-none">How to create a Cortex XDR API key (Standard or Advanced)</summary>
             <ol class="mt-3 list-decimal list-inside space-y-2 text-primary/90">
                 <li>In the Cortex XDR console, open <strong class="text-primary">Settings → Configurations → Integrations → API Keys</strong> (see <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-REST-API/Cortex-XDR-API-Overview" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Cortex XDR API overview</a>).</li>
-                <li>Click <strong class="text-primary">+ New Key</strong>.</li>
+                <li>Click <strong class="text-primary">+ New Key</strong>. Choose a <strong class="text-primary">Security Level</strong> - <em>Standard</em> (raw key in Authorization, no signing) or <em>Advanced</em> (HMAC-style signed header). Use the matching value in <strong class="text-primary">Security level</strong> below; a mismatch always returns HTTP 401.</li>
                 <li>Create an <strong class="text-primary">Advanced</strong> API key (required for signed REST calls). Standard keys are not supported by ZIoCHub.</li>
                 <li>Grant permissions needed for IOC/TIM operations (at minimum: ability to manage indicators / rules; many tenants use a role with Instance Administrator or equivalent IOC edit rights).</li>
                 <li>Copy the <strong class="text-primary">API Key ID</strong> and the <strong class="text-primary">API Key</strong> secret immediately — the secret is shown only once.</li>
                 <li>On the same screen, note the API base host (FQDN), e.g. <code class="px-0.5 rounded bg-white/10 text-xs">https://api-xxxxx.paloaltonetworks.com</code> — paste that into <strong class="text-primary">API base URL</strong> below (host only, no <code class="px-0.5 rounded bg-white/10 text-xs">/public_api/...</code> path).</li>
                 <li>In ZIoCHub: paste ID + secret, click <strong class="text-primary">Save Cortex XDR settings</strong>, then <strong class="text-primary">Test connection</strong>.</li>
             </ol>
-            <p class="mt-3 text-xs text-secondary">IOC REST reference (list/insert/delete): <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-Platform-APIs/Get-Indicators-IOCs" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Get Indicators (IOCs)</a>. ZIoCHub uses the TIM automation endpoints documented for XSOAR-style integrations (<code class="px-0.5 rounded bg-white/10 text-xs">tim_insert_jsons</code>, etc.), not the browser-only webapp routes.</p>
+            <p class="mt-3 text-xs text-secondary">IOC REST references: <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-Platform-APIs/Get-Indicators-IOCs" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Get Indicators (IOCs)</a> · <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-REST-API/Insert-Simple-Indicators-JSON" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Insert Simple Indicators (JSON)</a> · <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-Platform-APIs/Delete-Indicators-IOCs" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Delete Indicators (IOCs)</a>. ZIoCHub uses the documented <code class="px-0.5 rounded bg-white/10 text-xs">/public_api/v1/indicators/*</code> routes — not the legacy <code class="px-0.5 rounded bg-white/10 text-xs">tim_*</code> aliases (which modern tenants reject with HTTP 403 <em>Invalid API</em>).</p>
             <p class="mt-2 text-xs text-amber-200/90">If Test shows <strong>HTML 500</strong> (not JSON): usually <strong class="text-primary">Gunicorn worker timeout</strong> while waiting for Cortex (fix: <code class="px-0.5 rounded bg-white/10 text-xs">start.sh --timeout 120</code>, <code class="px-0.5 rounded bg-white/10 text-xs">systemctl restart ziochub</code>, Ctrl+F5). Use <strong class="text-primary">Check module</strong> first — must return JSON. Also fix <strong class="text-primary">API base URL</strong>: no spaces (e.g. not <code class="px-0.5 rounded bg-white/10 text-xs">https:// api-…</code>).</p>
         </details>
 
@@ -295,7 +295,15 @@
             <div>
                 <label for="cortex_xdr_api_key" class="block text-sm font-semibold text-secondary mb-1">API key secret</label>
                 <input type="password" id="cortex_xdr_api_key" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="{% if settings.cortex_xdr_api_key %}••••••••{% endif %}" autocomplete="new-password">
-                <p class="text-secondary text-xs mt-1">Advanced API key secret (shown once when the key is created). Leave blank on Save to keep the stored secret.</p>
+                <p class="text-secondary text-xs mt-1">API key secret (shown once when the key is created). Leave blank on Save to keep the stored secret.</p>
+            </div>
+            <div>
+                <label for="cortex_xdr_security_level" class="block text-sm font-semibold text-secondary mb-1">Security level</label>
+                <select id="cortex_xdr_security_level" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="advanced" {% if settings.cortex_xdr_security_level != 'standard' %}selected{% endif %}>Advanced (signed: nonce + timestamp + SHA256)</option>
+                    <option value="standard" {% if settings.cortex_xdr_security_level == 'standard' %}selected{% endif %}>Standard (raw key in Authorization)</option>
+                </select>
+                <p class="text-secondary text-xs mt-1"><strong class="text-primary">Must match</strong> the value chosen for this API key in Cortex (Settings → Configurations → API Keys → Security Level). A mismatch returns HTTP 401 even if the ID + secret are correct. Advanced also requires the server clock to be within ~30s of UTC.</p>
             </div>
             <div>
                 <label for="cortex_xdr_verify_ssl" class="block text-sm font-semibold text-secondary mb-1">Verify TLS</label>
@@ -447,7 +455,8 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                 cortex_xdr_base_url: (document.getElementById('cortex_xdr_base_url').value || '').replace(/\s+/g, ''),
                 cortex_xdr_api_key_id: document.getElementById('cortex_xdr_api_key_id').value.trim(),
                 cortex_xdr_verify_ssl: document.getElementById('cortex_xdr_verify_ssl').value,
-                cortex_xdr_hash_blocklist_enabled: document.getElementById('cortex_xdr_hash_blocklist_enabled').checked ? 'true' : 'false'
+                cortex_xdr_hash_blocklist_enabled: document.getElementById('cortex_xdr_hash_blocklist_enabled').checked ? 'true' : 'false',
+                cortex_xdr_security_level: (document.getElementById('cortex_xdr_security_level') || {}).value || 'advanced'
             };
             if (keyEl && keyEl.value && keyEl.value.length > 0) payload.cortex_xdr_api_key = keyEl.value;
             try {
@@ -536,7 +545,8 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                     settings: {
                         cortex_xdr_base_url: cortexBaseUrlFromForm(),
                         cortex_xdr_api_key_id: (document.getElementById('cortex_xdr_api_key_id') || {}).value || '',
-                        cortex_xdr_verify_ssl: (document.getElementById('cortex_xdr_verify_ssl') || {}).value || 'true'
+                        cortex_xdr_verify_ssl: (document.getElementById('cortex_xdr_verify_ssl') || {}).value || 'true',
+                        cortex_xdr_security_level: (document.getElementById('cortex_xdr_security_level') || {}).value || 'advanced'
                     }
                 };
                 if (keyEl && keyEl.value && keyEl.value.length > 0) {

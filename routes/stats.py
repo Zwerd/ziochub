@@ -10,7 +10,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from extensions import db
-from models import Campaign, IOC, IocHistory, YaraRule, SanityExclusion, User, _utcnow
+from models import Campaign, IOC, IocHistory, YaraRule, SanityExclusion, User, _utcnow, iso_utc
 from utils.decorators import login_required
 from utils.sanity_checks import get_feed_pulse_anomalies
 from constants import IOC_FILES
@@ -65,7 +65,7 @@ def _process_newly_expired_iocs(max_items: int = 200) -> None:
         for r in rows:
             try:
                 # Mark in history first so we don't double-schedule across rapid calls.
-                exp_iso = r.expiration_date.isoformat() if r.expiration_date else ''
+                exp_iso = iso_utc(r.expiration_date) or ''
                 _log_ioc_history(r.type, r.value, 'expired', 'system', {'expiration_date': exp_iso})
                 # Soft revoke so TAXII/STIX clients receive revoked=true with updated modified timestamp.
                 try:
@@ -378,7 +378,7 @@ def api_feed_pulse():
             'campaign': (r.campaign.name if r.campaign else '') or '',
             'ticket_id': r.ticket_id or '',
             'expiration': r.expiration_date.strftime('%Y-%m-%d') if r.expiration_date else 'Permanent',
-            'created_at': r.created_at.isoformat() if r.created_at else '',
+            'created_at': iso_utc(r.created_at) or '',
         }
         if reason:
             d['reason'] = reason
@@ -509,7 +509,7 @@ def api_feed_pulse():
                 'type': e.ioc_type or '',
                 'anomaly_type': e.anomaly_type or '',
                 'excluded_by': e.excluded_by or '',
-                'excluded_at': e.excluded_at.isoformat() if e.excluded_at else '',
+                'excluded_at': iso_utc(e.excluded_at) or '',
             })
     except Exception:
         pass

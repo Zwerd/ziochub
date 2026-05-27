@@ -1456,8 +1456,8 @@
             <div class="flex items-start gap-3">
                 <span class="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/30 flex items-center justify-center text-red-400 text-xl" aria-hidden="true">⚠</span>
                 <div class="flex-1 min-w-0">
-                    <h3 id="privateConfirmTitle" class="text-lg font-bold text-red-400 mb-2"></h3>
-                    <p id="privateConfirmMessage" class="text-sm text-white/90 mb-4"></p>
+                    <h3 id="privateConfirmTitle" class="text-lg font-bold text-red-400 mb-2 break-all"></h3>
+                    <p id="privateConfirmMessage" class="text-sm text-white/90 mb-4 break-all"></p>
                     <div class="flex gap-2 justify-end">
                         <button type="button" id="privateConfirmCancel" class="btn-cmd-neutral" data-i18n="private_confirm.cancel">Cancel</button>
                         <button type="button" id="privateConfirmYes" class="px-4 py-2 rounded font-semibold bg-red-600 hover:bg-red-500 text-white border border-red-500"></button>
@@ -1469,10 +1469,10 @@
 
     <!-- YARA File Preview Modal -->
     <div id="yaraPreviewModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-secondary rounded-lg max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col backdrop-blur-sm">
-            <div class="p-4 border-b border-white/10 flex justify-between items-center flex-shrink-0">
-                <h3 class="text-xl font-bold accent-blue" id="yaraPreviewTitle" data-i18n="modal.yara_preview">File Preview</h3>
-                <button type="button" id="yaraPreviewClose" class="btn-cmd-neutral" data-i18n="modal.close">Close</button>
+        <div class="bg-secondary rounded-lg max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col backdrop-blur-sm min-w-0">
+            <div class="p-4 border-b border-white/10 flex justify-between items-center flex-shrink-0 gap-3 min-w-0">
+                <h3 class="text-xl font-bold accent-blue break-all min-w-0 flex-1" id="yaraPreviewTitle" data-i18n="modal.yara_preview">File Preview</h3>
+                <button type="button" id="yaraPreviewClose" class="btn-cmd-neutral shrink-0" data-i18n="modal.close">Close</button>
             </div>
             <pre id="yaraPreviewContent" class="p-4 overflow-auto text-sm font-mono whitespace-pre-wrap flex-1 min-h-0 border-custom"></pre>
         </div>
@@ -1557,10 +1557,10 @@
 
     <!-- YARA Edit Modal -->
     <div id="yaraEditModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-secondary rounded-lg max-w-3xl w-full mx-4 max-h-[90vh] flex flex-col backdrop-blur-sm">
-            <div class="p-4 border-b border-white/10 flex justify-between items-center flex-shrink-0">
-                <h3 class="text-xl font-bold accent-blue" id="yaraEditTitle" data-i18n="modal.yara_edit">Edit Rule</h3>
-                <div class="flex gap-2">
+        <div class="bg-secondary rounded-lg max-w-3xl w-full mx-4 max-h-[90vh] flex flex-col backdrop-blur-sm min-w-0">
+            <div class="p-4 border-b border-white/10 flex justify-between items-center flex-shrink-0 gap-3 min-w-0">
+                <h3 class="text-xl font-bold accent-blue break-all min-w-0 flex-1" id="yaraEditTitle" data-i18n="modal.yara_edit">Edit Rule</h3>
+                <div class="flex gap-2 shrink-0">
                     <button type="button" id="yaraEditCancel" class="btn-cmd-neutral" data-i18n="modal.cancel">Cancel</button>
                     <button type="button" id="yaraEditSave" class="btn-cmd-primary" data-i18n="modal.save">Save</button>
                 </div>
@@ -1660,7 +1660,7 @@
                 <span class="flex-shrink-0 w-10 h-10 rounded-full bg-red-500/30 flex items-center justify-center text-red-400 text-xl" aria-hidden="true">⚠</span>
                 <div class="flex-1 min-w-0">
                     <h3 class="text-lg font-bold text-red-400 mb-2" data-i18n="campaign.delete_confirm_title">Delete campaign?</h3>
-                    <p id="campaignDeleteConfirmMessage" class="text-sm text-white/90 mb-4"></p>
+                    <p id="campaignDeleteConfirmMessage" class="text-sm text-white/90 mb-4 break-all"></p>
                     <div class="flex gap-2 justify-end">
                         <button type="button" id="campaignDeleteConfirmCancel" class="btn-cmd-neutral" data-i18n="modal.cancel">Cancel</button>
                         <button type="button" id="campaignDeleteConfirmYes" class="btn-cmd-danger" data-i18n="campaign.delete_confirm_yes">Delete</button>
@@ -1752,9 +1752,9 @@
 
     <!-- YARA Confirm Action Modal (delete / reject) -->
     <div id="yaraConfirmModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm border border-white/10">
-            <h3 id="yaraConfirmTitle" class="text-xl font-bold text-red-400 mb-2">Confirm</h3>
-            <p id="yaraConfirmMessage" class="text-sm text-white/90 mb-5"></p>
+        <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm border border-white/10 min-w-0">
+            <h3 id="yaraConfirmTitle" class="text-xl font-bold text-red-400 mb-2 break-all">Confirm</h3>
+            <p id="yaraConfirmMessage" class="text-sm text-white/90 mb-5 break-all"></p>
             <div class="flex gap-2 justify-end">
                 <button type="button" id="yaraConfirmCancel" class="btn-cmd-neutral">Cancel</button>
                 <button type="button" id="yaraConfirmSubmit" class="btn-cmd-danger">Confirm</button>
@@ -1764,8 +1764,8 @@
 
     <!-- Admin: YARA delete requires reason (audit + Search history) -->
     <div id="yaraAdminDeleteModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-        <div class="bg-secondary rounded-lg p-6 max-w-lg w-full mx-4 backdrop-blur-sm border border-white/10">
-            <h3 id="yaraAdminDeleteTitle" class="text-xl font-bold text-red-400 mb-2" data-i18n="yara.admin_delete_title">Delete YARA rule</h3>
+        <div class="bg-secondary rounded-lg p-6 max-w-lg w-full mx-4 backdrop-blur-sm border border-white/10 min-w-0">
+            <h3 id="yaraAdminDeleteTitle" class="text-xl font-bold text-red-400 mb-2 break-all" data-i18n="yara.admin_delete_title">Delete YARA rule</h3>
             <p class="text-sm text-secondary mb-3" data-i18n="yara.admin_delete_hint">A reason is required. It will appear in Search → History for this rule and in audit logs.</p>
             <textarea id="yaraAdminDeleteReason" rows="4" class="w-full rounded-lg bg-dark-800 border border-white/10 px-3 py-2 text-sm text-primary focus:border-cyan-400 focus:outline-none" placeholder="Reason for deletion..." data-i18n-placeholder="yara.admin_delete_placeholder"></textarea>
             <div class="flex gap-2 justify-end mt-4">

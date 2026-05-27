@@ -417,7 +417,7 @@ from models import (
     FeedSourceLastSeen, FeedCacheEntry,
     User, UserProfile, UserSession, SystemSetting,
     TeamGoal, ActivityEvent, ChampRankSnapshot,
-    _utcnow,
+    _utcnow, iso_utc,
 )
 
 
@@ -684,7 +684,7 @@ def calculate_expiration_date(ttl):
     """Calculate expiration date based on TTL selection. Returns datetime or None (Permanent)."""
     if ttl == 'Permanent':
         return None
-    today = datetime.now()
+    today = _utcnow()
     ttl_map = {
         '1 Week': timedelta(weeks=1),
         '1 Month': timedelta(days=30),
@@ -1013,7 +1013,7 @@ def health_check():
     """
     health_status = {
         'status': 'healthy',
-        'timestamp': _utcnow().isoformat(),
+        'timestamp': iso_utc(_utcnow()),
         'version': VERSION,
         'checks': {}
     }
@@ -1067,7 +1067,7 @@ def health_check():
     
     # Check feed generation (test one feed endpoint)
     try:
-        now = datetime.now()
+        now = _utcnow()
         test_count = IOC.query.filter(
             db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
         ).count()
@@ -1197,7 +1197,7 @@ def check_expiration_status(exp_date_str):
         return {'status': 'Permanent', 'expires_on': None, 'is_expired': False}
     try:
         exp_date = datetime.strptime(exp_date_str.strip(), '%Y-%m-%d')
-        today = datetime.now()
+        today = _utcnow()
         is_expired = exp_date < today
         if is_expired:
             return {'status': 'Expired', 'expires_on': exp_date_str, 'is_expired': True}
@@ -1349,7 +1349,7 @@ def _history_deleted_to_search_result(h):
             pass
     comment = (payload.get('comment') or '') if payload else ''
     expiration_str = (payload.get('expiration_date') or '')[:10] if payload.get('expiration_date') else 'NEVER'
-    date_str = h.at.isoformat() if h.at else None
+    date_str = iso_utc(h.at)
     user_out = h.username or ''
     ref_out = ''
     if h.ioc_type == 'YARA':
@@ -1448,7 +1448,7 @@ def _ioc_row_to_search_result(row, ioc_type, query_lower, filter_type):
     """Build a search-result dict from an IOC row (same shape as frontend expects)."""
     expiration_str = row.expiration_date.strftime('%Y-%m-%d') if row.expiration_date else 'NEVER'
     exp_status = check_expiration_status(expiration_str)
-    date_str = row.created_at.isoformat() if row.created_at else None
+    date_str = iso_utc(row.created_at)
     campaign_name = None
     if row.campaign_id and row.campaign:
         campaign_name = row.campaign.name

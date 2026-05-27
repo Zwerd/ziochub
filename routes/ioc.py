@@ -16,7 +16,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from extensions import db
-from models import Campaign, IOC, IocHistory, User, ActivityEvent, _utcnow
+from models import Campaign, IOC, IocHistory, User, ActivityEvent, _utcnow, iso_utc
 from utils.decorators import login_required
 from utils.validation import validate_ioc, detect_ioc_type, AUTO_DETECT_PATTERNS, REGEX_PATTERNS
 from utils.refanger import refanger, sanitize_comment
@@ -56,7 +56,7 @@ def _ioc_created_history_payload(
         payload['ticket_id'] = tid
     if expiration_date is not None:
         if hasattr(expiration_date, 'isoformat'):
-            payload['expiration_date'] = expiration_date.isoformat()
+            payload['expiration_date'] = iso_utc(expiration_date)
         else:
             s = str(expiration_date).strip()
             if s:

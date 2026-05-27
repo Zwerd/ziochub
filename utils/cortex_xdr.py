@@ -51,6 +51,8 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SEC = 45
+# Shorter outbound timeout for Admin "Test connection" so Gunicorn (default 30s worker limit) returns JSON in time.
+REQUEST_TIMEOUT_TEST_SEC = 15
 _NONCE_LEN = 64
 
 _CORTEX_AUTH_SETTINGS_SUFFIX = '/public_api/v1/authentication-settings/get/settings'
@@ -107,8 +109,16 @@ def _hash_blocklist_enabled(g: dict[str, str]) -> bool:
     return raw in ('true', '1', 'yes')
 
 
+def sanitize_cortex_base_url(raw: str) -> str:
+    """Strip and remove all whitespace (common paste typo: ``https:// api-…``)."""
+    b = (raw or '').strip()
+    if any(ch.isspace() for ch in b):
+        b = ''.join(b.split())
+    return b.rstrip('/')
+
+
 def _public_api_v1_root(base_url: str) -> str:
-    b = (base_url or '').strip().rstrip('/')
+    b = sanitize_cortex_base_url(base_url)
     suf = '/public_api/v1'
     if b.endswith(suf):
         return b
@@ -174,14 +184,22 @@ def _sign_headers(api_key_id: str, api_key: str, *, tim_source: bool) -> dict[st
     return h
 
 
-def _http_json_post(url: str, body: dict[str, Any], headers: dict[str, str], verify_ssl: bool) -> tuple[int, Optional[dict[str, Any]], str]:
+def _http_json_post(
+    url: str,
+    body: dict[str, Any],
+    headers: dict[str, str],
+    verify_ssl: bool,
+    *,
+    timeout_sec: Optional[float] = None,
+) -> tuple[int, Optional[dict[str, Any]], str]:
     raw = json.dumps(body, ensure_ascii=False).encode('utf-8')
     req = urllib.request.Request(url, data=raw, method='POST')
     for k, v in headers.items():
         req.add_header(k, v)
     ctx = _ssl_context(verify_ssl)
+    timeout = REQUEST_TIMEOUT_SEC if timeout_sec is None else timeout_sec
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC, context=ctx) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
             code = resp.getcode()
             txt = resp.read().decode('utf-8', errors='replace')
             try:
@@ -469,7 +487,7 @@ def _cortex_xdr_push_ioc_from_context_inner(ioc: dict[str, Any]) -> tuple[bool, 
         return False, 'invalid_context'
 
     g = cortex_xdr_settings_dict()
-    base = (g.get('cortex_xdr_base_url') or '').strip()
+    base = sanitize_cortex_base_url(g.get('cortex_xdr_base_url') or '')
     key_id = (g.get('cortex_xdr_api_key_id') or '').strip()
     api_key = (g.get('cortex_xdr_api_key') or '').strip()
     verify_ssl = (g.get('cortex_xdr_verify_ssl', 'true') or 'true').strip().lower() in ('true', '1', 'yes')
@@ -525,11 +543,9 @@ def _cortex_xdr_push_ioc_from_context_inner(ioc: dict[str, Any]) -> tuple[bool, 
 
 def _validate_cortex_base_url(base: str) -> Optional[str]:
     """Return a user-facing error string, or None if the base URL looks acceptable."""
-    b = (base or '').strip()
+    b = sanitize_cortex_base_url(base)
     if not b:
         return 'Base URL is empty'
-    if ' ' in b:
-        return 'Base URL must not contain spaces'
     if not b.lower().startswith('https://'):
         return 'Base URL must start with https:// (example: https://api-xx.paloaltonetworks.com)'
     try:
@@ -580,8 +596,14 @@ def _cortex_xdr_test_connection_impl(
 ) -> dict[str, Any]:
     g = settings or cortex_xdr_settings_dict()
     steps: list[dict[str, str]] = []
+    steps.append({
+        'step': 'ziochub',
+        'status': 'ok',
+        'message': 'ZIoCHub accepted test request; next step POSTs to Cortex public_api (authentication-settings).',
+    })
 
-    base = (g.get('cortex_xdr_base_url') or '').strip()
+    raw_base = (g.get('cortex_xdr_base_url') or '').strip()
+    base = sanitize_cortex_base_url(raw_base)
     key_id = (g.get('cortex_xdr_api_key_id') or '').strip()
     api_key = (g.get('cortex_xdr_api_key') or '').strip()
 
@@ -597,8 +619,8 @@ def _cortex_xdr_test_connection_impl(
         missing.append('api_key_secret')
     if missing:
         hint = (
-            'Save settings first (API key secret is only stored when you click Save). '
-            'Test reads saved values from the database, not unsaved form fields.'
+            'Fill Base URL, API key ID, and API key secret in the form (or Save first so the secret is stored). '
+            'If the secret field is empty, Test uses the last saved secret from the database.'
         )
         steps.append({
             'step': 'config',
@@ -606,6 +628,13 @@ def _cortex_xdr_test_connection_impl(
             'message': 'Missing required Cortex XDR settings: ' + ', '.join(missing) + '. ' + hint,
         })
         return {'success': False, 'steps': steps}
+
+    if raw_base and base != raw_base.rstrip('/'):
+        steps.append({
+            'step': 'config',
+            'status': 'ok',
+            'message': f'Base URL normalized (removed spaces): {base}',
+        })
 
     url_err = _validate_cortex_base_url(base)
     if url_err:
@@ -616,13 +645,18 @@ def _cortex_xdr_test_connection_impl(
     payload = {'request_data': {}}
     hdrs = _sign_headers(key_id, api_key, tim_source=False)
 
-    code, data, raw = _http_json_post(url, payload, hdrs, verify_ssl)
+    code, data, raw = _http_json_post(
+        url, payload, hdrs, verify_ssl, timeout_sec=REQUEST_TIMEOUT_TEST_SEC
+    )
 
     # Give the operator immediate context (helps debug “wrong host”).
     steps.append({
         'step': 'request',
         'status': 'ok',
-        'message': f'POST {url} (verify_tls={bool(verify_ssl)})',
+        'message': (
+            f'POST {url} (verify_tls={bool(verify_ssl)}, '
+            f'timeout={REQUEST_TIMEOUT_TEST_SEC}s)'
+        ),
     })
 
     if 200 <= code < 300:

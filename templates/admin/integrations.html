@@ -253,6 +253,22 @@
     <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
         <h3 class="text-lg font-semibold accent-blue mb-2">Cortex XDR</h3>
         <p class="text-secondary text-sm mb-4">Uses the Cortex XDR <strong class="text-primary">public API</strong> (same host as <code class="px-0.5 rounded bg-white/10 text-xs">https://api-…paloaltonetworks.com</code>): TIM indicators (<code class="px-0.5 rounded bg-white/10 text-xs">tim_insert_jsons</code> / <code class="px-0.5 rounded bg-white/10 text-xs">disable_iocs</code>) and, for <strong class="text-primary">Hash</strong> IOCs only, optional Action Center <strong class="text-primary">file block list</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>). When <strong class="text-primary">Enable</strong> is Yes, outbound IOC events call <code class="px-0.5 rounded bg-white/10 text-xs">cortex_xdr_push_ioc_from_context</code> in the background.</p>
+
+        <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary open:border-cyan-500/50">
+            <summary class="cursor-pointer font-semibold text-cyan-300 select-none">How to create a Cortex XDR API key (Advanced)</summary>
+            <ol class="mt-3 list-decimal list-inside space-y-2 text-primary/90">
+                <li>In the Cortex XDR console, open <strong class="text-primary">Settings → Configurations → Integrations → API Keys</strong> (see <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-REST-API/Cortex-XDR-API-Overview" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Cortex XDR API overview</a>).</li>
+                <li>Click <strong class="text-primary">+ New Key</strong>.</li>
+                <li>Create an <strong class="text-primary">Advanced</strong> API key (required for signed REST calls). Standard keys are not supported by ZIoCHub.</li>
+                <li>Grant permissions needed for IOC/TIM operations (at minimum: ability to manage indicators / rules; many tenants use a role with Instance Administrator or equivalent IOC edit rights).</li>
+                <li>Copy the <strong class="text-primary">API Key ID</strong> and the <strong class="text-primary">API Key</strong> secret immediately — the secret is shown only once.</li>
+                <li>On the same screen, note the API base host (FQDN), e.g. <code class="px-0.5 rounded bg-white/10 text-xs">https://api-xxxxx.paloaltonetworks.com</code> — paste that into <strong class="text-primary">API base URL</strong> below (host only, no <code class="px-0.5 rounded bg-white/10 text-xs">/public_api/...</code> path).</li>
+                <li>In ZIoCHub: paste ID + secret, click <strong class="text-primary">Save Cortex XDR settings</strong>, then <strong class="text-primary">Test connection</strong>.</li>
+            </ol>
+            <p class="mt-3 text-xs text-secondary">IOC REST reference (list/insert/delete): <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-Platform-APIs/Get-Indicators-IOCs" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Get Indicators (IOCs)</a>. ZIoCHub uses the TIM automation endpoints documented for XSOAR-style integrations (<code class="px-0.5 rounded bg-white/10 text-xs">tim_insert_jsons</code>, etc.), not the browser-only webapp routes.</p>
+            <p class="mt-2 text-xs text-amber-200/90">If Test shows <strong>HTML 500</strong> (not JSON): usually <strong class="text-primary">Gunicorn worker timeout</strong> while waiting for Cortex (fix: <code class="px-0.5 rounded bg-white/10 text-xs">start.sh --timeout 120</code>, <code class="px-0.5 rounded bg-white/10 text-xs">systemctl restart ziochub</code>, Ctrl+F5). Use <strong class="text-primary">Check module</strong> first — must return JSON. Also fix <strong class="text-primary">API base URL</strong>: no spaces (e.g. not <code class="px-0.5 rounded bg-white/10 text-xs">https:// api-…</code>).</p>
+        </details>
+
         <form id="cortexXdrForm" class="space-y-4">
             <div>
                 <label for="cortex_xdr_enabled" class="block text-sm font-semibold text-secondary mb-1">Enable Cortex XDR IOC outbound</label>
@@ -269,14 +285,17 @@
             <div>
                 <label for="cortex_xdr_base_url" class="block text-sm font-semibold text-secondary mb-1">API base URL</label>
                 <input type="text" id="cortex_xdr_base_url" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="https://api-xx.paloaltonetworks.com" value="{{ settings.cortex_xdr_base_url }}" autocomplete="off">
+                <p class="text-secondary text-xs mt-1">HTTPS FQDN only (from API Keys screen), <strong class="text-primary">no spaces</strong>. ZIoCHub appends <code class="px-0.5 rounded bg-white/10 text-xs">/public_api/v1</code> automatically.</p>
             </div>
             <div>
                 <label for="cortex_xdr_api_key_id" class="block text-sm font-semibold text-secondary mb-1">API key ID</label>
                 <input type="text" id="cortex_xdr_api_key_id" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" value="{{ settings.cortex_xdr_api_key_id }}" autocomplete="off">
+                <p class="text-secondary text-xs mt-1">Numeric/string ID from Cortex → API Keys (pairs with the secret below).</p>
             </div>
             <div>
                 <label for="cortex_xdr_api_key" class="block text-sm font-semibold text-secondary mb-1">API key secret</label>
                 <input type="password" id="cortex_xdr_api_key" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="{% if settings.cortex_xdr_api_key %}••••••••{% endif %}" autocomplete="new-password">
+                <p class="text-secondary text-xs mt-1">Advanced API key secret (shown once when the key is created). Leave blank on Save to keep the stored secret.</p>
             </div>
             <div>
                 <label for="cortex_xdr_verify_ssl" class="block text-sm font-semibold text-secondary mb-1">Verify TLS</label>
@@ -295,6 +314,7 @@
             </div>
             <div class="flex flex-wrap items-center gap-3">
                 <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Cortex XDR settings</button>
+                <button type="button" id="cortexXdrPingBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-cyan-400 text-cyan-300 transition" title="Check ZIoCHub module load only (no Cortex call)">Check module</button>
                 <button type="button" id="cortexXdrTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test connection</button>
                 <label class="flex items-center gap-2 text-sm text-secondary cursor-pointer">
                     <input type="checkbox" id="cortexXdrTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
@@ -303,7 +323,7 @@
             </div>
         </form>
         <div id="cortexXdrMessage" class="mt-4 hidden text-sm"></div>
-        <p class="text-secondary text-xs mt-2">Test uses <strong class="text-primary">saved</strong> settings (save after changing URL or keys).</p>
+        <p class="text-secondary text-xs mt-2">Test sends the values in the form below; if API key secret is empty, the last <strong class="text-primary">saved</strong> secret is used. Click <strong class="text-primary">Save</strong> after changing keys so production pushes use the new secret.</p>
         <div id="cortexXdrTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto overflow-y-auto max-h-80 whitespace-pre-wrap break-words"></div>
     </div>
 </div>
@@ -424,7 +444,7 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             var payload = {
                 cortex_xdr_enabled: document.getElementById('cortex_xdr_enabled').value,
                 cortex_xdr_display_name: document.getElementById('cortex_xdr_display_name').value.trim(),
-                cortex_xdr_base_url: document.getElementById('cortex_xdr_base_url').value.trim(),
+                cortex_xdr_base_url: (document.getElementById('cortex_xdr_base_url').value || '').replace(/\s+/g, ''),
                 cortex_xdr_api_key_id: document.getElementById('cortex_xdr_api_key_id').value.trim(),
                 cortex_xdr_verify_ssl: document.getElementById('cortex_xdr_verify_ssl').value,
                 cortex_xdr_hash_blocklist_enabled: document.getElementById('cortex_xdr_hash_blocklist_enabled').checked ? 'true' : 'false'
@@ -451,49 +471,125 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             }
         });
     }
+    var cxPingBtn = document.getElementById('cortexXdrPingBtn');
+    if (cxPingBtn) {
+        cxPingBtn.addEventListener('click', async function() {
+            var logEl = document.getElementById('cortexXdrTestLog');
+            if (!logEl) return;
+            logEl.classList.remove('hidden');
+            logEl.textContent = 'GET /api/admin/cortex-xdr/ping …';
+            logEl.classList.remove('text-green-300', 'text-red-300');
+            try {
+                var res = await fetch('/api/admin/cortex-xdr/ping', { credentials: 'same-origin', headers: { 'Accept': 'application/json' } });
+                var raw = await res.text();
+                var data = {};
+                try { data = raw ? JSON.parse(raw) : {}; } catch (e) {
+                    logEl.textContent = 'Not JSON (HTTP ' + res.status + '). Restart ziochub.service; Ctrl+F5. Check: grep timeout /opt/ziochub/start.sh\n' + raw.slice(0, 800);
+                    logEl.classList.add('text-red-300');
+                    return;
+                }
+                var lines = ['HTTP ' + res.status, data.message || '', data.module ? ('module: ' + data.module) : '', data.hint || ''];
+                logEl.textContent = lines.filter(Boolean).join('\n');
+                logEl.classList.toggle('text-green-300', !!data.success);
+                logEl.classList.toggle('text-red-300', !data.success);
+            } catch (e) {
+                logEl.textContent = 'Ping failed: ' + (e.message || e);
+                logEl.classList.add('text-red-300');
+            }
+        });
+    }
     var cxTestBtn = document.getElementById('cortexXdrTestBtn');
     if (cxTestBtn) {
         cxTestBtn.addEventListener('click', async function() {
+            var btn = this;
             var logEl = document.getElementById('cortexXdrTestLog');
             var ign = document.getElementById('cortexXdrTestIgnoreSsl');
+            var keyEl = document.getElementById('cortex_xdr_api_key');
+            if (!logEl) return;
             logEl.classList.remove('hidden');
-            logEl.textContent = 'Testing…';
-            this.disabled = true;
+            var lines = [];
+            function push(line) {
+                lines.push(line);
+                logEl.textContent = lines.join('\n');
+            }
+            function renderSteps(data) {
+                var steps = data && data.steps;
+                if (!steps || !steps.length) return;
+                if (!Array.isArray(steps)) {
+                    push('✗ server  -  Invalid steps in response (not an array)');
+                    return;
+                }
+                steps.forEach(function(s) {
+                    push((s.status === 'ok' ? '✓ ' : '✗ ') + (s.step || '') + '  -  ' + (s.message || ''));
+                });
+            }
+            push('① POST /api/admin/cortex-xdr/test (browser → ZIoCHub)…');
+            btn.disabled = true;
+            var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+            var timeoutId = controller ? setTimeout(function() { controller.abort(); }, 45000) : null;
             try {
-                var body = {};
+                function cortexBaseUrlFromForm() {
+                    var v = (document.getElementById('cortex_xdr_base_url') || {}).value || '';
+                    return v.replace(/\s+/g, '');
+                }
+                var body = {
+                    settings: {
+                        cortex_xdr_base_url: cortexBaseUrlFromForm(),
+                        cortex_xdr_api_key_id: (document.getElementById('cortex_xdr_api_key_id') || {}).value || '',
+                        cortex_xdr_verify_ssl: (document.getElementById('cortex_xdr_verify_ssl') || {}).value || 'true'
+                    }
+                };
+                if (keyEl && keyEl.value && keyEl.value.length > 0) {
+                    body.settings.cortex_xdr_api_key = keyEl.value;
+                }
                 if (ign && ign.checked) body.ignore_ssl = true;
+                push('② Waiting for ZIoCHub (then POST to Cortex API, up to ~20s)…');
                 var res = await fetch('/api/admin/cortex-xdr/test', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
                     credentials: 'same-origin',
-                    body: JSON.stringify(body)
+                    body: JSON.stringify(body),
+                    signal: controller ? controller.signal : undefined
                 });
-                var data = await res.json().catch(function() { return { message: 'Response was not JSON (HTTP ' + res.status + ')' }; });
-                var lines = [];
+                var rawText = await res.text();
+                var data = {};
+                try {
+                    data = rawText ? JSON.parse(rawText) : {};
+                } catch (parseErr) {
+                    push('✗ ziochub  -  Response was not JSON (HTTP ' + res.status + ')');
+                    if (res.status === 500 && rawText && rawText.indexOf('<html') !== -1) {
+                        push('Likely cause: Gunicorn worker timeout (default 30s) while waiting for Cortex, or old code without JSON handlers.');
+                        push('Fix: grep timeout /opt/ziochub/start.sh (expect 120), systemctl restart ziochub, Ctrl+F5. "Check module" must return JSON first.');
+                        push('If Check module OK but Test fails: fix Base URL (no spaces), open HTTPS:443 to api-*.paloaltonetworks.com (CLI script may show timed out).');
+                    }
+                    if (rawText) push(rawText.slice(0, 1200));
+                    logEl.classList.add('text-red-300');
+                    return;
+                }
+                push('③ ZIoCHub responded HTTP ' + res.status);
                 if (!res.ok) {
-                    lines.push('HTTP ' + res.status + ' from ZIoCHub');
-                    if (data.error_type) lines.push('Error type: ' + data.error_type);
-                    if (data.message) lines.push('Message: ' + data.message);
-                    if (data.hint) lines.push('Hint: ' + data.hint);
+                    if (data.error_type) push('Error type: ' + data.error_type);
+                    if (data.message) push('Message: ' + data.message);
+                    if (data.hint) push('Hint: ' + data.hint);
                 }
-                if (data.steps && data.steps.length) {
-                    data.steps.forEach(function(s) {
-                        lines.push((s.status === 'ok' ? '✓ ' : '✗ ') + (s.step || '') + '  -  ' + (s.message || ''));
-                    });
-                } else if (res.ok && !data.steps) {
-                    lines.push(JSON.stringify(data, null, 2));
+                renderSteps(data);
+                if (!data.steps || !data.steps.length) {
+                    push(data.message || JSON.stringify(data, null, 2));
                 }
-                if (!lines.length) {
-                    lines.push(data.message || ('HTTP ' + res.status));
-                }
-                logEl.textContent = lines.join('\n');
                 logEl.classList.toggle('text-green-300', res.ok && !!data.success);
                 logEl.classList.toggle('text-red-300', !res.ok || !data.success);
             } catch (err) {
-                logEl.textContent = 'Network error: ' + (err.message || err);
+                var em = (err && err.message) ? err.message : String(err);
+                if (err && err.name === 'AbortError') {
+                    push('✗ timeout  -  No response within 60 seconds (ZIoCHub or Cortex may be unreachable).');
+                } else {
+                    push('✗ network  -  Request failed before a response: ' + em);
+                }
                 logEl.classList.add('text-red-300');
+            } finally {
+                if (timeoutId) clearTimeout(timeoutId);
+                btn.disabled = false;
             }
-            this.disabled = false;
         });
     }
     var gs = document.getElementById('googleSecopsForm');

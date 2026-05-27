@@ -397,7 +397,7 @@ function lazyLoad(src) {
         const s = document.createElement('script');
         s.src = src;
         s.onload = () => { _loadedScripts.add(src); resolve(); };
-        s.onerror = () => reject(new Error('Failed to load: ' + src));
+        s.onerror = () => reject(new Error('Failed to load script: ' + src));
         document.head.appendChild(s);
     });
 }
@@ -411,7 +411,6 @@ const _tabScripts = {
     'campaigns':    [_scriptUrls.campaigns],
     'bulk-unified': [_scriptUrls.campaigns],
     'reports':      [_scriptUrls.reports],
-    'search':       [_scriptUrls.search, _scriptUrls.yara, _scriptUrls.campaigns]
 };
 
 // ---------------------------------------------------------------------------
@@ -491,10 +490,15 @@ async function switchTab(tabId, skipHash) {
 
     if (tabId === 'search') {
         try {
-            if (typeof window.loadSearchCountryCodes === 'function') {
+            if (typeof window.performSearch !== 'function') {
+                showToast('Search module did not load. Hard-refresh the page (Ctrl+Shift+R).', 'error', 6000);
+                console.error('search.js missing: window.performSearch is not a function');
+            } else if (typeof window.loadSearchCountryCodes === 'function') {
                 window.loadSearchCountryCodes();
             }
-        } catch (e) { /* ignore */ }
+        } catch (e) {
+            console.error('Search tab init failed:', e);
+        }
     }
 
     if (tabId === 'live-stats') {

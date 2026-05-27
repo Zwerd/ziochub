@@ -56,8 +56,10 @@
     "placeholder": "Search text or pick a line in the list (country or type with count)…",
     "browse_label": "Browse by country or IOC type (counts)",
     "browse_none": "All Groups",
+    "browse_load_failed": "Could not load browse groups. Refresh the page or restart the app.",
     "browse_group_countries": "Countries (IP)",
     "browse_group_types": "By type",
+    "agg_ip": "ip",
     "agg_domain": "domain",
     "agg_email": "email",
     "agg_url": "url",
@@ -500,7 +502,8 @@
     "field_analyst": "Assigned to",
     "yara_status": "Rule status",
     "yara_original_uploader": "Original uploader",
-    "yara_edit_reason": "Change reason"
+    "yara_edit_reason": "Change reason",
+    "reactivated": "Reactivated"
   },
   "feedpulse": {
     "title": "Feed Pulse",

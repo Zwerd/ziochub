@@ -23,6 +23,34 @@ from utils.tags import parse_allowed_tags_setting, normalize_tags_from_input
 # --- Admin API blueprint ---
 bp = Blueprint('admin_api', __name__, url_prefix='/api/admin')
 
+
+@bp.errorhandler(Exception)
+def _admin_api_uncaught_exception(exc):
+    """Return JSON for uncaught errors on /api/admin/* (avoids werkzeug HTML 500 in the UI)."""
+    from werkzeug.exceptions import HTTPException
+    if isinstance(exc, HTTPException):
+        return exc
+    try:
+        path = (request.path or '') if request else ''
+    except Exception:
+        path = ''
+    if not path.startswith('/api/admin'):
+        raise exc
+    logging.exception('admin_api uncaught on %s: %s', path, exc)
+    err_msg = str(exc).strip() or type(exc).__name__
+    return jsonify({
+        'success': False,
+        'message': err_msg,
+        'error_type': type(exc).__name__,
+        'hint': (
+            'ZIoCHub hit an unhandled error on this admin API call. '
+            'Restart python app.py (or ziochub.service) after updating code. '
+            'Run: python scripts/test_cortex_xdr_setup.py'
+        ),
+        'steps': [{'step': 'server', 'status': 'fail', 'message': f'{type(exc).__name__}: {err_msg}'}],
+    }), 200
+
+
 # --- Admin HTML pages blueprint ---
 pages_bp = Blueprint('admin_pages', __name__, url_prefix='/admin')
 
@@ -1004,6 +1032,9 @@ def save_settings():
                         _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
                     elif key == 'google_secops_credentials_json':
                         _set_setting(key, str(val) if val is not None else '')
+                    elif key == 'cortex_xdr_base_url':
+                        from utils.cortex_xdr import sanitize_cortex_base_url
+                        _set_setting(key, sanitize_cortex_base_url(str(val)))
                     else:
                         _set_setting(key, str(val).strip())
                 elif key in esa_keys:
@@ -1184,45 +1215,129 @@ def esa_test():
         return _api_error(str(e), 500)
 
 
+_CORTEX_XDR_TEST_SETTING_KEYS = (
+    'cortex_xdr_base_url',
+    'cortex_xdr_api_key_id',
+    'cortex_xdr_api_key',
+    'cortex_xdr_verify_ssl',
+)
+
+
+def _merge_cortex_xdr_test_settings(saved: dict, override) -> dict:
+    """Merge optional form overrides into saved DB settings (empty api_key keeps saved secret)."""
+    merged = dict(saved)
+    if not isinstance(override, dict):
+        return merged
+    for key in _CORTEX_XDR_TEST_SETTING_KEYS:
+        if key not in override:
+            continue
+        val = override[key]
+        if val is None:
+            continue
+        s = str(val).strip()
+        if key == 'cortex_xdr_api_key' and not s:
+            continue
+        if key == 'cortex_xdr_base_url':
+            from utils.cortex_xdr import sanitize_cortex_base_url
+            s = sanitize_cortex_base_url(s)
+        merged[key] = s
+    return merged
+
+
+def _cortex_xdr_settings_from_db(_get_setting) -> dict:
+    """Load Cortex XDR integration fields from system_settings (no utils→app import)."""
+    keys = (
+        'cortex_xdr_enabled',
+        'cortex_xdr_base_url',
+        'cortex_xdr_api_key_id',
+        'cortex_xdr_api_key',
+        'cortex_xdr_verify_ssl',
+        'cortex_xdr_hash_blocklist_enabled',
+    )
+    return {k: (_get_setting(k, '') or '') for k in keys}
+
+
+def _cortex_xdr_test_json_error(exc: Exception):
+    """Always return JSON (200) so Admin UI never sees werkzeug HTML 500."""
+    logging.exception('api_admin_cortex_xdr_test failed')
+    err_msg = str(exc).strip() or type(exc).__name__
+    return jsonify({
+        'success': False,
+        'message': err_msg,
+        'error_type': type(exc).__name__,
+        'hint': (
+            'ZIoCHub failed before or during the Cortex probe. '
+            'On production: sudo journalctl -u ziochub -n 80 (look for WORKER TIMEOUT). '
+            'Ensure /opt/ziochub/start.sh has gunicorn --timeout 120, then systemctl restart ziochub. '
+            'Run: sudo -u ziochub /opt/ziochub/venv/bin/python /opt/ziochub/scripts/test_cortex_xdr_setup.py'
+        ),
+        'steps': [
+            {
+                'step': 'server',
+                'status': 'fail',
+                'message': f'{type(exc).__name__}: {err_msg}',
+            },
+        ],
+    }), 200
+
+
+@bp.route('/cortex-xdr/ping', methods=['GET'])
+@admin_required
+def cortex_xdr_ping():
+    """Lightweight JSON check: admin auth + utils.cortex_xdr import (no Cortex HTTP call)."""
+    try:
+        from utils import cortex_xdr as cx
+        return jsonify({
+            'success': True,
+            'module': getattr(cx, '__file__', '?'),
+            'message': 'cortex_xdr module loaded',
+        }), 200
+    except Exception as e:
+        logging.exception('cortex_xdr_ping failed')
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'error_type': type(e).__name__,
+            'hint': 'Fix import error, then restart the app.',
+        }), 200
+
+
 @bp.route('/cortex-xdr/test', methods=['POST'])
 @admin_required
 def cortex_xdr_test():
-    """POST Cortex XDR public_api probe using saved Integrations settings."""
-    audit_log, _api_error = _from_app('audit_log', '_api_error')
+    """POST Cortex XDR public_api probe using saved Integrations settings (+ optional form overrides)."""
     try:
-        from utils.cortex_xdr import cortex_xdr_settings_dict, cortex_xdr_test_connection
+        _get_setting, = _from_app('_get_setting')
+        from utils.cortex_xdr import cortex_xdr_test_connection
 
         data = request.get_json(silent=True) or {}
         ignore_ssl = data.get('ignore_ssl')
-        settings = cortex_xdr_settings_dict()
+        settings = _merge_cortex_xdr_test_settings(
+            _cortex_xdr_settings_from_db(_get_setting),
+            data.get('settings'),
+        )
         if ignore_ssl is not None:
             verify_ssl = not (str(ignore_ssl).lower() in ('true', '1', 'yes'))
         else:
             verify_ssl = (settings.get('cortex_xdr_verify_ssl', 'true') or 'true').lower() in ('true', '1', 'yes')
 
         result = cortex_xdr_test_connection(settings, verify_ssl=verify_ssl)
-        audit_log('admin_cortex_xdr_test', f'by={current_user.username} ok={result.get("success")}')
+        if not isinstance(result, dict):
+            raise TypeError(f'cortex_xdr_test_connection returned {type(result).__name__}, expected dict')
+
+        try:
+            audit_log, = _from_app('audit_log')
+            audit_log(
+                'admin_cortex_xdr_test',
+                f'by={current_user.username} ok={result.get("success")}',
+            )
+        except Exception:
+            logging.exception('audit_log admin_cortex_xdr_test failed (test result still returned)')
+
         body = {'success': bool(result.get('success')), **result}
         return jsonify(body), 200
     except Exception as e:
-        logging.exception('api_admin_cortex_xdr_test failed')
-        err_msg = str(e).strip() or type(e).__name__
-        return jsonify({
-            'success': False,
-            'message': err_msg,
-            'error_type': type(e).__name__,
-            'hint': (
-                'Server-side error before/during the Cortex probe. '
-                'Check the Python console (dev) or: journalctl -u ziochub -n 80 --no-pager | grep -i cortex'
-            ),
-            'steps': [
-                {
-                    'step': 'server',
-                    'status': 'fail',
-                    'message': f'{type(e).__name__}: {err_msg}',
-                },
-            ],
-        }), 200
+        return _cortex_xdr_test_json_error(e)
 
 
 @bp.route('/google-secops/test', methods=['POST'])

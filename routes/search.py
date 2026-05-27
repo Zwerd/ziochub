@@ -6,16 +6,17 @@ import json
 import csv
 import io
 import logging
+import os
 from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify, Response
 from flask_login import current_user
-from sqlalchemy import func, cast, String, text
+from sqlalchemy import func, cast, String, text, case
 from sqlalchemy.orm import joinedload, aliased
 
 from extensions import db
 from models import Campaign, IOC, IocHistory, IocNote, YaraRule, User, UserProfile, _utcnow
 from utils.decorators import login_required
-from utils.refanger import sanitize_comment
+from utils.refanger import refanger, sanitize_comment
 from utils.validation import validate_ioc
 from utils.validation_messages import (
     MSG_MISSING_FIELDS_TYPE_VALUE,
@@ -35,6 +36,130 @@ bp = Blueprint('search_bp', __name__)
 def _from_app(*names):
     import app as _app
     return tuple(getattr(_app, n) for n in names)
+
+
+def _search_needles_from_query(query: str) -> list[str]:
+    """Lowercased search needles: raw query plus refanger-cleaned variant when different."""
+    raw = (query or '').strip()
+    if not raw:
+        return []
+    needles: list[str] = []
+    seen: set[str] = set()
+    for candidate in (raw.lower(),):
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            needles.append(candidate)
+    try:
+        cleaned, _ = refanger(raw)
+        c = (cleaned or '').strip().lower()
+        if c and c not in seen:
+            seen.add(c)
+            needles.append(c)
+    except Exception:
+        pass
+    return needles
+
+
+def _sql_value_matches_needles(column, needles: list[str]):
+    """Case-insensitive substring match on trimmed value (SQLite-safe; no LIKE escape issues)."""
+    if not needles:
+        return False
+    return db.or_(*[func.lower(func.trim(column)).contains(n) for n in needles])
+
+
+def _ioc_value_text_matches_needles(row, needles: list[str]) -> bool:
+    val = (row.value or '').strip().lower()
+    if not val or not needles:
+        return False
+    return any(n in val for n in needles)
+
+
+def _lookup_ioc_rows_by_value(query: str, *, include_inactive: bool = False) -> list:
+    """
+    Fast, reliable lookup by IOC value (exact trim match, then substring).
+    When ``include_inactive`` is True, also returns revoked / TTL-expired rows (Search shows them
+    with status Revoked/Expired even though plain feeds omit them).
+    """
+    needles = _search_needles_from_query(query)
+    if not needles:
+        return []
+    seen_ids: set[int] = set()
+    rows: list = []
+
+    def _collect(q):
+        for row in q.all():
+            if row.id not in seen_ids:
+                seen_ids.add(row.id)
+                rows.append(row)
+
+    base = IOC.query.options(joinedload(IOC.campaign))
+    if not include_inactive:
+        base = base.filter(IOC.revoked.is_(False))
+    for n in needles:
+        _collect(base.filter(func.lower(func.trim(IOC.value)) == n))
+        _collect(base.filter(_sql_value_matches_needles(IOC.value, [n])))
+    return rows
+
+
+def _search_legacy_main_txt_for_value(query: str) -> list:
+    """Scan data/Main/*.txt for lines containing the query (unmigrated legacy rows)."""
+    try:
+        import app as _app
+        data_main = getattr(_app, 'DATA_MAIN', None)
+        if not data_main or not os.path.isdir(data_main):
+            return []
+    except Exception:
+        return []
+    needles = _search_needles_from_query(query)
+    if not needles:
+        return []
+    hits = []
+    for ioc_type, filename in IOC_FILES.items():
+        if ioc_type == 'YARA':
+            continue
+        path = os.path.join(data_main, filename)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                for line_num, line in enumerate(f, 1):
+                    raw = line.strip()
+                    if not raw:
+                        continue
+                    ll = raw.lower()
+                    if not any(n in ll for n in needles):
+                        continue
+                    ioc_val = raw
+                    try:
+                        from app import _parse_ioc_line_permissive
+                        parsed = _parse_ioc_line_permissive(raw)
+                        if parsed and parsed.get('ioc'):
+                            ioc_val = (parsed.get('ioc') or '').strip()
+                    except Exception:
+                        ioc_val = raw.split('#')[0].strip() if '#' in raw else raw
+                    hits.append({
+                        'ioc': ioc_val,
+                        'value': ioc_val,
+                        'file_type': ioc_type,
+                        'date': None,
+                        'user': '',
+                        'ref': '',
+                        'comment': '',
+                        'expiration': 'NEVER',
+                        'line_number': line_num,
+                        'raw_line': raw,
+                        'expiration_status': 'Legacy file',
+                        'expires_on': None,
+                        'is_expired': False,
+                        'status': 'Legacy file only',
+                        'campaign_name': None,
+                        'tags': [],
+                        'match_hints': ['legacy_file'],
+                        'legacy_source': filename,
+                    })
+        except OSError:
+            continue
+    return hits
 
 
 def _distinct_ioc_tags_from_db():
@@ -337,7 +462,10 @@ def _compute_ioc_match_hints(row, query_lower: str, filter_type: str, analyst_no
         return hints or ['metadata']
 
     hints = []
-    if ft in ('all', 'ioc_value') and ql in (row.value or '').lower():
+    if ft in ('all', 'ioc_value') and (
+        _ioc_value_text_matches_needles(row, _search_needles_from_query(query_lower))
+        or ql in (row.value or '').lower()
+    ):
         hints.append('ioc_value')
     if ft in ('all', 'user') and ql in (row.analyst or '').lower():
         hints.append('analyst')
@@ -567,6 +695,19 @@ def build_ioc_history_events_list(ioc_type: str, value: str) -> list:
                 payload_hist = {}
                 if ioc_row.expiration_date:
                     payload_hist['expiration_date'] = ioc_row.expiration_date.isoformat()
+                if ioc_row.comment:
+                    payload_hist['comment'] = ioc_row.comment
+                if ioc_row.ticket_id:
+                    payload_hist['ticket_id'] = ioc_row.ticket_id
+                if ioc_row.campaign_id and ioc_row.campaign:
+                    payload_hist['campaign'] = ioc_row.campaign.name or ''
+                if getattr(ioc_row, 'tags', None):
+                    try:
+                        tag_data = json.loads(ioc_row.tags) if isinstance(ioc_row.tags, str) else (ioc_row.tags or [])
+                        if tag_data:
+                            payload_hist['tags'] = [str(t) for t in tag_data if t]
+                    except (TypeError, ValueError):
+                        pass
                 events.append({
                     'event_type': 'created',
                     'username': (ioc_row.analyst or '') or '',
@@ -813,11 +954,11 @@ def _ioc_row_matches_country(row, country_cc):
 
 
 def _search_browse_aggregate_counts() -> dict[str, int]:
-    """Row counts for Search browse lines: domain (N), email (N), URL, and Hash by hex length."""
+    """Row counts for Search browse lines: ip (N), domain (N), email (N), URL, and Hash by hex length."""
     vlen = func.length(func.trim(IOC.value))
 
     def one(*criteria):
-        q = db.session.query(func.count(IOC.id))
+        q = db.session.query(func.count(IOC.id)).filter(IOC.revoked.is_(False))
         for c in criteria:
             q = q.filter(c)
         return int(q.scalar() or 0)
@@ -827,6 +968,7 @@ def _search_browse_aggregate_counts() -> dict[str, int]:
     )
     camp_count = int((db.session.query(func.count(Campaign.id)).scalar() or 0))
     return {
+        'ip': one(IOC.type == 'IP'),
         'domain': one(IOC.type == 'Domain'),
         'email': one(IOC.type == 'Email'),
         'url': one(IOC.type == 'URL'),
@@ -836,12 +978,16 @@ def _search_browse_aggregate_counts() -> dict[str, int]:
         'hash_sha1': one(IOC.type == 'Hash', vlen == 40),
         'hash_sha256': one(IOC.type == 'Hash', vlen == 64),
         'hash_sha512': one(IOC.type == 'Hash', vlen == 128),
-        'hash_other': one(IOC.type == 'Hash', ~vlen.in_((32, 40, 64, 128))),
+        'hash_other': one(
+            IOC.type == 'Hash',
+            db.or_(vlen.is_(None), ~vlen.in_((32, 40, 64, 128))),
+        ),
     }
 
 
 _BROWSE_AGGREGATE_KEYS = frozenset({
-    'domain', 'email', 'url', 'yara', 'campaign', 'hash_md5', 'hash_sha1', 'hash_sha256', 'hash_sha512', 'hash_other',
+    'ip', 'domain', 'email', 'url', 'yara', 'campaign',
+    'hash_md5', 'hash_sha1', 'hash_sha256', 'hash_sha512', 'hash_other',
 })
 
 
@@ -850,6 +996,8 @@ def _ioc_query_browse_aggregate(agg: str):
     vlen = func.length(func.trim(IOC.value))
     ag = (agg or '').strip().lower()
     q = IOC.query.options(joinedload(IOC.campaign)).filter(IOC.revoked.is_(False))
+    if ag == 'ip':
+        return q.filter(IOC.type == 'IP')
     if ag == 'domain':
         return q.filter(IOC.type == 'Domain')
     if ag == 'email':
@@ -878,6 +1026,8 @@ def _ioc_type_label_for_browse_aggregate(agg):
     if not agg:
         return None
     ag = str(agg).strip().lower()
+    if ag == 'ip':
+        return 'IP'
     if ag == 'domain':
         return 'Domain'
     if ag == 'email':
@@ -899,6 +1049,8 @@ def _ioc_row_in_browse_aggregate_bucket(row, agg):
         return True
     ag = str(agg).strip().lower()
     vlen = len((getattr(row, 'value', None) or '').strip())
+    if ag == 'ip':
+        return row.type == 'IP'
     if ag == 'domain':
         return row.type == 'Domain'
     if ag == 'email':
@@ -1044,39 +1196,50 @@ def _yara_query_for_search_filter(filter_type, query_lower):
 
 @bp.route('/api/search/browse-filters', methods=['GET'])
 def search_browse_filters():
-    """Aggregate IOC counts for the Search browse ``<select>`` (domain (N), email (N), md5 (N), …)."""
-    return jsonify({'success': True, 'aggregates': _search_browse_aggregate_counts()})
+    """Aggregate IOC counts for the Search browse ``<select>`` (ip (N), domain (N), email (N), md5 (N), …)."""
+    try:
+        return jsonify({'success': True, 'aggregates': _search_browse_aggregate_counts()})
+    except Exception as e:
+        logger.exception('search_browse_filters failed')
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 @bp.route('/api/ip-country-codes', methods=['GET'])
 def list_ip_country_codes():
     """Distinct ``country_code`` values on IP IOCs (non-empty), with row counts. Sorted by count descending."""
-    code_expr = func.lower(func.trim(IOC.country_code))
-    rows = (
-        db.session.query(code_expr.label('code'), func.count(IOC.id).label('cnt'))
-        .filter(IOC.type == 'IP', IOC.country_code.isnot(None))
-        .group_by(code_expr)
-        .order_by(func.count(IOC.id).desc(), code_expr.asc())
-        .all()
-    )
-    countries = [{'code': r.code, 'count': int(r.cnt)} for r in rows if r.code and str(r.code).strip()]
-    return jsonify({'success': True, 'countries': countries})
+    try:
+        code_expr = func.lower(func.trim(IOC.country_code))
+        rows = (
+            db.session.query(code_expr.label('code'), func.count(IOC.id).label('cnt'))
+            .filter(
+                IOC.type == 'IP',
+                IOC.revoked.is_(False),
+                IOC.country_code.isnot(None),
+                func.trim(IOC.country_code) != '',
+            )
+            .group_by(code_expr)
+            .order_by(func.count(IOC.id).desc(), code_expr.asc())
+            .all()
+        )
+        countries = [{'code': r.code, 'count': int(r.cnt)} for r in rows if r.code and str(r.code).strip()]
+        return jsonify({'success': True, 'countries': countries})
+    except Exception as e:
+        logger.exception('list_ip_country_codes failed')
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 
 @bp.route('/api/search', methods=['GET'])
 def search_ioc():
-    """Search for an IOC across all types with optional field filter (including tag).
+    """Search for an IOC across all types with optional field filter (including tag)."""
+    try:
+        return _search_ioc_impl()
+    except Exception as e:
+        logger.exception('search_ioc failed')
+        return jsonify({'success': False, 'message': f'Search error: {e}'}), 500
 
-    ``filter`` may include ``metadata`` (ticket, analyst, submission comment, tags, campaign text — not IOC value).
 
-    Optional query param ``country_code`` (or ``country``): ISO 3166-1 alpha-2, e.g. ``us`` for United States.
-    When set, results are limited to IP IOCs with a matching stored ``country_code`` (GeoIP at ingest).
-    ``q`` may be empty if ``country_code`` is set (lists IPs for that country, paginated).
-
-    When ``q`` is empty, you may pass ``browse_aggregate`` = ``domain`` | ``email`` | ``url`` | ``hash_md5`` |
-    ``hash_sha1`` | ``hash_sha256`` | ``hash_sha512`` | ``hash_other`` to list all matching IOC rows (paginated),
-    same style as choosing a country for IPs. Hash buckets use trimmed value length (32/40/64/128 hex chars).
-    """
+def _search_ioc_impl():
+    """GET /api/search implementation (see search_ioc docstring)."""
     (_tag_matches, _search_expiration_status_matches, _ioc_row_to_search_result,
      _deleted_history_matches, _history_deleted_to_search_result) = _from_app(
         '_tag_matches', '_search_expiration_status_matches', '_ioc_row_to_search_result',
@@ -1093,14 +1256,86 @@ def search_ioc():
             'message': 'country_code must be a 2-letter ISO code (e.g. us for United States)',
         }), 400
 
+    needles = _search_needles_from_query(query)
+    narrow_browse = request.args.get('narrow_browse', '').strip().lower() in ('1', 'true', 'yes')
+    # Text search should find the IOC everywhere in the DB. Browse/country filters are for empty-q
+    # browsing only; they often hide legacy rows (no GeoIP country_code, wrong hash bucket, etc.).
+    if query and not narrow_browse:
+        country_cc = ''
+        country_raw = ''
+
     # Allow combining free-text search with the "Browse" dropdown.
     # browse_aggregate acts as an additional type/bucket constraint (domain/email/url/hash buckets).
     browse_aggregate = (request.args.get('browse_aggregate') or '').strip().lower()
+    if query and not narrow_browse:
+        browse_aggregate = ''
     if browse_aggregate and browse_aggregate not in _BROWSE_AGGREGATE_KEYS:
         return jsonify({
             'success': False,
-            'message': 'Invalid browse_aggregate (use domain, email, url, hash_md5, hash_sha1, …)',
+            'message': 'Invalid browse_aggregate (use ip, domain, email, url, hash_md5, hash_sha1, …)',
         }), 400
+
+    query_lower = query.lower()
+    inactive_note = None
+
+    # Fast path: value-shaped queries — active rows first, then revoked/expired (old TTL IOCs).
+    if query and filter_type in ('all', 'ioc_value'):
+        fast_rows = _lookup_ioc_rows_by_value(query, include_inactive=False)
+        search_note = None
+        if not fast_rows:
+            inactive = _lookup_ioc_rows_by_value(query, include_inactive=True)
+            if inactive:
+                fast_rows = inactive
+                search_note = (
+                    'Found revoked or expired IOC(s) only. They are omitted from plain /feed/* '
+                    'responses; clear feed cache if an old feed URL still lists them.'
+                )
+        if fast_rows:
+            results = _enrich_ioc_results_with_hints(
+                fast_rows[:per_page],
+                _ioc_row_to_search_result,
+                query_lower,
+                filter_type,
+                set(),
+                _tag_matches,
+                _search_expiration_status_matches,
+            )
+            for d in results:
+                row = next((r for r in fast_rows if r.id == d.get('line_number')), None)
+                if row and getattr(row, 'revoked', False):
+                    d['status'] = 'Revoked'
+                    d['expiration_status'] = 'Revoked'
+            inactive_note = search_note
+            out_fast = {
+                'success': True,
+                'query': query,
+                'filter': filter_type,
+                'results': results,
+                'count': len(results),
+                'total': len(fast_rows),
+                'page': page,
+                'per_page': per_page,
+            }
+            if inactive_note:
+                out_fast['search_note'] = inactive_note
+            return jsonify(out_fast)
+        legacy_hits = _search_legacy_main_txt_for_value(query)
+        if legacy_hits:
+            inactive_note = (
+                'Found only in legacy data/Main/*.txt (not in SQLite). '
+                'Plain feeds use the database; an old cached /feed/* response may still show this value.'
+            )
+            return jsonify({
+                'success': True,
+                'query': query,
+                'filter': filter_type,
+                'results': legacy_hits[:per_page],
+                'count': min(len(legacy_hits), per_page),
+                'total': len(legacy_hits),
+                'page': page,
+                'per_page': per_page,
+                'search_note': inactive_note,
+            })
 
     # Empty query: only "All columns" lists every IOC (paginated). Other filters need dedicated logic.
     if not query and not country_cc and not browse_aggregate and filter_type == 'all':
@@ -1246,7 +1481,6 @@ def search_ioc():
             'per_page': per_page,
         })
 
-    query_lower = query.lower()
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     q = IOC.query.options(joinedload(IOC.campaign)).filter(IOC.revoked.is_(False))
     if country_cc:
@@ -1254,7 +1488,9 @@ def search_ioc():
     if browse_aggregate:
         vlen = func.length(func.trim(IOC.value))
         ag = browse_aggregate
-        if ag == 'domain':
+        if ag == 'ip':
+            q = q.filter(IOC.type == 'IP')
+        elif ag == 'domain':
             q = q.filter(IOC.type == 'Domain')
         elif ag == 'email':
             q = q.filter(IOC.type == 'Email')
@@ -1271,7 +1507,10 @@ def search_ioc():
         elif ag == 'hash_other':
             q = q.filter(IOC.type == 'Hash', ~vlen.in_((32, 40, 64, 128)))
     if filter_type == 'ioc_value':
-        q = q.filter(func.lower(IOC.value).contains(query_lower))
+        if needles:
+            q = q.filter(_sql_value_matches_needles(IOC.value, needles))
+        else:
+            q = q.filter(func.lower(IOC.value).contains(query_lower))
     elif filter_type == 'ticket_id':
         q = q.filter(IOC.ticket_id.isnot(None), func.lower(IOC.ticket_id).contains(query_lower))
     elif filter_type == 'user':
@@ -1445,8 +1684,9 @@ def search_ioc():
             out['country_code'] = country_cc
         return jsonify(out)
     elif filter_type == 'all':
+        value_match_sql = _sql_value_matches_needles(IOC.value, needles) if needles else func.lower(IOC.value).contains(query_lower)
         all_conditions = [
-            func.lower(IOC.value).contains(query_lower),
+            value_match_sql,
             func.lower(IOC.analyst).contains(query_lower),
             db.and_(IOC.ticket_id.isnot(None), func.lower(IOC.ticket_id).contains(query_lower)),
             db.and_(IOC.comment.isnot(None), func.lower(IOC.comment).contains(query_lower)),
@@ -1468,9 +1708,10 @@ def search_ioc():
             )
         )
     else:
+        value_conds = [_sql_value_matches_needles(IOC.value, needles)] if needles else [func.lower(IOC.value).contains(query_lower)]
         q = q.filter(
             db.or_(
-                func.lower(IOC.value).contains(query_lower),
+                *value_conds,
                 func.lower(IOC.analyst).contains(query_lower),
                 func.lower(IOC.ticket_id).contains(query_lower),
                 func.lower(IOC.comment).contains(query_lower)
@@ -1483,8 +1724,16 @@ def search_ioc():
         total = len(filtered)
         rows = filtered[(page - 1) * per_page: page * per_page]
     else:
+        if filter_type in ('all', 'ioc_value') and needles:
+            value_hit = _sql_value_matches_needles(IOC.value, needles)
+            q = q.order_by(case((value_hit, 0), else_=1), IOC.created_at.desc(), IOC.id.desc())
+        else:
+            q = q.order_by(IOC.created_at.desc(), IOC.id.desc())
         total = q.count()
-        rows = q.offset((page - 1) * per_page).limit(per_page).all()
+        fetch_limit = per_page
+        if filter_type == 'all':
+            fetch_limit = min(max(per_page, per_page * 5), 5000)
+        rows = q.offset((page - 1) * per_page).limit(fetch_limit).all()
     if filter_type == 'all':
         seen_ids = set()
         deduped = []
@@ -1493,7 +1742,7 @@ def search_ioc():
                 continue
             seen_ids.add(r.id)
             if (
-                query_lower in (r.value or '').lower() or
+                _ioc_value_text_matches_needles(r, needles) or
                 query_lower in (r.analyst or '').lower() or
                 query_lower in (r.ticket_id or '').lower() or
                 query_lower in (r.comment or '').lower() or
@@ -1507,7 +1756,7 @@ def search_ioc():
                 _search_expiration_status_matches(r, query_lower)
             ):
                 deduped.append(r)
-        rows = deduped
+        rows = deduped[:per_page]
     analyst_note_keys = set()
     if query_lower:
         if filter_type == 'all':
@@ -1597,6 +1846,41 @@ def search_ioc():
             dh = _history_deleted_to_search_result(h)
             dh['match_hints'] = _deleted_history_match_hints(h, query_lower, filter_type)
             results.append(dh)
+    if not results and needles and filter_type in ('all', 'ioc_value'):
+        exact_rows = _lookup_ioc_rows_by_value(query, include_inactive=False)
+        inactive_note = None
+        if not exact_rows:
+            exact_rows = _lookup_ioc_rows_by_value(query, include_inactive=True)
+            if exact_rows:
+                inactive_note = (
+                    'Found revoked or expired IOC(s) only. Plain /feed/* omits them; '
+                    'clear feed cache if the feed URL still lists this value.'
+                )
+        if exact_rows:
+            results = _enrich_ioc_results_with_hints(
+                exact_rows[:per_page],
+                _ioc_row_to_search_result,
+                query_lower,
+                filter_type,
+                set(),
+                _tag_matches,
+                _search_expiration_status_matches,
+            )
+            for d in results:
+                row = next((r for r in exact_rows if r.id == d.get('line_number')), None)
+                if row and getattr(row, 'revoked', False):
+                    d['status'] = 'Revoked'
+                    d['expiration_status'] = 'Revoked'
+            total = len(exact_rows)
+        else:
+            legacy_hits = _search_legacy_main_txt_for_value(query)
+            if legacy_hits:
+                results = legacy_hits[:per_page]
+                total = len(legacy_hits)
+                inactive_note = (
+                    'Found only in legacy data/Main/*.txt (not in SQLite). '
+                    'Feeds use the database; stale feed cache may still show old values.'
+                )
     out = {
         'success': True,
         'query': query,
@@ -1609,6 +1893,8 @@ def search_ioc():
     }
     if country_cc:
         out['country_code'] = country_cc
+    if inactive_note:
+        out['search_note'] = inactive_note
     return jsonify(out)
 
 

@@ -4747,6 +4747,8 @@ textarea:focus-visible {
 }
 
 .history-modal-scroll { max-height: 50vh; }
+.history-created-comment { text-align: start; }
+[dir="rtl"] .history-created-comment { text-align: right; }
 
 /* MISP toggle button in Champs spotlight chart */
 .champs-misp-toggle {

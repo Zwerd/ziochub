@@ -56,8 +56,10 @@
     "placeholder": "טקסט לחיפוש או שורה מהרשימה (מדינה או סוג עם מספר)…",
     "browse_label": "סינון לפי מדינה או סוג IOC (מספרים)",
     "browse_none": "כל הקבוצות",
+    "browse_load_failed": "לא ניתן לטעון קבוצות לסינון. רענן את הדף או הפעל מחדש את האפליקציה.",
     "browse_group_countries": "מדינות (IP)",
     "browse_group_types": "לפי סוג",
+    "agg_ip": "ip",
     "agg_domain": "דומיין",
     "agg_email": "אימייל",
     "agg_url": "url",
@@ -500,7 +502,8 @@
     "field_analyst": "משויך ל",
     "yara_status": "סטטוס כלל",
     "yara_original_uploader": "מעלה מקורי",
-    "yara_edit_reason": "סיבת השינוי"
+    "yara_edit_reason": "סיבת השינוי",
+    "reactivated": "הופעל מחדש"
   },
   "feedpulse": {
     "title": "דופק הפידים",

@@ -281,9 +281,25 @@ def _api_ok(data=None, message=None):
 @app.errorhandler(500)
 def _api_500_json(exc):
     """Ensure /api/* always gets JSON on 500, so frontend never sees HTML (e.g. LDAP test)."""
-    if request.path.startswith('/api/'):
-        logging.exception('API 500: %s', exc)
-        return jsonify({'success': False, 'message': 'Internal server error. Check server logs.'}), 500
+    try:
+        path = (request.path or '') if request else ''
+    except Exception:
+        path = ''
+    if path.startswith('/api/'):
+        try:
+            logging.exception('API 500: %s', exc)
+            detail = str(exc).strip() if exc else ''
+            msg = 'Internal server error. Check server logs.'
+            if detail:
+                msg = f'{msg} ({type(exc).__name__}: {detail[:500]})'
+            return jsonify({
+                'success': False,
+                'message': msg,
+                'error_type': type(exc).__name__ if exc else 'Error',
+                'steps': [{'step': 'server', 'status': 'fail', 'message': msg}],
+            }), 500
+        except Exception:
+            pass
     from flask import make_response
     r = make_response('<h1>Internal Server Error</h1>', 500)
     r.headers['Content-Type'] = 'text/html; charset=utf-8'

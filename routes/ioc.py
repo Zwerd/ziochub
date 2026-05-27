@@ -31,6 +31,46 @@ from utils.upload_text_encoding import decode_uploaded_text_bytes
 
 bp = Blueprint('ioc_bp', __name__)
 
+
+def _ioc_created_history_payload(
+    *,
+    entered_by: str,
+    assigned_to: str,
+    comment=None,
+    ticket_id=None,
+    expiration_date=None,
+    reactivated: bool = False,
+    campaign_name=None,
+    tags_list=None,
+) -> dict:
+    """Build IocHistory payload for event_type='created' (shown in Search → History modal)."""
+    payload = {
+        'entered_by': (entered_by or '').strip(),
+        'assigned_to': (assigned_to or '').strip(),
+    }
+    cmt = sanitize_comment(comment) if comment else ''
+    if cmt:
+        payload['comment'] = cmt
+    tid = (ticket_id or '').strip()
+    if tid:
+        payload['ticket_id'] = tid
+    if expiration_date is not None:
+        if hasattr(expiration_date, 'isoformat'):
+            payload['expiration_date'] = expiration_date.isoformat()
+        else:
+            s = str(expiration_date).strip()
+            if s:
+                payload['expiration_date'] = s[:10] if len(s) >= 10 else s
+    if reactivated:
+        payload['reactivated'] = True
+    cn = (campaign_name or '').strip()
+    if cn:
+        payload['campaign'] = cn
+    if tags_list:
+        payload['tags'] = [str(t) for t in tags_list if t is not None and str(t).strip()]
+    return payload
+
+
 def _log_sanity_warning_history(_log_ioc_history_fn, ioc_type: str, value: str, warnings_list: list[str]):
     """
     Record a sanity warning in IOC history so future searches show the system concern.
@@ -55,6 +95,11 @@ def _log_ioc_reactivation_history_if_needed(
     analyst: str,
     exp_date,
     entered_by: str,
+    *,
+    comment=None,
+    ticket_id=None,
+    campaign_name=None,
+    tags_list=None,
 ):
     """
     After apply_ioc_submission_to_existing_row: if the row was inactive (revoked or expired),
@@ -64,15 +109,16 @@ def _log_ioc_reactivation_history_if_needed(
     if was_active_before:
         return
     try:
-        payload_hist = {
-            'entered_by': (entered_by or '').strip(),
-            'assigned_to': (analyst or '').strip(),
-        }
-        if exp_date:
-            payload_hist['expiration_date'] = (
-                exp_date.isoformat() if hasattr(exp_date, 'isoformat') else str(exp_date)[:10]
-            )
-        payload_hist['reactivated'] = True
+        payload_hist = _ioc_created_history_payload(
+            entered_by=entered_by,
+            assigned_to=analyst,
+            comment=comment,
+            ticket_id=ticket_id,
+            expiration_date=exp_date,
+            reactivated=True,
+            campaign_name=campaign_name,
+            tags_list=tags_list,
+        )
         _log_ioc_history_fn(ioc_type, value, 'created', analyst, payload_hist)
     except Exception:
         logging.exception('_log_ioc_reactivation_history_if_needed failed')
@@ -800,14 +846,16 @@ def submit_ioc():
         except (ValueError, OSError) as e:
             db.session.rollback()
             return _api_error(f'Database error: {str(e)}', 500)
-        payload_hist = {
-            'entered_by': current_user.username or '',
-            'assigned_to': username,
-        }
-        if exp_date:
-            payload_hist['expiration_date'] = exp_date.isoformat()
-        if reactivated:
-            payload_hist['reactivated'] = True
+        payload_hist = _ioc_created_history_payload(
+            entered_by=current_user.username or '',
+            assigned_to=username,
+            comment=comment,
+            ticket_id=ticket_id,
+            expiration_date=exp_date,
+            reactivated=reactivated,
+            campaign_name=campaign_name,
+            tags_list=tags_list,
+        )
         _log_ioc_history(ioc_type, value, 'created', username, payload_hist)
         _log_sanity_warning_history(
             _log_ioc_history,
@@ -996,14 +1044,14 @@ def ingest_ioc():
                 ))
             _commit_with_retry()
             entered_by = current_user.username if (current_user and current_user.is_authenticated) else 'API'
-            payload_hist = {
-                'entered_by': entered_by,
-                'assigned_to': username,
-            }
-            if exp_dt:
-                payload_hist['expiration_date'] = exp_dt.isoformat()
-            if reactivated_ingest:
-                payload_hist['reactivated'] = True
+            payload_hist = _ioc_created_history_payload(
+                entered_by=entered_by,
+                assigned_to=username,
+                comment=comment,
+                ticket_id=ticket_id,
+                expiration_date=exp_dt,
+                reactivated=reactivated_ingest,
+            )
             _log_ioc_history(ioc_type, value, 'created', username, payload_hist)
             _commit_with_retry()
             cmt = (comment or '').strip()[:80]
@@ -1229,6 +1277,10 @@ def bulk_csv():
                             username,
                             exp_date,
                             current_user.username if current_user.is_authenticated else '',
+                            comment=comment,
+                            ticket_id=ticket_id_val,
+                            campaign_name=campaign_name,
+                            tags_list=tags_list,
                         )
                         _log_sanity_warning_history(
                             _log_ioc_history, ioc_type, value, get_sanity_warnings(value, ioc_type)
@@ -1243,12 +1295,15 @@ def bulk_csv():
                         rare=rare,
                         tags=tags_json,
                     ))
-                    payload_hist = {
-                        'entered_by': current_user.username or '',
-                        'assigned_to': username,
-                    }
-                    if exp_date:
-                        payload_hist['expiration_date'] = exp_date.isoformat()
+                    payload_hist = _ioc_created_history_payload(
+                        entered_by=current_user.username or '',
+                        assigned_to=username,
+                        comment=comment,
+                        ticket_id=ticket_id_val,
+                        expiration_date=exp_date,
+                        campaign_name=campaign_name,
+                        tags_list=tags_list,
+                    )
                     _log_ioc_history(ioc_type, value, 'created', username, payload_hist)
                     _log_sanity_warning_history(_log_ioc_history, ioc_type, value, get_sanity_warnings(value, ioc_type))
                     new_count += 1
@@ -1939,6 +1994,10 @@ def submit_staging():
                         analyst,
                         exp_date,
                         current_user.username if current_user.is_authenticated else '',
+                        comment=comment,
+                        ticket_id=ticket_id,
+                        campaign_name=campaign_name,
+                        tags_list=item_tags_list,
                     )
                     _log_sanity_warning_history(
                         _log_ioc_history, ioc_type, ioc_value, get_sanity_warnings(ioc_value, ioc_type)
@@ -1952,12 +2011,15 @@ def submit_staging():
                     campaign_id=campaign_id, user_id=user_id, rare=rare,
                     tags=item_tags_json,
                 ))
-                payload_hist = {
-                    'entered_by': current_user.username or '',
-                    'assigned_to': analyst,
-                }
-                if exp_date:
-                    payload_hist['expiration_date'] = exp_date.isoformat() if hasattr(exp_date, 'isoformat') else str(exp_date)[:10]
+                payload_hist = _ioc_created_history_payload(
+                    entered_by=current_user.username or '',
+                    assigned_to=analyst,
+                    comment=comment,
+                    ticket_id=ticket_id,
+                    expiration_date=exp_date,
+                    campaign_name=campaign_name,
+                    tags_list=item_tags_list,
+                )
                 _log_ioc_history(ioc_type, ioc_value, 'created', analyst, payload_hist)
                 _log_sanity_warning_history(_log_ioc_history, ioc_type, ioc_value, get_sanity_warnings(ioc_value, ioc_type))
                 total_new += 1
@@ -2217,6 +2279,10 @@ def upload_txt():
                             store_analyst,
                             exp_date,
                             current_user.username if current_user.is_authenticated else '',
+                            comment=meta.get('comment'),
+                            ticket_id=meta.get('ticket_id'),
+                            campaign_name=campaign_name,
+                            tags_list=tags_list,
                         )
                 else:
                     rare = _compute_rare_find_fields(ioc_type, value)
@@ -2237,12 +2303,15 @@ def upload_txt():
                         rare=rare,
                         tags=tags_json,
                     ))
-                    payload_hist = {
-                        'entered_by': current_user.username or '',
-                        'assigned_to': store_analyst,
-                    }
-                    if exp_date:
-                        payload_hist['expiration_date'] = exp_date.isoformat()
+                    payload_hist = _ioc_created_history_payload(
+                        entered_by=current_user.username or '',
+                        assigned_to=store_analyst,
+                        comment=meta.get('comment'),
+                        ticket_id=meta.get('ticket_id'),
+                        expiration_date=exp_date,
+                        campaign_name=campaign_name,
+                        tags_list=tags_list,
+                    )
                     _log_ioc_history(ioc_type, value, 'created', store_analyst, payload_hist)
                     new_count += 1
                     new_iocs_for_push.append(ioc_context_from_submission(

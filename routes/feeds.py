@@ -229,8 +229,12 @@ STIX_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, 'ziochub.taxii.stix')
 
 
 def _stix_id_for_ioc(row):
-    """Return deterministic STIX 2.1 indicator id for an IOC row (stable across requests)."""
-    return f"indicator--{uuid.uuid5(STIX_ID_NAMESPACE, f'ioc.{row.id}').hex}"
+    """Deterministic STIX 2.1 indicator id for an IOC row (stable across requests).
+
+    STIX 2.1 / RFC 4122 requires the canonical 8-4-4-4-12 hyphenated UUID form,
+    e.g. ``indicator--a828fed8-fbfb-5ddc-87ed-84c85b8f0649`` — NOT the 32-char hex form.
+    """
+    return f"indicator--{uuid.uuid5(STIX_ID_NAMESPACE, f'ioc.{row.id}')}"
 
 
 def _stix_indicator_from_row(row, now=None):

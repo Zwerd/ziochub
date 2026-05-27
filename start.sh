@@ -11,6 +11,9 @@ KEY="${APP_DIR}/data/ssl/key.pem"
 CA="${APP_DIR}/data/ssl/ca.pem"
 PORT="${ZIOCHUB_PORT:-8443}"
 WORKERS="${ZIOCHUB_WORKERS:-3}"
+# Cortex/integration tests can block up to REQUEST_TIMEOUT_TEST_SEC (15s) per outbound call;
+# default gunicorn worker timeout is 30s — too low and the UI sees HTML 500 instead of JSON.
+TIMEOUT="${GUNICORN_TIMEOUT:-120}"
 
 SSL_ARGS=""
 if [[ -f "$CERT" && -f "$KEY" ]]; then
@@ -24,6 +27,7 @@ fi
 exec "${APP_DIR}/venv/bin/gunicorn" \
     --workers "${WORKERS}" \
     --bind "0.0.0.0:${PORT}" \
+    --timeout "${TIMEOUT}" \
     ${SSL_ARGS} \
     --access-logfile - \
     --error-logfile - \

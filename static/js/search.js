@@ -87,6 +87,7 @@
         var noneLabel = s.browse_none || '\u2014 None \u2014';
 
         var aggOrder = [
+            { key: 'ip', labelKey: 'agg_ip' },
             { key: 'domain', labelKey: 'agg_domain' },
             { key: 'email', labelKey: 'agg_email' },
             { key: 'url', labelKey: 'agg_url' },
@@ -99,9 +100,28 @@
             { key: 'hash_other', labelKey: 'agg_other' }
         ];
 
+        function fetchSearchBrowseJson(url) {
+            return fetch(url, { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+                .then(function (r) {
+                    if (!r.ok) {
+                        return r.json().catch(function () { return {}; }).then(function (body) {
+                            var msg = (body && body.message) ? body.message : ('HTTP ' + r.status);
+                            throw new Error(msg);
+                        });
+                    }
+                    return r.json();
+                });
+        }
+
         Promise.all([
-            fetch('/api/ip-country-codes').then(function (r) { return r.json(); }).catch(function () { return {}; }),
-            fetch('/api/search/browse-filters').then(function (r) { return r.json(); }).catch(function () { return {}; })
+            fetchSearchBrowseJson('/api/ip-country-codes').catch(function (err) {
+                console.warn('ip-country-codes:', err);
+                return { success: false, _error: err };
+            }),
+            fetchSearchBrowseJson('/api/search/browse-filters').catch(function (err) {
+                console.warn('browse-filters:', err);
+                return { success: false, _error: err };
+            })
         ]).then(function (pair) {
             var cdata = pair[0];
             var bdata = pair[1];
@@ -164,6 +184,16 @@
                 sel.appendChild(opt);
             });
 
+            if (!items.length && (pair[0]._error || pair[1]._error || !(cdata && cdata.success) || !(bdata && bdata.success))) {
+                if (typeof global.showToast === 'function') {
+                    global.showToast(
+                        (typeof t === 'function' ? t('search.browse_load_failed') : null) ||
+                        'Could not load browse groups. Check the server log and refresh the page.',
+                        'warning'
+                    );
+                }
+            }
+
             if (prev) {
                 for (var i = 0; i < sel.options.length; i++) {
                     if (sel.options[i].value === prev) {
@@ -172,7 +202,12 @@
                     }
                 }
             }
-        }).catch(function () { /* keep first option */ });
+        }).catch(function (err) {
+            console.error('loadSearchBrowseSelect failed:', err);
+            if (typeof global.showToast === 'function') {
+                global.showToast('Could not load browse groups. Try refreshing or logging in again.', 'warning');
+            }
+        });
     }
 
     function performSearch() {
@@ -188,31 +223,59 @@
         // Empty search with "All Groups" + "All Columns" should list everything (paginated).
 
         let url = `/api/search?q=${encodeURIComponent(query)}&filter=${encodeURIComponent(filter)}`;
-        if (countryCode) {
+        // Country / type browse apply only when browsing without a search term (see API).
+        if (countryCode && !query) {
             url += '&country_code=' + encodeURIComponent(countryCode);
         }
-        if (browseAgg) {
+        if (browseAgg && !query) {
             url += '&browse_aggregate=' + encodeURIComponent(browseAgg);
         }
         if (!query && (countryCode || browseAgg)) {
             url += '&per_page=1000';
         }
 
-        fetch(url)
-            .then(response => response.json())
-            .then(result => {
-                if (result.success) {
+        fetch(url, { credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'application/json' } })
+            .then(function (response) {
+                return response.text().then(function (text) {
+                    var result = {};
+                    try {
+                        result = text ? JSON.parse(text) : {};
+                    } catch (parseErr) {
+                        console.error('Search response not JSON:', text.slice(0, 500));
+                        throw new Error('Server returned invalid JSON (HTTP ' + response.status + ')');
+                    }
+                    if (!response.ok) {
+                        var msg = (result && result.message) ? result.message : ('HTTP ' + response.status);
+                        if (typeof showToast === 'function') showToast(msg, 'error');
+                        console.error('Search failed:', msg, result);
+                        return;
+                    }
+                    if (!result.success) {
+                        if (typeof showToast === 'function') showToast(result.message || 'Search failed', 'error');
+                        return;
+                    }
+                    if (result.search_note && typeof showToast === 'function') {
+                        showToast(result.search_note, 'warning', 8000);
+                    }
                     if (result.results && result.results.length > 0) {
-                        displaySearchResults(result.results, result.total);
+                        try {
+                            displaySearchResults(result.results, result.total);
+                        } catch (renderErr) {
+                            console.error('displaySearchResults failed:', renderErr);
+                            if (typeof showToast === 'function') {
+                                showToast('Search found results but the table failed to render. See browser console.', 'error');
+                            }
+                        }
                     } else {
                         showNoResults();
                     }
-                } else {
-                    showToast(result.message || 'Search failed', 'error');
-                }
+                });
             })
-            .catch(error => {
-                showToast(t('toast.error_search') + ': ' + error.message, 'error');
+            .catch(function (error) {
+                console.error('Search request error:', error);
+                if (typeof showToast === 'function') {
+                    showToast((typeof t === 'function' ? t('toast.error_search') : 'Search error') + ': ' + error.message, 'error');
+                }
             });
     }
 
@@ -282,6 +345,10 @@
     }
 
     function _renderSearchPage() {
+        if (!resultsTableBody) {
+            console.error('resultsTableBody missing');
+            return;
+        }
         _sortSearchResults();
         const pageSize = _getPageSize();
         const totalPages = Math.max(1, Math.ceil(_searchAllResults.length / pageSize));
@@ -289,7 +356,8 @@
         const start = (_searchPage - 1) * pageSize;
         const pageResults = _searchAllResults.slice(start, start + pageSize);
         const query = (searchInput && searchInput.value) ? searchInput.value.trim() : '';
-        const filter = _searchLastFilter || (document.getElementById('searchFilter')?.value || 'all');
+        var filterEl = document.getElementById('searchFilter');
+        const filter = _searchLastFilter || (filterEl ? filterEl.value : null) || 'all';
         resultsTableBody.innerHTML = '';
         pageResults.forEach((result, index) => {
             _renderSearchRow(result, query, filter);
@@ -303,13 +371,19 @@
         if (info) info.textContent = `${_searchPage} / ${totalPages}`;
     }
 
-    document.getElementById('searchPrevPage')?.addEventListener('click', () => { _searchPage--; _renderSearchPage(); });
-    document.getElementById('searchNextPage')?.addEventListener('click', () => { _searchPage++; _renderSearchPage(); });
-    document.getElementById('searchPageSize')?.addEventListener('change', () => { _searchPage = 1; _renderSearchPage(); });
+    var searchPrevPageEl = document.getElementById('searchPrevPage');
+    var searchNextPageEl = document.getElementById('searchNextPage');
+    var searchPageSizeEl = document.getElementById('searchPageSize');
+    if (searchPrevPageEl) searchPrevPageEl.addEventListener('click', function () { _searchPage--; _renderSearchPage(); });
+    if (searchNextPageEl) searchNextPageEl.addEventListener('click', function () { _searchPage++; _renderSearchPage(); });
+    if (searchPageSizeEl) searchPageSizeEl.addEventListener('change', function () { _searchPage = 1; _renderSearchPage(); });
 
     function displaySearchResults(results, totalFromApi) {
+        if (!searchResults || !resultsTableBody) {
+            throw new Error('Search results container not found in the page');
+        }
         searchResults.classList.remove('hidden');
-        searchNoResults.classList.add('hidden');
+        if (searchNoResults) searchNoResults.classList.add('hidden');
         const n = (totalFromApi != null && totalFromApi !== '') ? Number(totalFromApi) : results.length;
         resultCount.textContent = Number.isFinite(n) ? n : results.length;
         _searchAllResults = results;
@@ -407,20 +481,23 @@
         const campaignDisplay = shouldHlCampaign ? highlightMatch(result.campaign_name || '', query) : escapeHtml(result.campaign_name || '');
         const tagsArr = Array.isArray(result.tags) ? result.tags : [];
         const tagsDisplay = tagsArr.length
-            ? tagsArr.map(t => {
-                const tagText = String(t);
+            ? tagsArr.map(tagItem => {
+                const tagText = String(tagItem);
                 const inner = shouldHlTags ? highlightMatch(tagText, query) : escapeHtml(tagText);
                 return '<span class="inline-block bg-white/10 text-xs px-2 py-0.5 rounded mr-1">' + inner + '</span>';
             }).join('')
             : '<span class="text-secondary">-</span>';
 
+        const commentDir = (typeof detectTextDir === 'function') ? detectTextDir(result.comment || '') : 'auto';
+        const copyLabel = (typeof t === 'function' && t('actions.copy')) ? t('actions.copy') : 'Copy';
+
         row.innerHTML = `
             <td class="${typeCellClass}">${icon} ${result.file_type}${hintsHtml}</td>
-            <td class="border border-white/10 px-4 py-2 font-mono" title="${iocAttr}"><span class="inline-flex items-center gap-1">${iocDisplay} <button type="button" class="copy-ioc-btn btn-cmd-neutral btn-cmd-sm ml-1 flex-shrink-0" onclick="copyToClipboard(this.getAttribute('data-ioc'))" data-ioc="${iocAttr}" title="${t('actions.copy')}" aria-label="${t('actions.copy')}">${t('actions.copy')}</button></span></td>
+            <td class="border border-white/10 px-4 py-2 font-mono" title="${iocAttr}"><span class="inline-flex items-center gap-1">${iocDisplay} <button type="button" class="copy-ioc-btn btn-cmd-neutral btn-cmd-sm ml-1 flex-shrink-0" data-ioc="${iocAttr}" title="${escapeAttr(copyLabel)}" aria-label="${escapeAttr(copyLabel)}">${escapeHtml(copyLabel)}</button></span></td>
             <td class="border border-white/10 px-4 py-2 text-sm">${result.date || 'N/A'}</td>
             <td class="border border-white/10 px-4 py-2 text-sm" title="${escapeAttr(result.user || '')}">${userDisplay}</td>
             <td class="border border-white/10 px-4 py-2 text-sm font-mono" title="${escapeAttr(result.ref || '')}">${ticketDisplay || '<span class="text-secondary">-</span>'}</td>
-            <td class="border border-white/10 px-4 py-2 text-sm${noteMatched ? ' search-row-comment-note-match' : ''}" title="${escapeAttr(result.comment || '')}" dir="${typeof detectTextDir==='function'?detectTextDir(result.comment||''):'auto'}">${commentDisplay}</td>
+            <td class="border border-white/10 px-4 py-2 text-sm${noteMatched ? ' search-row-comment-note-match' : ''}" title="${escapeAttr(result.comment || '')}" dir="${commentDir}">${commentDisplay}</td>
             <td class="border border-white/10 px-4 py-2 text-sm">${tagsDisplay}</td>
             <td class="border border-white/10 px-4 py-2 text-sm" title="${escapeAttr(result.campaign_name || '')}">${campaignDisplay || '<span class="text-secondary">-</span>'}</td>
             <td class="border border-white/10 px-4 py-2">${expirationBadge}</td>
@@ -430,7 +507,21 @@
         resultsTableBody.appendChild(row);
     }
 
+    function _ensureTabScript(tabId) {
+        var urls = global.TG_CONFIG && global.TG_CONFIG.scriptUrls;
+        var key = tabId === 'yara' ? 'yara' : tabId;
+        var src = urls && urls[key];
+        if (!src || typeof global.lazyLoad !== 'function') return Promise.resolve();
+        return global.lazyLoad(src);
+    }
+
     function _bindSearchRowActions() {
+        resultsTableBody.querySelectorAll('.copy-ioc-btn').forEach(btn => {
+            btn.addEventListener('click', function () {
+                var val = this.getAttribute('data-ioc') || '';
+                if (val && typeof copyToClipboard === 'function') copyToClipboard(val);
+            });
+        });
         resultsTableBody.querySelectorAll('[data-action="edit"]').forEach(btn => {
             btn.addEventListener('click', function() {
                 const row = this.closest('tr');
@@ -466,20 +557,24 @@
         });
         resultsTableBody.querySelectorAll('[data-action="view-yara"]').forEach(btn => {
             btn.addEventListener('click', function() {
-                if (typeof switchTab === 'function') switchTab('yara');
+                _ensureTabScript('yara').then(function () {
+                    if (typeof switchTab === 'function') switchTab('yara');
+                });
             });
         });
         resultsTableBody.querySelectorAll('[data-action="edit-yara-meta"]').forEach(btn => {
             btn.addEventListener('click', function() {
                 const row = this.closest('tr');
-                if (typeof openYaraMetaEditModal === 'function') {
-                    openYaraMetaEditModal(
-                        row.dataset.iocValue,
-                        row.dataset.ticketId || '',
-                        row.dataset.comment || '',
-                        row.dataset.campaign || ''
-                    );
-                }
+                _ensureTabScript('yara').then(function () {
+                    if (typeof openYaraMetaEditModal === 'function') {
+                        openYaraMetaEditModal(
+                            row.dataset.iocValue,
+                            row.dataset.ticketId || '',
+                            row.dataset.comment || '',
+                            row.dataset.campaign || ''
+                        );
+                    }
+                });
             });
         });
         resultsTableBody.querySelectorAll('[data-action="open-campaign-graph"]').forEach(btn => {
@@ -487,19 +582,21 @@
                 const row = this.closest('tr');
                 const cid = row.dataset.campaignId;
                 const idNum = cid ? parseInt(cid, 10) : NaN;
-                if (typeof global.switchTab === 'function') {
-                    global.switchTab('campaigns');
-                }
-                if (!isNaN(idNum) && typeof global.renderGraph === 'function') {
-                    setTimeout(function() { global.renderGraph(idNum); }, 150);
-                }
+                _ensureTabScript('campaigns').then(function () {
+                    if (typeof global.switchTab === 'function') {
+                        global.switchTab('campaigns');
+                    }
+                    if (!isNaN(idNum) && typeof global.renderGraph === 'function') {
+                        setTimeout(function() { global.renderGraph(idNum); }, 150);
+                    }
+                });
             });
         });
     }
 
     function showNoResults() {
-        searchResults.classList.add('hidden');
-        searchNoResults.classList.remove('hidden');
+        if (searchResults) searchResults.classList.add('hidden');
+        if (searchNoResults) searchNoResults.classList.remove('hidden');
     }
 
     function highlightMatch(text, query) {
@@ -533,17 +630,21 @@
         });
     }
 
-    document.getElementById('deleteIocCancel')?.addEventListener('click', () => {
+    var deleteIocCancelEl = document.getElementById('deleteIocCancel');
+    if (deleteIocCancelEl) deleteIocCancelEl.addEventListener('click', function () {
         if (deleteIocModal) deleteIocModal.classList.add('hidden');
     });
-    deleteIocModal?.addEventListener('click', (e) => {
+    if (deleteIocModal) deleteIocModal.addEventListener('click', function (e) {
         if (e.target === deleteIocModal) deleteIocModal.classList.add('hidden');
     });
 
-    document.getElementById('deleteIocSubmit')?.addEventListener('click', async () => {
-        const value = document.getElementById('deleteIocValue')?.value?.trim();
-        const type = document.getElementById('deleteIocType')?.value?.trim();
-        const reason = (deleteIocReason?.value || '').trim();
+    var deleteIocSubmitEl = document.getElementById('deleteIocSubmit');
+    if (deleteIocSubmitEl) deleteIocSubmitEl.addEventListener('click', async function () {
+        var deleteIocValueEl = document.getElementById('deleteIocValue');
+        var deleteIocTypeEl = document.getElementById('deleteIocType');
+        const value = deleteIocValueEl ? (deleteIocValueEl.value || '').trim() : '';
+        const type = deleteIocTypeEl ? (deleteIocTypeEl.value || '').trim() : '';
+        const reason = (deleteIocReason ? (deleteIocReason.value || '') : '').trim();
         if (!reason) {
             if (deleteIocReasonError) {
                 deleteIocReasonError.textContent = (typeof t === 'function' && t('delete_modal.reason_required')) ? t('delete_modal.reason_required') : 'Please provide a reason for deletion.';
@@ -766,7 +867,7 @@
             + '<span class="font-semibold text-amber-200 text-xs">' + by + '</span>'
             + '<span class="text-secondary text-xs">' + dateStr + '</span>'
             + '</div>'
-            + '<div class="text-white/90 whitespace-pre-wrap break-words" dir="' + (typeof detectTextDir==='function'?detectTextDir(note.content):'auto') + '">' + escapeHtml(note.content) + '</div>'
+            + '<div class="text-white/90 whitespace-pre-wrap break-words" dir="' + ((typeof detectTextDir === 'function') ? detectTextDir(note.content) : 'auto') + '">' + escapeHtml(note.content) + '</div>'
             + '</div>';
     }
 
@@ -789,6 +890,49 @@
         } catch (_) { /* silent */ }
     }
 
+    function renderCreatedHistoryExtra(ev, iocType) {
+        if (ev.event_type !== 'created' || !ev.payload) return '';
+        const p = ev.payload;
+        let extra = '';
+        if (p.reactivated) {
+            const reactLabel = (typeof t === 'function' && t('history.reactivated')) ? t('history.reactivated') : 'Reactivated';
+            extra += ' <span class="inline-block ml-1 text-[11px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-900/35 text-emerald-300 border border-emerald-500/25">' + escapeHtml(reactLabel) + '</span>';
+        }
+        if (p.expiration_date) {
+            extra += ' <span class="text-secondary">(expires: ' + escapeHtml(String(p.expiration_date).slice(0, 10)) + ')</span>';
+        }
+        const ticketL = (typeof t === 'function' && t('history.field_ticket_id')) ? t('history.field_ticket_id') : 'Ticket ID';
+        const campL = (typeof t === 'function' && t('history.field_campaign')) ? t('history.field_campaign') : 'Campaign';
+        const commentL = (typeof t === 'function' && t('history.field_comment')) ? t('history.field_comment') : 'Comment';
+        const tagsL = (typeof t === 'function' && t('history.field_tags')) ? t('history.field_tags') : 'Tags';
+        const statusL = (typeof t === 'function' && t('history.yara_status')) ? t('history.yara_status') : 'Rule status';
+        const metaBits = [];
+        if (iocType === 'YARA' && p.rule_status) {
+            metaBits.push('<span class="text-secondary">' + escapeHtml(statusL) + ':</span> ' + escapeHtml(String(p.rule_status)));
+        }
+        if (p.ticket_id) {
+            metaBits.push('<span class="text-secondary">' + escapeHtml(ticketL) + ':</span> <span dir="ltr">' + escapeHtml(String(p.ticket_id)) + '</span>');
+        }
+        if (p.campaign) {
+            const campDir = (typeof detectTextDir === 'function') ? detectTextDir(String(p.campaign)) : 'auto';
+            metaBits.push('<span class="text-secondary">' + escapeHtml(campL) + ':</span> <span dir="' + campDir + '">' + escapeHtml(String(p.campaign)) + '</span>');
+        }
+        if (Array.isArray(p.tags) && p.tags.length) {
+            metaBits.push('<span class="text-secondary">' + escapeHtml(tagsL) + ':</span> ' + escapeHtml(p.tags.join(', ')));
+        }
+        if (metaBits.length) {
+            extra += ' <div class="mt-2 space-y-1 text-sm text-cyan-100/85">' + metaBits.join('<br>') + '</div>';
+        }
+        if (p.comment) {
+            const cdir = (typeof detectTextDir === 'function') ? detectTextDir(String(p.comment)) : 'auto';
+            extra += '<div class="history-created-comment mt-2 px-3 py-2 rounded-lg border border-white/10 bg-black/25">'
+                + '<div class="text-[11px] font-semibold uppercase tracking-wide text-secondary mb-1">' + escapeHtml(commentL) + '</div>'
+                + '<div class="text-sm text-primary/95 whitespace-pre-wrap break-words" dir="' + cdir + '">' + escapeHtml(String(p.comment)) + '</div>'
+                + '</div>';
+        }
+        return extra;
+    }
+
     async function openIocHistoryModal(iocType, iocValue) {
         if (!iocHistoryModal || !iocHistoryList) return;
         const titleText = (typeof t === 'function' && t('actions.history')) ? t('actions.history') : 'History';
@@ -808,7 +952,7 @@
             }
             const events = j.events || [];
             if (events.length === 0) {
-                iocHistoryList.innerHTML = '<div class="text-secondary">' + (typeof t === 'function' && t('history.empty') ? t('history.empty') : 'No history recorded for this IOC.') + '</div>';
+                iocHistoryList.innerHTML = '<div class="text-secondary">' + ((typeof t === 'function' && t('history.empty')) ? t('history.empty') : 'No history recorded for this IOC.') + '</div>';
                 return;
             }
             const labels = {
@@ -823,33 +967,15 @@
             iocHistoryList.innerHTML = events.map(ev => {
                 const atStr = ev.at ? new Date(ev.at).toLocaleString() : '';
                 const by = ev.username ? escapeHtml(ev.username) : '-';
-                let byLine = (typeof t === 'function' && t('history.by') ? t('history.by') : 'by') + ' ' + by;
+                let byLine = ((typeof t === 'function' && t('history.by')) ? t('history.by') : 'by') + ' ' + by;
                 if (ev.event_type === 'created' && ev.payload && ev.payload.entered_by != null && ev.payload.assigned_to != null) {
                     const enteredByLabel = (typeof t === 'function' && t('history.entered_by')) ? t('history.entered_by') : 'Entered by';
                     const assignedToLabel = (typeof t === 'function' && t('history.assigned_to')) ? t('history.assigned_to') : 'assigned to';
                     byLine = escapeHtml(enteredByLabel) + ' <span class="font-medium">' + escapeHtml(String(ev.payload.entered_by || '')) + '</span>, ' + escapeHtml(assignedToLabel) + ' <span class="font-medium">' + escapeHtml(String(ev.payload.assigned_to || '')) + '</span>';
                 }
                 let extra = '';
-                if (ev.event_type === 'created' && ev.payload && ev.payload.expiration_date) {
-                    extra = ' <span class="text-secondary">(expires: ' + escapeHtml(String(ev.payload.expiration_date).slice(0, 10)) + ')</span>';
-                }
-                if (ev.event_type === 'created' && iocType === 'YARA' && ev.payload) {
-                    const p = ev.payload;
-                    const ticketL = (typeof t === 'function' && t('history.field_ticket_id')) ? t('history.field_ticket_id') : 'Ticket ID';
-                    const campL = (typeof t === 'function' && t('history.field_campaign')) ? t('history.field_campaign') : 'Campaign';
-                    const descL = (typeof t === 'function' && t('history.field_comment')) ? t('history.field_comment') : 'Description';
-                    const statusL = (typeof t === 'function' && t('history.yara_status')) ? t('history.yara_status') : 'Rule status';
-                    const metaBits = [];
-                    if (p.ticket_id) metaBits.push('<span class="text-secondary">' + escapeHtml(ticketL) + ':</span> ' + escapeHtml(String(p.ticket_id)));
-                    if (p.campaign) metaBits.push('<span class="text-secondary">' + escapeHtml(campL) + ':</span> ' + escapeHtml(String(p.campaign)));
-                    if (p.rule_status) metaBits.push('<span class="text-secondary">' + escapeHtml(statusL) + ':</span> ' + escapeHtml(String(p.rule_status)));
-                    if (p.comment) {
-                        const cdir = (typeof detectTextDir === 'function') ? detectTextDir(String(p.comment)) : 'auto';
-                        metaBits.push('<span class="text-secondary">' + escapeHtml(descL) + ':</span> <span dir="' + cdir + '">' + escapeHtml(String(p.comment)) + '</span>');
-                    }
-                    if (metaBits.length) {
-                        extra += ' <div class="mt-2 space-y-1 text-sm text-cyan-100/85">' + metaBits.join('<br>') + '</div>';
-                    }
+                if (ev.event_type === 'created') {
+                    extra += renderCreatedHistoryExtra(ev, iocType);
                 }
                 if (ev.event_type === 'deleted' && ev.payload && ev.payload.reason) {
                     const reasonLabel = (typeof t === 'function' && t('history.deleted_reason')) ? t('history.deleted_reason') : 'Reason';

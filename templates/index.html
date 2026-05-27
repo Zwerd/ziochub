@@ -227,7 +227,7 @@
                             <label for="searchBrowseSelect" class="sr-only" data-i18n="search.browse_label">Browse by country, domain, email, URL, or hash</label>
                             <select id="searchBrowseSelect"
                                     class="px-3 py-2 bg-tertiary min-w-[12rem] max-w-[22rem] text-sm"
-                                    title="Country with count, or type lines: domain (N), email (N), md5 (N), …">
+                                    title="Browse lists by country or type (used when the search box is empty). Typing a value searches the full database.">
                                 <option value="" data-i18n="search.browse_none">— None —</option>
                             </select>
                             <select id="searchFilter" 
@@ -2206,17 +2206,18 @@
     window.TG_CONFIG = {
         i18nBase: "{{ url_for('static', filename='i18n/') }}",
         scriptUrls: {
-            champs:    '{{ url_for("static", filename="js/champs.js") }}',
-            search:    '{{ url_for("static", filename="js/search.js") }}',
-            yara:      '{{ url_for("static", filename="js/yara.js") }}',
-            feedPulse: '{{ url_for("static", filename="js/feed-pulse.js") }}',
-            campaigns: '{{ url_for("static", filename="js/campaigns.js") }}',
-            reports:   '{{ url_for("static", filename="js/reports.js") }}'
+            champs:    '{{ url_for("static", filename="js/champs.js") }}?v={{ version|urlencode }}',
+            search:    '{{ url_for("static", filename="js/search.js") }}?v={{ version|urlencode }}',
+            yara:      '{{ url_for("static", filename="js/yara.js") }}?v={{ version|urlencode }}',
+            feedPulse: '{{ url_for("static", filename="js/feed-pulse.js") }}?v={{ version|urlencode }}',
+            campaigns: '{{ url_for("static", filename="js/campaigns.js") }}?v={{ version|urlencode }}',
+            reports:   '{{ url_for("static", filename="js/reports.js") }}?v={{ version|urlencode }}'
         }
     };
     </script>
     <script src="{{ url_for('static', filename='js/tags-autocomplete.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}?v={{ version|urlencode }}"></script>
+    <script src="{{ url_for('static', filename='js/search.js') }}?v={{ version|urlencode }}"></script>
     <script src="{{ url_for('static', filename='js/playbook.js') }}"></script>
     <script src="{{ url_for('static', filename='js/submit.js') }}"></script>
     <script src="{{ url_for('static', filename='js/profile.js') }}"></script>

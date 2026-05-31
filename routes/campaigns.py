@@ -726,160 +726,258 @@ _COLUMN_HEADERS = {
     'Hash':   ('Hashes / YARA', '#f43f5e'),
 }
 
+GRAPH_IOC_PAGE_DEFAULT = 100
+GRAPH_IOC_PAGE_MAX = 500
+_ROW_STEP_Y = 80
+_COL_START_Y = 150
+_IOC_TYPE_SORT_ORDER = ('IP', 'Domain', 'URL', 'Email', 'Hash')
+
+
+def _ioc_type_sort_key(ioc_type: str) -> int:
+    t = (ioc_type or 'Hash').strip()
+    try:
+        return _IOC_TYPE_SORT_ORDER.index(t)
+    except ValueError:
+        return len(_IOC_TYPE_SORT_ORDER)
+
+
+def _campaign_graph_activity(campaign_id: int, now) -> dict:
+    rows = IOC.query.filter(IOC.campaign_id == campaign_id).with_entities(
+        IOC.revoked, IOC.expiration_date,
+    ).all()
+    active_ioc_count = sum(
+        1 for revoked, exp in rows
+        if (not bool(revoked)) and (exp is None or exp > now)
+    )
+    linked_ioc_count = len(rows)
+    yara_count = YaraRule.query.filter(YaraRule.campaign_id == campaign_id).count()
+    return {
+        'has_active_iocs': active_ioc_count > 0,
+        'linked_ioc_count': linked_ioc_count,
+        'active_ioc_count': active_ioc_count,
+        'expired_ioc_count': linked_ioc_count - active_ioc_count,
+        'yara_count': yara_count,
+    }
+
+
+def _ordered_campaign_ioc_ids(campaign_id: int) -> list:
+    rows = IOC.query.filter(IOC.campaign_id == campaign_id).with_entities(IOC.id, IOC.type).all()
+    rows.sort(key=lambda r: (_ioc_type_sort_key(r[1]), -(r[0] or 0)))
+    return [r[0] for r in rows]
+
+
+def _campaign_ioc_layout_positions(ordered_ids: list, id_to_type: dict) -> dict:
+    col_y = {}
+    positions = {}
+    for ioc_id in ordered_ids:
+        ioc_type = id_to_type.get(ioc_id) or 'Hash'
+        col_x = _COLUMN_X.get(ioc_type, 400)
+        y_key = ioc_type
+        if y_key not in col_y:
+            col_y[y_key] = _COL_START_Y
+        node_y = col_y[y_key]
+        col_y[y_key] += _ROW_STEP_Y
+        positions[ioc_id] = (col_x, node_y)
+    return positions
+
+
+def _build_ioc_graph_node_and_edge(ioc, camp_node_id: str, node_y: int, col_x: int, get_country_code, now):
+    ioc_type = ioc.type or 'Hash'
+    node_color = _IOC_TYPE_COLORS.get(ioc_type, '#94a3b8')
+    truncated = (ioc.value[:24] + '…') if len(ioc.value) > 24 else ioc.value
+    node = {
+        'id': f'ioc_{ioc.id}',
+        'label': truncated,
+        'title': f"{ioc_type}: {ioc.value}",
+        'copyValue': ioc.value or '',
+        'shape': 'circularImage',
+        'size': 22,
+        'x': col_x, 'y': node_y,
+        'fixed': {'x': True, 'y': True},
+        'borderWidth': 2,
+        'color': {'border': node_color, 'highlight': {'border': '#ffffff'}},
+        'font': {'color': '#e2e8f0', 'size': 14, 'face': 'Consolas, monospace', 'bold': True, 'vadjust': 0},
+    }
+    if ioc_type == 'IP':
+        cc = get_country_code(ioc.value)
+        node['image'] = f'/static/flags/1x1/{cc}.svg' if cc else _EMOJI_SVGS['IP']
+    else:
+        node['image'] = _EMOJI_SVGS.get(ioc_type, _EMOJI_SVGS['Hash'])
+    ioc_active = (not bool(getattr(ioc, 'revoked', False))) and (
+        ioc.expiration_date is None or ioc.expiration_date > now
+    )
+    if not ioc_active:
+        node['opacity'] = 0.5
+        exp_hint = ioc.expiration_date.strftime('%Y-%m-%d') if ioc.expiration_date else ''
+        if bool(getattr(ioc, 'revoked', False)):
+            from routes.search import terminal_status_label_for_ioc_row
+            inactive = terminal_status_label_for_ioc_row(ioc) or 'Deleted'
+            node['title'] = (node.get('title') or '') + f'\n({inactive})'
+        else:
+            node['title'] = (node.get('title') or '') + (
+                f"\n(Expired {exp_hint})" if exp_hint else '\n(Expired)'
+            )
+    edge = {
+        'from': camp_node_id,
+        'to': f'ioc_{ioc.id}',
+        'color': {'color': node_color, 'opacity': 0.45 if not ioc_active else 0.5},
+        'width': 1.5,
+    }
+    return node, edge
+
+
+def _campaign_graph_shell_nodes(campaign, activity: dict) -> tuple:
+    camp_node_id = f'camp_{campaign.id}'
+    camp_label = campaign.name[:30] + ('…' if len(campaign.name) > 30 else '')
+    has_ref = bool(getattr(campaign, 'reference_image_ext', None))
+    has_active_iocs = activity.get('has_active_iocs', True)
+    camp_border, camp_border_hi, camp_emoji_bg = '#ef4444', '#f87171', '#ef4444'
+    if not has_active_iocs:
+        camp_border, camp_border_hi, camp_emoji_bg = '#64748b', '#94a3b8', '#475569'
+    camp_circle_image = (
+        _emoji_svg_data_uri('🎯', camp_emoji_bg) if has_ref else _emoji_svg_data_uri('📋', camp_emoji_bg)
+    )
+    nodes = [{
+        'id': camp_node_id,
+        'label': f'<b>{camp_label}</b>',
+        'title': (campaign.name + ('\n' + (campaign.description or ''))) if campaign.description else campaign.name,
+        'shape': 'circularImage',
+        'image': camp_circle_image,
+        'has_reference_image': has_ref,
+        'size': 40,
+        'x': 0, 'y': 0,
+        'fixed': {'x': True, 'y': True},
+        'borderWidth': 3,
+        'color': {'border': camp_border, 'highlight': {'border': camp_border_hi}},
+        'font': {
+            'multi': 'html', 'vadjust': -140, 'size': 24, 'color': '#ffffff',
+            'face': 'Segoe UI, sans-serif',
+            'bold': {'color': '#ffffff', 'size': 24, 'face': 'Segoe UI, sans-serif'},
+        },
+    }]
+    for col_type, (col_label, col_color) in _COLUMN_HEADERS.items():
+        nodes.append({
+            'id': f'header_{col_type}',
+            'label': col_label,
+            'x': _COLUMN_X.get(col_type, 0), 'y': 85,
+            'fixed': {'x': True, 'y': True},
+            'shape': 'text',
+            'font': {'size': 13, 'color': col_color, 'face': 'Inter, Segoe UI, sans-serif',
+                     'bold': {'color': col_color, 'size': 13}},
+        })
+    return nodes, camp_node_id
+
+
+def _campaign_graph_yara_nodes_edges(campaign_id: int, camp_node_id: str, col_y_after_iocs: dict) -> tuple:
+    yara_rules = YaraRule.query.filter(YaraRule.campaign_id == campaign_id).all()
+    nodes, edges = [], []
+    col_y = dict(col_y_after_iocs)
+    for rule in yara_rules:
+        if 'YARA' not in col_y:
+            col_y['YARA'] = col_y.get('Hash', _COL_START_Y)
+        node_y = col_y['YARA']
+        col_y['YARA'] += _ROW_STEP_Y
+        nodes.append({
+            'id': f'yara_{rule.id}',
+            'label': rule.filename[:20] + ('…' if len(rule.filename) > 20 else ''),
+            'title': f"YARA: {rule.filename}\n{rule.comment or ''}",
+            'copyValue': rule.filename or '',
+            'shape': 'circularImage',
+            'image': _EMOJI_SVGS['YARA'],
+            'size': 22,
+            'x': 500, 'y': node_y,
+            'fixed': {'x': True, 'y': True},
+            'borderWidth': 2,
+            'color': {'border': '#eab308', 'highlight': {'border': '#fde68a'}},
+            'font': {'color': '#e2e8f0', 'size': 14, 'face': 'Consolas, monospace', 'bold': True, 'vadjust': 0},
+        })
+        edges.append({
+            'from': camp_node_id,
+            'to': f'yara_{rule.id}',
+            'color': {'color': '#fbbf24', 'opacity': 0.5},
+            'width': 1.5,
+        })
+    return nodes, edges
+
 
 @bp.route('/campaign-graph/<int:campaign_id>', methods=['GET'])
 def campaign_graph(campaign_id):
-    """Return Orchestra-layout Vis.js graph: Campaign at top, IOC columns below with fixed x/y."""
+    """
+    Orchestra-layout Vis.js graph with paginated IOC loading (offset/limit query params).
+    """
     get_country_code, = _from_app('get_country_code')
     try:
         campaign = db.session.get(Campaign, campaign_id)
         if not campaign:
             return jsonify({'success': False, 'message': 'Campaign not found'}), 404
 
-        camp_node_id = f'camp_{campaign.id}'
-        camp_label = campaign.name[:30] + ('…' if len(campaign.name) > 30 else '')
-        has_ref = bool(getattr(campaign, 'reference_image_ext', None))
+        try:
+            offset = max(0, int(request.args.get('offset', 0)))
+        except (TypeError, ValueError):
+            offset = 0
+        try:
+            limit = min(GRAPH_IOC_PAGE_MAX, max(1, int(request.args.get('limit', GRAPH_IOC_PAGE_DEFAULT))))
+        except (TypeError, ValueError):
+            limit = GRAPH_IOC_PAGE_DEFAULT
 
-        iocs = IOC.query.filter(IOC.campaign_id == campaign_id).all()
-        yara_rules = YaraRule.query.filter(YaraRule.campaign_id == campaign_id).all()
         now = datetime.now()
-        active_ioc_count = sum(
-            1 for ioc in iocs
-            if (not bool(getattr(ioc, 'revoked', False))) and (ioc.expiration_date is None or ioc.expiration_date > now)
-        )
-        expired_ioc_count = len(iocs) - active_ioc_count
-        yara_count = len(yara_rules)
-        has_active_iocs = active_ioc_count > 0
-        # Align with /api/stats Campaign Impact: "active" = non-expired IOC only (YARA counted separately in UI).
-        camp_border = '#ef4444'
-        camp_border_hi = '#f87171'
-        camp_emoji_bg = '#ef4444'
-        if not has_active_iocs:
-            camp_border = '#64748b'
-            camp_border_hi = '#94a3b8'
-            camp_emoji_bg = '#475569'
-        # 🎯 on the red/slate node only when a reference image exists; otherwise a neutral campaign glyph.
-        camp_circle_image = (
-            _emoji_svg_data_uri('🎯', camp_emoji_bg) if has_ref else _emoji_svg_data_uri('📋', camp_emoji_bg)
-        )
-        nodes = [{
-            'id': camp_node_id,
-            'label': f'<b>{camp_label}</b>',
-            'title': (campaign.name + ('\n' + (campaign.description or ''))) if campaign.description else campaign.name,
-            'shape': 'circularImage',
-            'image': camp_circle_image,
-            'has_reference_image': has_ref,
-            'size': 40,
-            'x': 0, 'y': 0,
-            'fixed': {'x': True, 'y': True},
-            'borderWidth': 3,
-            'color': {'border': camp_border, 'highlight': {'border': camp_border_hi}},
-            'font': {
-                'multi': 'html',
-                'vadjust': -140,
-                'size': 24,
-                'color': '#ffffff',
-                'face': 'Segoe UI, sans-serif',
-                'bold': {'color': '#ffffff', 'size': 24, 'face': 'Segoe UI, sans-serif'},
-            },
-        }]
+        activity = _campaign_graph_activity(campaign_id, now)
+        id_type_rows = IOC.query.filter(IOC.campaign_id == campaign_id).with_entities(IOC.id, IOC.type).all()
+        id_type_rows.sort(key=lambda r: (_ioc_type_sort_key(r[1]), -(r[0] or 0)))
+        ordered_ids = [r[0] for r in id_type_rows]
+        all_id_type = {r[0]: r[1] for r in id_type_rows}
+        total_iocs = len(ordered_ids)
+        page_ids = ordered_ids[offset:offset + limit]
+        has_more = (offset + len(page_ids)) < total_iocs
+        is_initial = offset == 0
+        positions = _campaign_ioc_layout_positions(ordered_ids, all_id_type)
+
+        nodes = []
         edges = []
+        camp_node_id = f'camp_{campaign.id}'
 
-        for col_type, (col_label, col_color) in _COLUMN_HEADERS.items():
-            col_x = _COLUMN_X.get(col_type, 0)
-            nodes.append({
-                'id': f'header_{col_type}',
-                'label': col_label,
-                'x': col_x, 'y': 85,
-                'fixed': {'x': True, 'y': True},
-                'shape': 'text',
-                'font': {'size': 13, 'color': col_color, 'face': 'Inter, Segoe UI, sans-serif',
-                         'bold': {'color': col_color, 'size': 13}},
-            })
+        if is_initial:
+            nodes, camp_node_id = _campaign_graph_shell_nodes(campaign, activity)
 
-        col_y = {}
-        for ioc in iocs:
-            ioc_type = ioc.type or 'Hash'
-            col_x = _COLUMN_X.get(ioc_type, 400)
-            node_color = _IOC_TYPE_COLORS.get(ioc_type, '#94a3b8')
-            truncated = (ioc.value[:24] + '…') if len(ioc.value) > 24 else ioc.value
-            y_key = ioc_type
-            if y_key not in col_y:
-                col_y[y_key] = 150
-            node_y = col_y[y_key]
-            col_y[y_key] += 80
-            node = {
-                'id': f'ioc_{ioc.id}',
-                'label': truncated,
-                'title': f"{ioc_type}: {ioc.value}",
-                'copyValue': ioc.value or '',
-                'shape': 'circularImage',
-                'size': 22,
-                'x': col_x, 'y': node_y,
-                'fixed': {'x': True, 'y': True},
-                'borderWidth': 2,
-                'color': {'border': node_color, 'highlight': {'border': '#ffffff'}},
-                'font': {'color': '#e2e8f0', 'size': 14, 'face': 'Consolas, monospace', 'bold': True, 'vadjust': 0},
-            }
-            if ioc_type == 'IP':
-                cc = get_country_code(ioc.value)
-                node['image'] = f'/static/flags/1x1/{cc}.svg' if cc else _EMOJI_SVGS['IP']
-            else:
-                node['image'] = _EMOJI_SVGS.get(ioc_type, _EMOJI_SVGS['Hash'])
-            ioc_active = (not bool(getattr(ioc, 'revoked', False))) and (ioc.expiration_date is None or ioc.expiration_date > now)
-            if not ioc_active:
-                node['opacity'] = 0.5
-                exp_hint = ioc.expiration_date.strftime('%Y-%m-%d') if ioc.expiration_date else ''
-                if bool(getattr(ioc, 'revoked', False)):
-                    node['title'] = (node.get('title') or '') + '\n(Revoked)'
-                else:
-                    node['title'] = (node.get('title') or '') + (f"\n(Expired {exp_hint})" if exp_hint else '\n(Expired)')
-            nodes.append(node)
-            edges.append({
-                'from': camp_node_id,
-                'to': f'ioc_{ioc.id}',
-                'color': {'color': node_color, 'opacity': 0.45 if not ioc_active else 0.5},
-                'width': 1.5,
-            })
+        if page_ids:
+            ioc_rows = {r.id: r for r in IOC.query.filter(IOC.id.in_(page_ids)).all()}
+            for ioc_id in page_ids:
+                ioc = ioc_rows.get(ioc_id)
+                if not ioc:
+                    continue
+                col_x, node_y = positions.get(ioc_id, (_COLUMN_X.get(ioc.type or 'Hash', 400), _COL_START_Y))
+                node, edge = _build_ioc_graph_node_and_edge(
+                    ioc, camp_node_id, node_y, col_x, get_country_code, now,
+                )
+                nodes.append(node)
+                edges.append(edge)
 
-        y_key_yara = 'YARA'
-        for rule in yara_rules:
-            if y_key_yara not in col_y:
-                col_y[y_key_yara] = col_y.get('Hash', 150)
-            node_y = col_y[y_key_yara]
-            col_y[y_key_yara] += 80
-            nodes.append({
-                'id': f'yara_{rule.id}',
-                'label': rule.filename[:20] + ('…' if len(rule.filename) > 20 else ''),
-                'title': f"YARA: {rule.filename}\n{rule.comment or ''}",
-                'copyValue': rule.filename or '',
-                'shape': 'circularImage',
-                'image': _EMOJI_SVGS['YARA'],
-                'size': 22,
-                'x': 500, 'y': node_y,
-                'fixed': {'x': True, 'y': True},
-                'borderWidth': 2,
-                'color': {'border': '#eab308', 'highlight': {'border': '#fde68a'}},
-                'font': {'color': '#e2e8f0', 'size': 14, 'face': 'Consolas, monospace', 'bold': True, 'vadjust': 0},
-            })
-            edges.append({
-                'from': camp_node_id,
-                'to': f'yara_{rule.id}',
-                'color': {'color': '#fbbf24', 'opacity': 0.5},
-                'width': 1.5,
-            })
+        if is_initial:
+            col_y_state = {}
+            for ioc_id in ordered_ids:
+                t = all_id_type.get(ioc_id) or 'Hash'
+                if t not in col_y_state:
+                    col_y_state[t] = _COL_START_Y
+                col_y_state[t] += _ROW_STEP_Y
+            yara_nodes, yara_edges = _campaign_graph_yara_nodes_edges(campaign_id, camp_node_id, col_y_state)
+            nodes.extend(yara_nodes)
+            edges.extend(yara_edges)
 
+        loaded_iocs = min(offset + len(page_ids), total_iocs)
         return jsonify({
             'success': True,
             'nodes': nodes,
             'edges': edges,
             'campaign': {'id': campaign.id, 'name': campaign.name, 'description': campaign.description},
-            'activity': {
-                'has_active_iocs': has_active_iocs,
-                'linked_ioc_count': len(iocs),
-                'active_ioc_count': active_ioc_count,
-                'expired_ioc_count': expired_ioc_count,
-                'yara_count': yara_count,
+            'activity': activity,
+            'pagination': {
+                'offset': offset,
+                'limit': limit,
+                'total_iocs': total_iocs,
+                'loaded_iocs': loaded_iocs,
+                'page_ioc_count': len(page_ids),
+                'has_more': has_more,
+                'is_initial': is_initial,
             },
         })
     except Exception as e:
@@ -903,6 +1001,8 @@ def campaign_graph_investigate_ioc(campaign_id, ioc_id):
             return jsonify({'success': False, 'message': 'IOC not in this campaign'}), 404
         tags = parse_tags_field(ioc.tags)
         events = build_ioc_history_events_list(ioc.type, (ioc.value or '').strip())
+        from routes.search import terminal_status_label_for_ioc_row
+        inactive_status = terminal_status_label_for_ioc_row(ioc)
         focus_tags = {t.lower() for t in tags if t}
         related = []
         for o in IOC.query.filter(IOC.campaign_id == campaign_id, IOC.id != ioc_id).all():
@@ -931,6 +1031,7 @@ def campaign_graph_investigate_ioc(campaign_id, ioc_id):
                 'expiration': ioc.expiration_date.strftime('%Y-%m-%d') if ioc.expiration_date else None,
                 'created_at': iso_utc(ioc.created_at),
                 'revoked': bool(getattr(ioc, 'revoked', False)),
+                'inactive_status': inactive_status,
             },
             'events': events,
             'related': related,

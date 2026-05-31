@@ -32,6 +32,13 @@
     global.detectTextDir = detectTextDir;
 
     /** Compact badges: which fields matched (especially analyst notes vs submission comment). */
+    /** Return translated string, or fallback when i18n is missing / key not found. */
+    function tLabel(key, fallback) {
+        if (typeof t !== 'function') return fallback;
+        var v = t(key);
+        return (v && v !== key) ? v : fallback;
+    }
+
     function searchMatchHintsHtml(result, query, filter) {
         var hints = result.match_hints;
         var q = (query || '').trim();
@@ -84,7 +91,7 @@
         var prev = sel.value || '';
         var tr = (global.translations && global.translations[global.currentLang || 'en']) || {};
         var s = tr.search || {};
-        var noneLabel = s.browse_none || '\u2014 None \u2014';
+        var noneLabel = tLabel('search.browse_none', s.browse_none || 'All Groups');
 
         var aggOrder = [
             { key: 'ip', labelKey: 'agg_ip' },
@@ -290,12 +297,12 @@
 
     function getExpirationBadge(expirationStatus, expiresOn, isExpired) {
         if (expirationStatus === 'Deleted') {
-            return `<span class="badge bg-slate-600 text-slate-200">${typeof t === 'function' && t('search.col.deleted') ? t('search.col.deleted') : 'Deleted'}</span>`;
+            return `<span class="badge bg-slate-600 text-slate-200">${tLabel('search.col.deleted', 'Deleted')}</span>`;
         }
         if (expirationStatus === 'Permanent') {
-            return `<span class="badge badge-permanent">🔴 ${t('ttl.permanent')}</span>`;
+            return `<span class="badge badge-permanent">🔴 ${tLabel('ttl.permanent', 'Permanent')}</span>`;
         } else if (isExpired) {
-            return `<span class="badge badge-expired">🟢 ${t('search.col.expired') || 'Expired'}</span>`;
+            return `<span class="badge badge-expired">🟢 ${tLabel('search.col.expired', 'Expired')}</span>`;
         } else {
             return `<span class="badge badge-expires">🟡 ${escapeHtml(expirationStatus)}</span>`;
         }
@@ -446,7 +453,7 @@
             : (isCampaign ? 'border border-white/10 px-4 py-2 font-mono text-sm text-rose-300' : 'border border-white/10 px-4 py-2 font-mono text-sm');
         const hintsHtml = searchMatchHintsHtml(result, query, filter);
         const isDeleted = result.status === 'Deleted';
-        const graphBtnLabel = (typeof t === 'function' && t('tab.campaign')) ? t('tab.campaign') : 'Campaign Graph';
+        const graphBtnLabel = tLabel('tab.campaign', 'Campaign Graph');
         const actionsCell = isCampaign
             ? `<td class="border border-white/10 px-3 py-2">
                 <div class="flex items-center gap-1.5 flex-wrap">
@@ -456,24 +463,24 @@
             : isYara
             ? `<td class="border border-white/10 px-3 py-2">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                    <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="edit-yara-meta" title="${t('actions.edit_metadata')}">${t('actions.edit')}</button>
-                    <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="history" title="${typeof t === 'function' && t('actions.history') ? t('actions.history') : 'History'}">${typeof t === 'function' && t('actions.history') ? t('actions.history') : 'History'}</button>
-                    <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="view-yara" title="${t('actions.go_to_yara')}">${t('actions.view')}</button>
+                    <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="edit-yara-meta" title="${tLabel('actions.edit_metadata', 'Edit metadata')}">${tLabel('actions.edit', 'Edit')}</button>
+                    <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="history" title="${tLabel('actions.history', 'History')}">${tLabel('actions.history', 'History')}</button>
+                    <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="view-yara" title="${tLabel('actions.go_to_yara', 'Go to YARA tab')}">${tLabel('actions.view', 'View')}</button>
                 </div>
                </td>`
             : isDeleted
             ? `<td class="border border-white/10 px-3 py-2">
                 <div class="flex items-center gap-1.5">
-                    <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="history" title="${typeof t === 'function' && t('actions.history') ? t('actions.history') : 'History'}">${typeof t === 'function' && t('actions.history') ? t('actions.history') : 'History'}</button>
-                    <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="add-note" title="${typeof t === 'function' && t('actions.note') ? t('actions.note') : 'Note'}">${typeof t === 'function' && t('actions.note') ? t('actions.note') : 'Note'}</button>
+                    <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="history" title="${tLabel('actions.history', 'History')}">${tLabel('actions.history', 'History')}</button>
+                    <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="add-note" title="${tLabel('actions.note', 'Note')}">${tLabel('actions.note', 'Note')}</button>
                 </div>
                </td>`
             : `<td class="border border-white/10 px-3 py-2">
                 <div class="flex items-center gap-1.5">
-                    <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="edit">${t('actions.edit')}</button>
-                    <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="add-note" title="${typeof t === 'function' && t('actions.note') ? t('actions.note') : 'Note'}">${typeof t === 'function' && t('actions.note') ? t('actions.note') : 'Note'}</button>
-                    <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="history" title="${typeof t === 'function' && t('actions.history') ? t('actions.history') : 'History'}">${typeof t === 'function' && t('actions.history') ? t('actions.history') : 'History'}</button>
-                    <button type="button" class="btn-cmd-danger btn-cmd-sm" data-action="delete">${t('actions.delete')}</button>
+                    <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="edit">${tLabel('actions.edit', 'Edit')}</button>
+                    <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="add-note" title="${tLabel('actions.note', 'Note')}">${tLabel('actions.note', 'Note')}</button>
+                    <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="history" title="${tLabel('actions.history', 'History')}">${tLabel('actions.history', 'History')}</button>
+                    <button type="button" class="btn-cmd-danger btn-cmd-sm" data-action="delete">${tLabel('actions.delete', 'Delete')}</button>
                 </div>
                </td>`;
 
@@ -489,7 +496,7 @@
             : '<span class="text-secondary">-</span>';
 
         const commentDir = (typeof detectTextDir === 'function') ? detectTextDir(result.comment || '') : 'auto';
-        const copyLabel = (typeof t === 'function' && t('actions.copy')) ? t('actions.copy') : 'Copy';
+        const copyLabel = tLabel('actions.copy', 'Copy');
 
         row.innerHTML = `
             <td class="${typeCellClass}">${icon} ${result.file_type}${hintsHtml}</td>
@@ -687,8 +694,11 @@
                 return;
             }
             if (result.success) {
-                showToast(result.message, 'success');
-                // On revoke, only show achievement popup when something positive happened (no "0 points" popup)
+                const deletedMsg = (typeof t === 'function' && t('toast.ioc_deleted_success'))
+                    ? t('toast.ioc_deleted_success')
+                    : (result.message || 'IOC deleted successfully');
+                showToast(deletedMsg, 'success');
+                // On delete, only show achievement popup when something positive happened (no "0 points" popup)
                 if (typeof showAchievementModal === 'function' && (result.new_badges || result.level_up || result.rank_up || result.new_nickname || (result.points_earned !== undefined && result.points_earned > 0))) {
                     showAchievementModal(result);
                 }
@@ -703,7 +713,7 @@
                 showToast(result.message, 'error');
             }
         } catch (error) {
-            showToast((typeof t === 'function' && t('toast.error_revoke')) ? t('toast.error_revoke') + ': ' + error.message : 'Failed to revoke: ' + error.message, 'error');
+            showToast((typeof t === 'function' && t('toast.error_delete')) ? t('toast.error_delete') + ': ' + error.message : 'Failed to delete IOC: ' + error.message, 'error');
         }
     }
 

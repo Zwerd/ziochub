@@ -80,6 +80,9 @@ function setLanguage(lang) {
         html.setAttribute('dir', 'ltr');
     }
     updateTranslations();
+    if (typeof window.loadSearchBrowseSelect === 'function') {
+        window.loadSearchBrowseSelect();
+    }
     if (typeof window.setYaraMode === 'function' && window._yaraCurrentMode) {
         window.setYaraMode(window._yaraCurrentMode, { skipReload: true });
     }

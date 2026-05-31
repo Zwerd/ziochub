@@ -356,7 +356,9 @@
     "search_no_related": "No other IOCs in this campaign, or none share tags with this IOC.",
     "search_copy_value": "Copy value",
     "search_status": "Status",
-    "search_revoked": "Revoked"
+    "search_revoked": "Revoked",
+    "search_deleted": "Deleted",
+    "search_expired": "Expired"
   },
   "feed": {
     "title": "Live Feed",
@@ -439,6 +441,8 @@
     "click_to_copy": "Click to copy",
     "copy_failed": "Copy failed",
     "error_revoke": "Error revoking IOC",
+    "error_delete": "Error deleting IOC",
+    "ioc_deleted_success": "IOC deleted successfully",
     "error_update": "Error updating IOC",
     "only_yar": "Only .yar files are accepted.",
     "select_yara_file": "Please select a YARA rule file first.",

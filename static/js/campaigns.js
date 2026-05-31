@@ -23,6 +23,9 @@
     let campaignSearchGraphAnimToken = 0;
     /** Timer for applying dir to vis-network tooltip after it mounts */
     let campaignGraphTooltipDirTimer = null;
+    const CAMPAIGN_GRAPH_IOC_PAGE_SIZE = 100;
+    let campaignGraphPagination = { totalIocs: 0, loadedIocs: 0, hasMore: false, isLoading: false };
+    let campaignGraphScrollListenerAttached = false;
 
     /**
      * RTL if Hebrew letters are strictly more than Latin letters; ties use first-strong (detectTextDir).
@@ -378,10 +381,12 @@
                     [(typeof t === 'function' && t('edit.expiration')) ? t('edit.expiration') : 'Expiration', ioc.expiration || ((typeof t === 'function' && t('ttl.permanent')) ? t('ttl.permanent') : 'Permanent')],
                     [(typeof t === 'function' && t('search.col.date')) ? t('search.col.date') : 'Created', (ioc.created_at || '').replace('T', ' ').slice(0, 19) || '—'],
                 ];
-                if (ioc.revoked) {
+                if (ioc.inactive_status || ioc.revoked) {
+                    const inactiveKey = (ioc.inactive_status === 'Expired') ? 'search.col.expired' : 'search.col.deleted';
+                    const inactiveFallback = ioc.inactive_status === 'Expired' ? 'Expired' : 'Deleted';
                     rows.push([
                         (typeof t === 'function' && t('campaign.search_status')) ? t('campaign.search_status') : 'Status',
-                        (typeof t === 'function' && t('campaign.search_revoked')) ? t('campaign.search_revoked') : 'Revoked',
+                        (typeof t === 'function' && t(inactiveKey)) ? t(inactiveKey) : inactiveFallback,
                     ]);
                 }
                 let metaHtml = rows.map(function(row) {
@@ -535,6 +540,149 @@
         container.style.height = '';
     }
 
+    function applyCampaignGraphPaginationFromResponse(data) {
+        const p = data && data.pagination;
+        if (p) {
+            campaignGraphPagination.totalIocs = p.total_iocs != null ? p.total_iocs : 0;
+            campaignGraphPagination.loadedIocs = p.loaded_iocs != null ? p.loaded_iocs : 0;
+            campaignGraphPagination.hasMore = !!p.has_more;
+        } else {
+            const iocNodes = (data && data.nodes) ? data.nodes.filter(function(n) {
+                return String(n.id).indexOf('ioc_') === 0;
+            }).length : 0;
+            campaignGraphPagination.totalIocs = iocNodes;
+            campaignGraphPagination.loadedIocs = iocNodes;
+            campaignGraphPagination.hasMore = false;
+        }
+    }
+
+    function updateCampaignGraphLoadIndicator() {
+        const el = document.getElementById('campaignGraphLoadIndicator');
+        if (!el) return;
+        const total = campaignGraphPagination.totalIocs;
+        const loaded = campaignGraphPagination.loadedIocs;
+        if (!currentCampaignId || total === 0) {
+            el.textContent = '';
+            el.classList.add('hidden');
+            return;
+        }
+        const tFn = typeof t === 'function' ? t : function(k) { return k; };
+        let msg = (tFn('campaign.graph_loaded') || 'Showing {loaded} of {total} IOCs')
+            .replace(/\{loaded\}/g, String(loaded))
+            .replace(/\{total\}/g, String(total));
+        if (campaignGraphPagination.isLoading) {
+            msg += ' — ' + (tFn('campaign.graph_loading_more') || 'Loading…');
+        } else if (campaignGraphPagination.hasMore) {
+            msg += ' — ' + (tFn('campaign.graph_scroll_more') || 'Scroll down for more');
+        }
+        el.textContent = msg;
+        el.classList.remove('hidden');
+    }
+
+    function detachCampaignGraphScrollListener() {
+        const wrap = document.getElementById('campaign-graph-scroll-wrap');
+        if (wrap && campaignGraphScrollListenerAttached) {
+            wrap.removeEventListener('scroll', onCampaignGraphScroll);
+            campaignGraphScrollListenerAttached = false;
+        }
+    }
+
+    function onCampaignGraphScroll() {
+        const wrap = document.getElementById('campaign-graph-scroll-wrap');
+        if (!wrap || campaignGraphPagination.isLoading || !campaignGraphPagination.hasMore) return;
+        if (wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 240) {
+            loadMoreCampaignGraphIocs();
+        }
+    }
+
+    function attachCampaignGraphScrollListener() {
+        const wrap = document.getElementById('campaign-graph-scroll-wrap');
+        if (!wrap || campaignGraphScrollListenerAttached) return;
+        wrap.addEventListener('scroll', onCampaignGraphScroll, { passive: true });
+        campaignGraphScrollListenerAttached = true;
+    }
+
+    function resizeCampaignGraphCanvasFromDataSet() {
+        const container = document.getElementById('campaign-network');
+        if (!container || !campaignGraphNodesDataSet) return;
+        const dims = computeCampaignGraphCanvasPixels(campaignGraphNodesDataSet.get());
+        container.style.boxSizing = 'border-box';
+        container.style.width = dims.width + 'px';
+        container.style.minWidth = '100%';
+        container.style.height = dims.height + 'px';
+    }
+
+    function mergeCampaignGraphData(existing, pageData) {
+        if (!existing) return pageData;
+        const seenNode = {};
+        (existing.nodes || []).forEach(function(n) { seenNode[n.id] = true; });
+        const seenEdge = {};
+        (existing.edges || []).forEach(function(e) {
+            seenEdge[(e.from || '') + '->' + (e.to || '')] = true;
+        });
+        const nodes = (existing.nodes || []).slice();
+        const edges = (existing.edges || []).slice();
+        (pageData.nodes || []).forEach(function(n) {
+            if (!seenNode[n.id]) {
+                seenNode[n.id] = true;
+                nodes.push(n);
+            }
+        });
+        (pageData.edges || []).forEach(function(e) {
+            const k = (e.from || '') + '->' + (e.to || '');
+            if (!seenEdge[k]) {
+                seenEdge[k] = true;
+                edges.push(e);
+            }
+        });
+        return {
+            success: true,
+            nodes: nodes,
+            edges: edges,
+            campaign: existing.campaign || pageData.campaign,
+            activity: pageData.activity || existing.activity,
+            pagination: pageData.pagination || existing.pagination,
+        };
+    }
+
+    function appendCampaignGraphPage(pageData) {
+        if (!campaignGraphNodesDataSet || !campaignGraphEdgesDataSet || !pageData) return;
+        const newNodes = pageData.nodes || [];
+        const newEdges = pageData.edges || [];
+        if (newNodes.length) campaignGraphNodesDataSet.add(newNodes);
+        if (newEdges.length) campaignGraphEdgesDataSet.add(newEdges);
+        resizeCampaignGraphCanvasFromDataSet();
+        lastCampaignGraphData = mergeCampaignGraphData(lastCampaignGraphData, pageData);
+        applyCampaignGraphPaginationFromResponse(pageData);
+        updateCampaignGraphLoadIndicator();
+    }
+
+    async function loadMoreCampaignGraphIocs() {
+        if (!currentCampaignId || campaignGraphPagination.isLoading || !campaignGraphPagination.hasMore) return;
+        campaignGraphPagination.isLoading = true;
+        updateCampaignGraphLoadIndicator();
+        const offset = campaignGraphPagination.loadedIocs;
+        try {
+            const res = await fetch(
+                '/api/campaign-graph/' + currentCampaignId +
+                '?offset=' + encodeURIComponent(String(offset)) +
+                '&limit=' + encodeURIComponent(String(CAMPAIGN_GRAPH_IOC_PAGE_SIZE))
+            );
+            const data = await res.json().catch(function() { return {}; });
+            if (!data.success) {
+                if (typeof showToast === 'function') showToast(data.message || 'Failed to load more', 'error');
+                return;
+            }
+            if (currentCampaignId !== (data.campaign && data.campaign.id)) return;
+            appendCampaignGraphPage(data);
+        } catch (err) {
+            if (typeof showToast === 'function') showToast((typeof t === 'function' ? t('toast.error_generic') : 'Error') + ': ' + err.message, 'error');
+        } finally {
+            campaignGraphPagination.isLoading = false;
+            updateCampaignGraphLoadIndicator();
+        }
+    }
+
     function buildVisNetworkFromGraphData(data) {
         const container = document.getElementById('campaign-network');
         if (!container || typeof vis === 'undefined' || !data || !data.success || !data.nodes || !data.nodes.length) return;
@@ -656,6 +804,9 @@
         });
         if (exportBtn) exportBtn.classList.remove('hidden');
         if (exportJsonBtn) exportJsonBtn.classList.remove('hidden');
+        applyCampaignGraphPaginationFromResponse(data);
+        updateCampaignGraphLoadIndicator();
+        attachCampaignGraphScrollListener();
         setTimeout(function() {
             campaignNetwork.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' } });
             updateCampaignSearchBrowseHint();
@@ -1030,6 +1181,9 @@
         const container = document.getElementById('campaign-network');
         if (!container || typeof vis === 'undefined') return;
         setCampaignGraphActivityBanner({ activity: { has_active_iocs: true } });
+        detachCampaignGraphScrollListener();
+        campaignGraphPagination = { totalIocs: 0, loadedIocs: 0, hasMore: false, isLoading: false };
+        updateCampaignGraphLoadIndicator();
         if (campaignGraphTooltipDirTimer) {
             clearTimeout(campaignGraphTooltipDirTimer);
             campaignGraphTooltipDirTimer = null;
@@ -1050,7 +1204,9 @@
         exitCampaignSearchFocusToPicker();
         const exportBtn = document.getElementById('exportCampaignBtn');
         const exportJsonBtn = document.getElementById('exportCampaignJsonBtn');
-        fetch('/api/campaign-graph/' + campaignId)
+        const graphUrl = '/api/campaign-graph/' + campaignId +
+            '?offset=0&limit=' + encodeURIComponent(String(CAMPAIGN_GRAPH_IOC_PAGE_SIZE));
+        fetch(graphUrl)
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (!data.success || !data.nodes || data.nodes.length === 0) {

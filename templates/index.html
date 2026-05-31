@@ -228,7 +228,7 @@
                             <select id="searchBrowseSelect"
                                     class="px-3 py-2 bg-tertiary min-w-[12rem] max-w-[22rem] text-sm"
                                     title="Browse lists by country or type (used when the search box is empty). Typing a value searches the full database.">
-                                <option value="" data-i18n="search.browse_none">— None —</option>
+                                <option value="" data-i18n="search.browse_none">All Groups</option>
                             </select>
                             <select id="searchFilter" 
                                     class="px-4 py-2 bg-tertiary">
@@ -795,6 +795,7 @@
                         <!-- Center: Graph (fills remaining space) -->
                         <div class="flex-1 min-w-0 min-h-0 flex flex-col gap-2 min-h-0">
                             <div id="campaignGraphActivityBanner" class="hidden flex-shrink-0 rounded-lg border border-amber-500/40 bg-amber-950/40 px-3 py-2 text-sm text-amber-100/95" role="status"></div>
+                            <div id="campaignGraphLoadIndicator" class="hidden flex-shrink-0 text-xs text-secondary/90 px-1 py-0.5" role="status" aria-live="polite"></div>
                             <div id="campaign-graph-viz-stack" class="relative flex-1 min-h-0 flex flex-col min-w-0 rounded-xl border-2 border-white/10 overflow-hidden bg-black/20">
                                 <p id="campaignSearchBrowseHint" class="hidden absolute top-2 left-1/2 -translate-x-1/2 z-[5] max-w-[90%] text-center text-xs text-secondary/90 px-3 py-1 rounded-md bg-black/50 pointer-events-none" data-i18n="campaign.search_pick_hint">Click an IOC on the graph to investigate.</p>
                                 <div id="campaign-graph-scroll-wrap" class="campaign-graph-scroll-wrap flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-auto custom-scrollbar relative z-0">

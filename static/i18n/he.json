@@ -356,7 +356,9 @@
     "search_no_related": "אין IOCs נוספים בקמפיין, או שאין תגיות משותפות.",
     "search_copy_value": "העתק ערך",
     "search_status": "סטטוס",
-    "search_revoked": "בוטל (Revoked)"
+    "search_revoked": "בוטל (Revoked)",
+    "search_deleted": "נמחק",
+    "search_expired": "פג תוקף"
   },
   "feed": {
     "title": "פיד חי",
@@ -439,6 +441,8 @@
     "click_to_copy": "לחץ להעתקה",
     "copy_failed": "ההעתקה נכשלה",
     "error_revoke": "שגיאה בביטול IOC",
+    "error_delete": "שגיאה במחיקת IOC",
+    "ioc_deleted_success": "ה-IOC נמחק בהצלחה",
     "error_update": "שגיאה בעדכון IOC",
     "only_yar": "רק קבצי .yar מתקבלים.",
     "select_yara_file": "נא לבחור קובץ כלל YARA.",

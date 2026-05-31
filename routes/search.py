@@ -78,7 +78,7 @@ def _lookup_ioc_rows_by_value(query: str, *, include_inactive: bool = False) -> 
     """
     Fast, reliable lookup by IOC value (exact trim match, then substring).
     When ``include_inactive`` is True, also returns revoked / TTL-expired rows (Search shows them
-    with status Revoked/Expired even though plain feeds omit them).
+    with status Deleted/Expired even though plain feeds omit them).
     """
     needles = _search_needles_from_query(query)
     if not needles:
@@ -99,6 +99,85 @@ def _lookup_ioc_rows_by_value(query: str, *, include_inactive: bool = False) -> 
         _collect(base.filter(func.lower(func.trim(IOC.value)) == n))
         _collect(base.filter(_sql_value_matches_needles(IOC.value, [n])))
     return rows
+
+
+def _terminal_status_for_revoked_rows(rows) -> dict:
+    """
+    For revoked IOC rows, look up the most recent terminal event in ``ioc_history``
+    (``deleted`` for manual revocation, ``expired`` for cleaner TTL revocation) and
+    return ``{(ioc_type, value_lower): 'Deleted' | 'Expired'}``.
+
+    Single SQL query (no N+1): pulls all matching history rows in one shot, ordered
+    newest-first, and keeps only the first event per (type, value).
+    """
+    revoked_keys = []
+    seen_keys: set = set()
+    for r in rows or []:
+        if not getattr(r, 'revoked', False):
+            continue
+        key = (r.type, (r.value or '').strip().lower())
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        revoked_keys.append(key)
+    if not revoked_keys:
+        return {}
+    or_clauses = [
+        db.and_(IocHistory.ioc_type == t, func.lower(IocHistory.ioc_value) == v)
+        for (t, v) in revoked_keys
+    ]
+    hist_rows = (
+        IocHistory.query
+        .filter(IocHistory.event_type.in_(('deleted', 'expired')))
+        .filter(db.or_(*or_clauses))
+        .order_by(IocHistory.at.desc())
+        .all()
+    )
+    status_map: dict = {}
+    for h in hist_rows:
+        key = (h.ioc_type, (h.ioc_value or '').strip().lower())
+        if key in status_map:
+            continue
+        status_map[key] = 'Deleted' if h.event_type == 'deleted' else 'Expired'
+    return status_map
+
+
+def _apply_revoked_terminal_status(results: list, source_rows: list) -> None:
+    """
+    Mutate ``results`` in place: for every result whose underlying IOC row is revoked,
+    set ``status``/``expiration_status`` to ``Deleted`` or ``Expired`` based on the most
+    recent ``ioc_history`` event. Falls back to ``Expired`` when ``expiration_date`` is in
+    the past, otherwise ``Deleted`` (covers cases where history is missing for legacy rows).
+    """
+    status_map = _terminal_status_for_revoked_rows(source_rows)
+    now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+    for d in results:
+        row = next((r for r in source_rows if r.id == d.get('line_number')), None)
+        if not row or not getattr(row, 'revoked', False):
+            continue
+        key = (row.type, (row.value or '').strip().lower())
+        label = status_map.get(key)
+        if not label:
+            exp = getattr(row, 'expiration_date', None)
+            label = 'Expired' if (exp is not None and exp < now_dt) else 'Deleted'
+        d['status'] = label
+        d['expiration_status'] = label
+
+
+def terminal_status_label_for_ioc_row(row) -> str | None:
+    """
+    User-facing inactive label for a revoked IOC row: ``Deleted`` (manual removal) or ``Expired`` (TTL).
+    Returns None when the row is still active. STIX/TAXII continue to use the ``revoked`` column internally.
+    """
+    if not row or not getattr(row, 'revoked', False):
+        return None
+    key = (row.type, (row.value or '').strip().lower())
+    label = _terminal_status_for_revoked_rows([row]).get(key)
+    if label:
+        return label
+    now_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+    exp = getattr(row, 'expiration_date', None)
+    return 'Expired' if (exp is not None and exp < now_dt) else 'Deleted'
 
 
 def _search_legacy_main_txt_for_value(query: str) -> list:
@@ -1281,15 +1360,12 @@ def _search_ioc_impl():
     # Fast path: value-shaped queries — active rows first, then revoked/expired (old TTL IOCs).
     if query and filter_type in ('all', 'ioc_value'):
         fast_rows = _lookup_ioc_rows_by_value(query, include_inactive=False)
-        search_note = None
         if not fast_rows:
             inactive = _lookup_ioc_rows_by_value(query, include_inactive=True)
             if inactive:
+                # Show revoked/expired rows in Search results (their badge in the table
+                # — Deleted/Expired — already conveys the state); no warning toast.
                 fast_rows = inactive
-                search_note = (
-                    'Found revoked or expired IOC(s) only. They are omitted from plain /feed/* '
-                    'responses; clear feed cache if an old feed URL still lists them.'
-                )
         if fast_rows:
             results = _enrich_ioc_results_with_hints(
                 fast_rows[:per_page],
@@ -1300,12 +1376,7 @@ def _search_ioc_impl():
                 _tag_matches,
                 _search_expiration_status_matches,
             )
-            for d in results:
-                row = next((r for r in fast_rows if r.id == d.get('line_number')), None)
-                if row and getattr(row, 'revoked', False):
-                    d['status'] = 'Revoked'
-                    d['expiration_status'] = 'Revoked'
-            inactive_note = search_note
+            _apply_revoked_terminal_status(results, fast_rows)
             out_fast = {
                 'success': True,
                 'query': query,
@@ -1851,11 +1922,8 @@ def _search_ioc_impl():
         inactive_note = None
         if not exact_rows:
             exact_rows = _lookup_ioc_rows_by_value(query, include_inactive=True)
-            if exact_rows:
-                inactive_note = (
-                    'Found revoked or expired IOC(s) only. Plain /feed/* omits them; '
-                    'clear feed cache if the feed URL still lists this value.'
-                )
+            # Revoked/expired rows surface here; the table badge (Deleted/Expired) replaces
+            # the old warning toast. ``inactive_note`` stays None for this branch.
         if exact_rows:
             results = _enrich_ioc_results_with_hints(
                 exact_rows[:per_page],
@@ -1866,11 +1934,7 @@ def _search_ioc_impl():
                 _tag_matches,
                 _search_expiration_status_matches,
             )
-            for d in results:
-                row = next((r for r in exact_rows if r.id == d.get('line_number')), None)
-                if row and getattr(row, 'revoked', False):
-                    d['status'] = 'Revoked'
-                    d['expiration_status'] = 'Revoked'
+            _apply_revoked_terminal_status(results, exact_rows)
             total = len(exact_rows)
         else:
             legacy_hits = _search_legacy_main_txt_for_value(query)
@@ -2128,7 +2192,7 @@ def revoke_ioc():
         except Exception as push_err:
             logger.warning('IOC push after revoke failed: %s', push_err)
         refresh_champ_score_for_user(current_user.id)
-        response = {'success': True, 'message': f'{ioc_type} IOC revoked successfully'}
+        response = {'success': True, 'message': f'{ioc_type} IOC deleted successfully', 'status': 'Deleted'}
         try:
             response.update(_detect_champs_changes(champs_before, current_user.id, (current_user.username or '').lower()))
         except Exception as champs_err:

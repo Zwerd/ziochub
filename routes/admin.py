@@ -2192,10 +2192,28 @@ def _get_ldap_servers_for_form(get_setting_fn):
 
 
 def _taxii_settings_fallback(get_setting_fn):
-    from taxii_pull_settings import TAXII_DEFAULTS
+    """Fallback TAXII settings when taxii_pull_settings module is missing (e.g. old install)."""
+    defaults = {
+        'taxii_pull_enabled': 'false',
+        'taxii_discovery_url': '',
+        'taxii_api_root_id': '',
+        'taxii_collection_id': '',
+        'taxii_username': '',
+        'taxii_password': '',
+        'taxii_api_key': '',
+        'taxii_verify_ssl': 'false',
+        'taxii_last_days': '30',
+        'taxii_pull_interval': '60',
+        'taxii_sync_user': 'taxii_sync',
+        'taxii_exclude_from_champs': 'true',
+        'taxii_skip_revoked': 'true',
+        'taxii_default_ttl': 'permanent',
+        'taxii_last_sync': '',
+        'taxii_last_sync_result': '',
+    }
     return {
         k: str((get_setting_fn(k, v) if callable(get_setting_fn) else get_setting_fn.get(k, v)) or v).strip() or v
-        for k, v in TAXII_DEFAULTS.items()
+        for k, v in defaults.items()
     }
 
 

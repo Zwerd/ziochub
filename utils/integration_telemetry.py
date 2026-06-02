@@ -68,6 +68,21 @@ KEY_VENDOR_PUSH_DETAIL_GOOGLE = 'telemetry_vendor_push_detail_google_secops'
 KEY_VENDOR_PUSH_ATTEMPT_CORTEX = 'telemetry_vendor_push_attempt_cortex_xdr'
 KEY_VENDOR_PUSH_ATTEMPT_GOOGLE = 'telemetry_vendor_push_attempt_google_secops'
 
+# Outbound push kinds ZIoCHub actually supports per vendor (Push State rows).
+_VENDOR_PUSH_DATA_KINDS: dict[str, tuple[str, ...]] = {
+    'cortex_xdr': ('IOC',),  # Cortex XDR API: IOC/blocklist only — no YARA push
+    'google_secops': ('IOC',),  # Chronicle/SecOps: IOC indicators only — no YARA / YARA-L push
+}
+
+
+def _push_kinds_for_vendor(vendor_id: str) -> tuple[str, ...]:
+    return _VENDOR_PUSH_DATA_KINDS.get((vendor_id or '').strip(), ('IOC',))
+
+
+def _vendor_supports_push_kind(vendor_id: str, data_kind: str) -> bool:
+    kind_u = (data_kind or '').strip().upper()
+    return kind_u in _push_kinds_for_vendor(vendor_id)
+
 
 def _client_ip():
     if not has_request_context():
@@ -325,11 +340,14 @@ def record_vendor_integration_push(vendor_id: str, data_kind: str) -> None:
     kind_u = (data_kind or '').strip().upper()
     if kind_u not in ('IOC', 'YARA'):
         return
+    vid = (vendor_id or '').strip()
+    if not _vendor_supports_push_kind(vid, kind_u):
+        return
     key_map = {
         'cortex_xdr': KEY_VENDOR_PUSH_DETAIL_CORTEX,
         'google_secops': KEY_VENDOR_PUSH_DETAIL_GOOGLE,
     }
-    setting_key = key_map.get((vendor_id or '').strip())
+    setting_key = key_map.get(vid)
     if not setting_key:
         return
     try:
@@ -377,16 +395,19 @@ def record_vendor_push_attempt(vendor_id: str, *, data_kind: str = 'IOC', ok: bo
     kind_u = (data_kind or '').strip().upper()
     if kind_u not in ('IOC', 'YARA'):
         kind_u = 'IOC'
+    vid = (vendor_id or '').strip()
+    if not _vendor_supports_push_kind(vid, kind_u):
+        return
     key_map = {
         'cortex_xdr': KEY_VENDOR_PUSH_ATTEMPT_CORTEX,
         'google_secops': KEY_VENDOR_PUSH_ATTEMPT_GOOGLE,
     }
-    setting_key = key_map.get((vendor_id or '').strip())
+    setting_key = key_map.get(vid)
     if not setting_key:
         return
     try:
         now = _utcnow().isoformat()
-        payload = {
+        attempt_payload = {
             'at': now,
             'ok': bool(ok),
             'kind': kind_u,
@@ -394,7 +415,19 @@ def record_vendor_push_attempt(vendor_id: str, *, data_kind: str = 'IOC', ok: bo
             'message': (str(message or '')[:240]),
         }
         s = SystemSetting.query.filter_by(key=setting_key).first()
-        val = json.dumps(payload, ensure_ascii=False)
+        raw = (s.value if s else '') or '{}'
+        try:
+            obj = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            obj = {}
+        if not isinstance(obj, dict):
+            obj = {}
+        # Per-kind map (IOC / YARA) so Push State can show both rows without overwriting.
+        if 'at' in obj and 'kind' in obj and not any(k in obj for k in ('IOC', 'YARA')):
+            legacy_kind = (obj.get('kind') or 'IOC').upper()
+            obj = {legacy_kind: {k: v for k, v in obj.items() if k != 'kind'}}
+        obj[kind_u] = attempt_payload
+        val = json.dumps(obj, ensure_ascii=False)
         if s:
             s.value = val
         else:
@@ -471,10 +504,14 @@ def _vendor_attempt_for_kind(_get, vendor_id: str, kind_u: str) -> dict:
     obj = _parse_vendor_attempt_json(_get(k) or '')
     if not obj:
         return {}
-    # Stored as one payload at a time; ensure kind matches (best-effort)
-    if (obj.get('kind') or '').upper() != (kind_u or '').upper():
-        return {}
-    return obj
+    kind_key = (kind_u or '').upper()
+    nested = obj.get(kind_key)
+    if isinstance(nested, dict) and nested.get('at'):
+        return nested
+    # Legacy flat payload: {"at", "ok", "kind", ...}
+    if obj.get('at') and (obj.get('kind') or 'IOC').upper() == kind_key:
+        return obj
+    return {}
 
 
 def _google_secops_push_display_address(_get) -> tuple[str, str]:
@@ -508,21 +545,23 @@ def _build_integration_push_state_entries(_get):
     rows = []
 
     cx_url = (_get('cortex_xdr_base_url') or '').strip()
+    cx_enabled = (_get('cortex_xdr_enabled') or 'false').strip().lower() in ('true', '1', 'yes')
     cx_name = (_get('cortex_xdr_display_name') or '').strip() or 'Cortex XDR'
-    if cx_url:
+    if cx_url or cx_enabled:
         detail = _parse_vendor_push_detail_json(_get(KEY_VENDOR_PUSH_DETAIL_CORTEX) or '')
-        host = _host_from_url(cx_url)
-        hip = _resolve_hostname_ip(host)
-        for kind in ('IOC', 'YARA'):
+        host = _host_from_url(cx_url) if cx_url else ''
+        hip = _resolve_hostname_ip(host) if host else ''
+        for kind in _push_kinds_for_vendor('cortex_xdr'):
             attempt = _vendor_attempt_for_kind(_get, 'cortex_xdr', kind)
             rows.append({
                 'id': 'cortex_xdr_' + kind.lower(),
                 'integration_id': 'cortex_xdr',
                 'display_name': cx_name,
-                'address': cx_url,
+                'address': cx_url or '(not configured)',
                 'host': host,
                 'host_ip': hip,
                 'data_kind': kind,
+                'enabled': cx_enabled,
                 'last_push_at': detail.get(kind) or None,
                 'last_attempt_at': attempt.get('at') or None,
                 'last_attempt_ok': attempt.get('ok') if attempt else None,
@@ -535,7 +574,7 @@ def _build_integration_push_state_entries(_get):
         gs_name = (_get('google_secops_display_name') or '').strip() or 'Google SecOps'
         detail_g = _parse_vendor_push_detail_json(_get(KEY_VENDOR_PUSH_DETAIL_GOOGLE) or '')
         hip_g = _resolve_hostname_ip(g_host)
-        for kind in ('IOC', 'YARA'):
+        for kind in _push_kinds_for_vendor('google_secops'):
             attempt_g = _vendor_attempt_for_kind(_get, 'google_secops', kind)
             rows.append({
                 'id': 'google_secops_' + kind.lower(),
@@ -583,34 +622,60 @@ def _parse_push_results_json(json_str):
         return []
 
 
-def _build_pull_state_entries(_get):
-    """
-    Inbound IOC pulls: ZIoCHub connects outward to external platforms and imports into the DB.
-    Currently MISP only (manual sync + misp_sync_job). Uses misp_last_sync / misp_last_sync_result.
-    """
-    url = (_get('misp_url') or '').strip()
-    enabled = (_get('misp_enabled') or 'false').lower() == 'true'
-    last_str = (_get('misp_last_sync') or '').strip()
-    result_raw = _get('misp_last_sync_result')
+def _parse_pull_sync_result(result_raw) -> tuple[str, str]:
     sync_status = 'unknown'
+    last_summary = ''
     if result_raw:
         try:
             r = json.loads(result_raw)
             if isinstance(r, dict):
-                sync_status = 'ok' if r.get('success') else 'fail'
+                if r.get('success'):
+                    sync_status = 'ok'
+                    parts = []
+                    if r.get('added') is not None:
+                        parts.append(f"added={r.get('added', 0)}")
+                    if r.get('skipped') is not None:
+                        parts.append(f"skipped={r.get('skipped', 0)}")
+                    if r.get('fetched') is not None:
+                        parts.append(f"fetched={r.get('fetched', 0)}")
+                    last_summary = ', '.join(parts) if parts else 'ok'
+                else:
+                    sync_status = 'fail'
+                    last_summary = (r.get('error') or 'sync failed')[:240]
         except Exception:
             sync_status = 'unknown'
+    return sync_status, last_summary
+
+
+def _misp_pull_state_row(_get) -> dict:
+    from utils.misp_sync_runner import (
+        MISP_PULL_INTERVAL_DEFAULT,
+        next_misp_pull_at,
+        normalize_misp_pull_interval,
+    )
+
+    url = (_get('misp_url') or '').strip()
+    enabled = (_get('misp_enabled') or 'false').lower() == 'true'
+    last_str = (_get('misp_last_sync') or '').strip()
+    pull_interval_min = normalize_misp_pull_interval(
+        _get('misp_pull_interval') or str(MISP_PULL_INTERVAL_DEFAULT)
+    )
+    sync_status, last_summary = _parse_pull_sync_result(_get('misp_last_sync_result'))
+    nxt = next_misp_pull_at(_get) if enabled and last_str else None
 
     if not url:
-        return [{
+        return {
             'id': 'misp',
             'name': 'MISP',
             'address': '',
             'host': '',
             'last_pull_at': None,
+            'next_pull_at': None,
+            'pull_interval_min': pull_interval_min,
+            'last_summary': '',
             'status': 'not_configured',
             'enabled': False,
-        }]
+        }
 
     row = {
         'id': 'misp',
@@ -618,14 +683,68 @@ def _build_pull_state_entries(_get):
         'address': url,
         'host': _host_from_url(url),
         'last_pull_at': last_str or None,
+        'next_pull_at': nxt,
+        'pull_interval_min': pull_interval_min,
+        'last_summary': last_summary,
         'enabled': enabled,
+        'status': 'disabled' if not enabled else sync_status,
     }
-    if not enabled:
-        row['status'] = 'disabled'
-        return [row]
+    return row
 
-    row['status'] = sync_status
-    return [row]
+
+def _taxii_pull_state_row(_get) -> dict:
+    from utils.taxii_sync_runner import (
+        TAXII_PULL_INTERVAL_DEFAULT,
+        next_taxii_pull_at,
+        normalize_taxii_pull_interval,
+    )
+
+    url = (_get('taxii_discovery_url') or '').strip()
+    enabled = (_get('taxii_pull_enabled') or 'false').lower() == 'true'
+    last_str = (_get('taxii_last_sync') or '').strip()
+    pull_interval_min = normalize_taxii_pull_interval(
+        _get('taxii_pull_interval') or str(TAXII_PULL_INTERVAL_DEFAULT)
+    )
+    sync_status, last_summary = _parse_pull_sync_result(_get('taxii_last_sync_result'))
+    nxt = next_taxii_pull_at(_get) if enabled and last_str else None
+    api_key = (_get('taxii_api_key') or '').strip()
+    user = (_get('taxii_username') or '').strip()
+    pwd = (_get('taxii_password') or '').strip()
+    has_creds = bool(api_key or (user and pwd))
+
+    if not url or not has_creds:
+        return {
+            'id': 'taxii',
+            'name': 'TAXII (remote)',
+            'address': url or '',
+            'host': _host_from_url(url) if url else '',
+            'last_pull_at': None,
+            'next_pull_at': None,
+            'pull_interval_min': pull_interval_min,
+            'last_summary': '',
+            'status': 'not_configured',
+            'enabled': False,
+        }
+
+    return {
+        'id': 'taxii',
+        'name': 'TAXII (remote)',
+        'address': url,
+        'host': _host_from_url(url),
+        'last_pull_at': last_str or None,
+        'next_pull_at': nxt,
+        'pull_interval_min': pull_interval_min,
+        'last_summary': last_summary,
+        'enabled': enabled,
+        'status': 'disabled' if not enabled else sync_status,
+    }
+
+
+def _build_pull_state_entries(_get):
+    """
+    Inbound IOC pulls: ZIoCHub connects outward to MISP and/or remote TAXII 2.1 servers.
+    """
+    return [_misp_pull_state_row(_get), _taxii_pull_state_row(_get)]
 
 
 def _build_automation_targets(_get):
@@ -708,10 +827,15 @@ def get_connections_snapshot():
         .all()
     )
 
-    def _get(key):
+    def _get(key, default=None):
+        """Read SystemSetting; optional ``default`` for MISP scheduler helpers (``next_misp_pull_at``)."""
         s = SystemSetting.query.filter_by(key=key).first()
-        v = (s.value or '').strip() if s else ''
-        return v or None
+        if not s:
+            return default
+        v = (s.value or '').strip()
+        if not v:
+            return default
+        return v
 
     automation_targets = _build_automation_targets(_get)
     pull_state = _build_pull_state_entries(_get)

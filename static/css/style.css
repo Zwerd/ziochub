@@ -248,6 +248,96 @@ body, input, select, textarea, button, label, .tab-button {
     max-width: 64rem;  /* 1024px */
 }
 
+/* Feed Pulse: Push/Pull state — wider than Connections (max-w-2xl), not full viewport.
+   Tailwind max-w-5xl is not in tailwind-built.css; use this class so width is enforced offline. */
+.feed-state-modal-panel {
+    width: 100%;
+    max-width: min(92vw, 48rem); /* 768px */
+    max-height: 85vh;
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* Feed Pulse Push/Pull tables: fixed layout inside modal; long text clips with ellipsis + title */
+.feed-state-table-scroll {
+    overflow-x: hidden;
+    overflow-y: auto;
+    max-height: min(26rem, 60vh);
+    min-width: 0;
+}
+.feed-state-modal-panel .feed-state-table {
+    width: 100%;
+    table-layout: fixed !important;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+}
+.feed-state-modal-panel .feed-state-table th,
+.feed-state-modal-panel .feed-state-table td {
+    padding: 0.375rem 0.5rem;
+    text-align: left;
+    vertical-align: middle;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+.feed-state-modal-panel .feed-state-table col.feed-state-col-address {
+    width: 7.5rem;
+}
+.feed-state-modal-panel .feed-state-table col.feed-state-col-tail {
+    width: 9.5rem;
+}
+.feed-state-modal-panel .feed-state-table col.feed-state-col-date {
+    width: 7.25rem;
+}
+.feed-state-modal-panel .feed-state-table td.feed-state-td--address,
+.feed-state-modal-panel .feed-state-table td.feed-state-td--tail,
+.feed-state-modal-panel .feed-state-table td.feed-state-td--date {
+    overflow: hidden;
+    max-width: 0; /* with table-layout:fixed + col width, keeps cell inside column */
+}
+.feed-state-modal-panel .feed-state-table td[data-title]:not([data-title=""]),
+.feed-state-modal-panel .feed-state-table td[data-title]:not([data-title=""]) .feed-state-cell__inner {
+    cursor: help;
+}
+.feed-state-tooltip {
+    position: fixed;
+    z-index: 10050;
+    max-width: min(22rem, 90vw);
+    padding: 0.4rem 0.55rem;
+    font-size: 0.6875rem;
+    line-height: 1.35;
+    color: #e2e8f0;
+    background: #0f172a;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 0.375rem;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+    word-break: break-word;
+    pointer-events: none;
+}
+.feed-state-tooltip.hidden {
+    display: none;
+}
+.feed-state-modal-panel .feed-state-table .feed-state-cell__inner {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    max-width: 100%;
+}
+.feed-state-modal-panel .feed-state-table .feed-state-cell__inner--hard {
+    width: 0;
+    min-width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+.feed-state-modal-panel .feed-state-table .feed-state-cell--nowrap {
+    white-space: nowrap;
+}
+.feed-state-modal-panel .feed-state-table .feed-state-cell--mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.6875rem;
+}
+
 /* Report card: single class for Reports tab (replaces long repeated string) */
 .report-card {
     background: var(--glass-bg);

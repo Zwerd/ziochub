@@ -74,6 +74,53 @@ def _ioc_value_text_matches_needles(row, needles: list[str]) -> bool:
     return any(n in val for n in needles)
 
 
+def _parse_search_lifecycle(raw: str) -> str:
+    """``all`` (default), ``active``, or ``inactive`` — aligned with ``ioc_row_is_active``."""
+    v = (raw or 'all').strip().lower()
+    if v in ('active', 'inactive', 'all'):
+        return v
+    return 'all'
+
+
+def _ioc_active_clause(now):
+    return db.and_(
+        IOC.revoked.is_(False),
+        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now),
+    )
+
+
+def _ioc_inactive_clause(now):
+    return db.or_(
+        IOC.revoked.is_(True),
+        db.and_(IOC.expiration_date.isnot(None), IOC.expiration_date <= now),
+    )
+
+
+def _apply_search_lifecycle(q, lifecycle: str, now=None):
+    lifecycle = _parse_search_lifecycle(lifecycle)
+    if lifecycle == 'active':
+        if now is None:
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+        return q.filter(_ioc_active_clause(now))
+    if lifecycle == 'inactive':
+        if now is None:
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+        return q.filter(_ioc_inactive_clause(now))
+    return q
+
+
+def _lookup_ioc_rows_by_value_for_lifecycle(query: str, lifecycle: str) -> list:
+    """Value lookup respecting Search lifecycle filter (fixes partial-match hiding deleted rows)."""
+    lifecycle = _parse_search_lifecycle(lifecycle)
+    (ioc_row_is_active,) = _from_app('ioc_row_is_active')
+    if lifecycle == 'active':
+        return _lookup_ioc_rows_by_value(query, include_inactive=False)
+    all_matching = _lookup_ioc_rows_by_value(query, include_inactive=True)
+    if lifecycle == 'inactive':
+        return [r for r in all_matching if not ioc_row_is_active(r)]
+    return all_matching
+
+
 def _lookup_ioc_rows_by_value(query: str, *, include_inactive: bool = False) -> list:
     """
     Fast, reliable lookup by IOC value (exact trim match, then substring).
@@ -1070,11 +1117,14 @@ _BROWSE_AGGREGATE_KEYS = frozenset({
 })
 
 
-def _ioc_query_browse_aggregate(agg: str):
+def _ioc_query_browse_aggregate(agg: str, lifecycle: str = 'active'):
     """Return IOC query for ``browse_aggregate`` (empty ``q`` browse), or ``None`` if unknown."""
     vlen = func.length(func.trim(IOC.value))
     ag = (agg or '').strip().lower()
-    q = IOC.query.options(joinedload(IOC.campaign)).filter(IOC.revoked.is_(False))
+    q = _apply_search_lifecycle(
+        IOC.query.options(joinedload(IOC.campaign)),
+        lifecycle,
+    )
     if ag == 'ip':
         return q.filter(IOC.type == 'IP')
     if ag == 'domain':
@@ -1355,17 +1405,12 @@ def _search_ioc_impl():
         }), 400
 
     query_lower = query.lower()
+    lifecycle = _parse_search_lifecycle(request.args.get('lifecycle', 'all'))
     inactive_note = None
 
-    # Fast path: value-shaped queries — active rows first, then revoked/expired (old TTL IOCs).
+    # Fast path: value-shaped queries (exact / substring on IOC value).
     if query and filter_type in ('all', 'ioc_value'):
-        fast_rows = _lookup_ioc_rows_by_value(query, include_inactive=False)
-        if not fast_rows:
-            inactive = _lookup_ioc_rows_by_value(query, include_inactive=True)
-            if inactive:
-                # Show revoked/expired rows in Search results (their badge in the table
-                # — Deleted/Expired — already conveys the state); no warning toast.
-                fast_rows = inactive
+        fast_rows = _lookup_ioc_rows_by_value_for_lifecycle(query, lifecycle)
         if fast_rows:
             results = _enrich_ioc_results_with_hints(
                 fast_rows[:per_page],
@@ -1381,6 +1426,7 @@ def _search_ioc_impl():
                 'success': True,
                 'query': query,
                 'filter': filter_type,
+                'lifecycle': lifecycle,
                 'results': results,
                 'count': len(results),
                 'total': len(fast_rows),
@@ -1410,11 +1456,15 @@ def _search_ioc_impl():
 
     # Empty query: only "All columns" lists every IOC (paginated). Other filters need dedicated logic.
     if not query and not country_cc and not browse_aggregate and filter_type == 'all':
-        total = IOC.query.filter(IOC.revoked.is_(False)).count()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        list_q = _apply_search_lifecycle(
+            IOC.query.options(joinedload(IOC.campaign)),
+            lifecycle,
+            now,
+        )
+        total = list_q.count()
         rows = (
-            IOC.query.options(joinedload(IOC.campaign))
-            .filter(IOC.revoked.is_(False))
-            .order_by(IOC.created_at.desc(), IOC.id.desc())
+            list_q.order_by(IOC.created_at.desc(), IOC.id.desc())
             .offset((page - 1) * per_page)
             .limit(per_page)
             .all()
@@ -1424,6 +1474,7 @@ def _search_ioc_impl():
             'success': True,
             'query': query,
             'filter': filter_type,
+            'lifecycle': lifecycle,
             'results': results,
             'count': len(results),
             'total': total,
@@ -1508,7 +1559,7 @@ def _search_ioc_impl():
         })
 
     if not query and browse_aggregate and filter_type == 'all':
-        oq = _ioc_query_browse_aggregate(browse_aggregate)
+        oq = _ioc_query_browse_aggregate(browse_aggregate, lifecycle)
         if oq is None:
             return jsonify({'success': False, 'message': 'Invalid browse_aggregate'}), 400
         total = oq.count()
@@ -1523,6 +1574,7 @@ def _search_ioc_impl():
             'success': True,
             'query': query,
             'filter': filter_type,
+            'lifecycle': lifecycle,
             'browse_aggregate': browse_aggregate,
             'results': results,
             'count': len(results),
@@ -1532,10 +1584,13 @@ def _search_ioc_impl():
         })
 
     if not query and country_cc and filter_type == 'all':
-        q = _apply_ip_country_filter(
-            IOC.query.options(joinedload(IOC.campaign)).filter(IOC.revoked.is_(False)),
-            country_cc,
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        q = _apply_search_lifecycle(
+            IOC.query.options(joinedload(IOC.campaign)),
+            lifecycle,
+            now,
         )
+        q = _apply_ip_country_filter(q, country_cc)
         total = q.count()
         rows = q.offset((page - 1) * per_page).limit(per_page).all()
         query_lower = ''
@@ -1544,6 +1599,7 @@ def _search_ioc_impl():
             'success': True,
             'query': query,
             'filter': filter_type,
+            'lifecycle': lifecycle,
             'country_code': country_cc,
             'results': results,
             'count': len(results),
@@ -1553,7 +1609,7 @@ def _search_ioc_impl():
         })
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
-    q = IOC.query.options(joinedload(IOC.campaign)).filter(IOC.revoked.is_(False))
+    q = _apply_search_lifecycle(IOC.query.options(joinedload(IOC.campaign)), lifecycle, now)
     if country_cc:
         q = _apply_ip_country_filter(q, country_cc)
     if browse_aggregate:
@@ -1679,10 +1735,13 @@ def _search_ioc_impl():
             rows = []
             for ioc_type, ioc_val in pairs_page:
                 val_l = (ioc_val or '').strip().lower()
-                row = IOC.query.options(joinedload(IOC.campaign)).filter(
-                    IOC.type == ioc_type,
-                    func.lower(IOC.value) == val_l,
-                    IOC.revoked.is_(False),
+                row = _apply_search_lifecycle(
+                    IOC.query.options(joinedload(IOC.campaign)).filter(
+                        IOC.type == ioc_type,
+                        func.lower(IOC.value) == val_l,
+                    ),
+                    lifecycle,
+                    now,
                 ).first()
                 if not row:
                     continue
@@ -1847,8 +1906,12 @@ def _search_ioc_impl():
             missing = note_keys - existing_keys
             if missing:
                 for ntype, nval in missing:
-                    extra = IOC.query.options(joinedload(IOC.campaign)).filter(
-                        IOC.type == ntype, func.lower(IOC.value) == nval
+                    extra = _apply_search_lifecycle(
+                        IOC.query.options(joinedload(IOC.campaign)).filter(
+                            IOC.type == ntype, func.lower(IOC.value) == nval
+                        ),
+                        lifecycle,
+                        now,
                     ).first()
                     if extra and _ioc_row_matches_country(extra, country_cc):
                         if browse_aggregate and not _ioc_row_in_browse_aggregate_bucket(extra, browse_aggregate):
@@ -1863,6 +1926,7 @@ def _search_ioc_impl():
         _tag_matches,
         _search_expiration_status_matches,
     )
+    _apply_revoked_terminal_status(results, rows)
     # Merge YARA + Campaign pseudo-rows only when not restricting by country or browse bucket.
     # browse_aggregate scopes to IOC buckets (domain/email/url/hash); YARA and Campaign rows are not in those buckets.
     if not country_cc and not browse_aggregate:
@@ -1894,7 +1958,7 @@ def _search_ioc_impl():
     if not country_cc and not browse_aggregate:
         _append_campaign_search_results(results, filter_type, query_lower)
     current_keys = {(r.get('file_type'), (r.get('ioc') or r.get('value') or '').lower()) for r in results}
-    if not country_cc:
+    if not country_cc and lifecycle != 'active':
         dq = IocHistory.query.filter(IocHistory.event_type == 'deleted')
         agg_hist_type = _ioc_type_label_for_browse_aggregate(browse_aggregate)
         if agg_hist_type:
@@ -1918,12 +1982,8 @@ def _search_ioc_impl():
             dh['match_hints'] = _deleted_history_match_hints(h, query_lower, filter_type)
             results.append(dh)
     if not results and needles and filter_type in ('all', 'ioc_value'):
-        exact_rows = _lookup_ioc_rows_by_value(query, include_inactive=False)
+        exact_rows = _lookup_ioc_rows_by_value_for_lifecycle(query, lifecycle)
         inactive_note = None
-        if not exact_rows:
-            exact_rows = _lookup_ioc_rows_by_value(query, include_inactive=True)
-            # Revoked/expired rows surface here; the table badge (Deleted/Expired) replaces
-            # the old warning toast. ``inactive_note`` stays None for this branch.
         if exact_rows:
             results = _enrich_ioc_results_with_hints(
                 exact_rows[:per_page],
@@ -1949,6 +2009,7 @@ def _search_ioc_impl():
         'success': True,
         'query': query,
         'filter': filter_type,
+        'lifecycle': lifecycle,
         'results': results,
         'count': len(results),
         'total': total,

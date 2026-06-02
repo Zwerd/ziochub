@@ -3,136 +3,38 @@
 
 {% block admin_content %}
 <div class="mb-4">
-    <p class="text-secondary text-sm">Built-in integrations: <strong class="text-primary">Trellix EX / CMS / NX</strong> (Email YARA direct, CMS central manager, Network YARA), <strong class="text-primary">Cisco ESA</strong> (dictionary sync), <strong class="text-primary">Cortex XDR</strong> and <strong class="text-primary">Google SecOps</strong> (IOC API placeholders - see each tab). Generic HTTP IOC/YARA automations: <a href="{{ url_for('admin_pages.admin_automations') }}" class="text-cyan-400 hover:underline">Automations</a>. LDAP, MISP, Syslog: <a href="{{ url_for('admin_pages.admin_settings') }}" class="text-cyan-400 hover:underline">Settings</a>.</p>
+    <p class="text-secondary text-sm">Threat-intel flows: <strong class="text-primary">Import ↓</strong> (MISP, TAXII pull) · <strong class="text-primary">Export ↑</strong> (public feeds / TAXII server) · <strong class="text-primary">Push ↑</strong> (IOC &amp; YARA to defense tools). Platform options: <a href="{{ url_for('admin_pages.admin_settings') }}" class="text-cyan-400 hover:underline">Settings</a>.</p>
 </div>
 
-<nav class="settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-6">
-    <button type="button" class="settings-tab-btn active" data-tab="trellix-ex-nx">Trellix EX/NX</button>
-    <button type="button" class="settings-tab-btn" data-tab="cisco-esa">Cisco ESA</button>
-    <button type="button" class="settings-tab-btn" data-tab="cortex-xdr">Cortex XDR</button>
-    <button type="button" class="settings-tab-btn" data-tab="google-secops">Google SecOps</button>
+<nav class="integ-top-tabs settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-6">
+    <button type="button" class="integ-top-tab-btn settings-tab-btn active" data-integ-tab="overview">Overview</button>
+    <button type="button" class="integ-top-tab-btn settings-tab-btn" data-integ-tab="import">Import (pull)</button>
+    <button type="button" class="integ-top-tab-btn settings-tab-btn" data-integ-tab="export">Export (feeds)</button>
+    <button type="button" class="integ-top-tab-btn settings-tab-btn" data-integ-tab="push-ioc">Push IOC</button>
+    <button type="button" class="integ-top-tab-btn settings-tab-btn" data-integ-tab="push-yara">Push YARA</button>
 </nav>
 
-<!-- Tab: Trellix EX / NX -->
-<div id="settings-tab-trellix-ex-nx" class="settings-tab-pane">
-    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
-        <h3 class="text-lg font-semibold accent-blue mb-2">Trellix EX / CMS / NX</h3>
-        <p class="text-secondary text-sm mb-4"><strong class="text-primary">Email Security (EX)</strong>, <strong class="text-primary">CMS</strong> (central manager for EX), and <strong class="text-primary">Network Security (NX)</strong> are grouped here. Use the buttons below to switch.</p>
-
-        <div class="flex flex-wrap gap-1.5 p-1 rounded-xl bg-black/30 border border-white/10 w-fit max-w-full mb-2">
-            <button type="button" class="trellix-exnx-subtab-btn px-3 py-2 rounded-lg text-sm font-medium transition bg-cyan-600 text-white" data-trellix-exnx-sub="ex">Email (EX)</button>
-            <button type="button" class="trellix-exnx-subtab-btn px-3 py-2 rounded-lg text-sm font-medium transition bg-tertiary text-primary hover:bg-white/10" data-trellix-exnx-sub="cms">CMS</button>
-            <button type="button" class="trellix-exnx-subtab-btn px-3 py-2 rounded-lg text-sm font-medium transition bg-tertiary text-primary hover:bg-white/10" data-trellix-exnx-sub="nx">Network (NX)</button>
-        </div>
-
-        <div id="trellix-exnx-sub-ex" class="trellix-exnx-subpane space-y-3">
-            <h4 class="text-sm font-semibold text-primary">Email Security (EX)</h4>
-            <p class="text-secondary text-sm mb-2">Push approved YARA rules to Trellix Email Security (EX): JSON password login to <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code>, then <code class="px-0.5 rounded bg-white/10 text-xs">multipart/form-data</code> POST (default upload path <code class="px-0.5 rounded bg-white/10 text-xs">/ex/yara_rules_ng/upload_yara</code>). Network Security (NX) web YARA uses <code class="px-0.5 rounded bg-white/10 text-xs">/wmps/yara_rules_ng/upload_yara</code> - configure that under <strong class="text-primary">Network (NX)</strong> with API style <code class="px-0.5 rounded bg-white/10 text-xs">wmps</code>. On ZIoCHub YARA delete, matching <code class="px-0.5 rounded bg-white/10 text-xs">delete_yara_files</code> POSTs run when the integration is enabled. Fields: <code class="px-0.5 rounded bg-white/10 text-xs">yara_file</code>, <code class="px-0.5 rounded bg-white/10 text-xs">f_type</code>, <code class="px-0.5 rounded bg-white/10 text-xs">content_type</code>.</p>
-            <p class="text-secondary text-xs mb-4">If you already have a session cookie from the browser, paste it into <strong class="text-primary">Manual Cookie</strong> to skip login. Otherwise set username and password (EX validates against local/LDAP per appliance). ZIoCHub runs <strong class="text-primary">GET</strong> then <strong class="text-primary">JSON POST</strong> on the login path with <code class="px-0.5 rounded bg-white/10 text-xs">auth_method</code> <code class="px-0.5 rounded bg-white/10 text-xs">password</code>, <code class="px-0.5 rounded bg-white/10 text-xs">ldap</code>, or <code class="px-0.5 rounded bg-white/10 text-xs">auto</code> (tries password then ldap). For <strong class="text-primary">LDAP-backed EX</strong>, use <code class="px-0.5 rounded bg-white/10 text-xs">auto</code> or <code class="px-0.5 rounded bg-white/10 text-xs">ldap</code> and the same username format you use in the web UI (UPN or <code class="px-0.5 rounded bg-white/10 text-xs">DOMAIN\user</code>). Default login path <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code>; upload <code class="px-0.5 rounded bg-white/10 text-xs">/ex/yara_rules_ng/upload_yara</code>. Optional: <strong class="text-primary">CSRF token</strong> from DevTools if upload still returns HTTP 203.</p>
-
-            <form id="trellixExForm" class="space-y-4 max-w-3xl">
-                <div>
-                    <label for="trellix_ex_enabled" class="block text-sm font-semibold text-secondary mb-1">Enable Trellix EX YARA push on approve</label>
-                    <select id="trellix_ex_enabled" name="trellix_ex_enabled" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                        <option value="false" {% if settings.trellix_ex_enabled == 'false' %}selected{% endif %}>No</option>
-                        <option value="true" {% if settings.trellix_ex_enabled == 'true' %}selected{% endif %}>Yes</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-sm font-semibold text-secondary mb-2">EX targets</label>
-                    <p class="text-secondary text-xs mb-2">One row per appliance (host, paths, credentials or manual cookie). Leave password empty when saving to keep the stored password for that row.</p>
-                    <div id="trellixExTargetsList" class="space-y-3" data-initial="{{ settings.trellix_ex_targets | e }}"></div>
-                    <button type="button" id="trellixExAddTarget" class="mt-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition">+ Add EX target</button>
-                </div>
-                <div class="flex flex-wrap gap-2 items-center">
-                    <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Trellix EX settings</button>
-                    <button type="button" id="trellixExTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-cyan-500/40 hover:bg-cyan-900/30 text-cyan-200 transition">Test login + upload + cleanup</button>
-                    <label class="flex items-center gap-2 text-xs text-secondary cursor-pointer select-none">
-                        <input type="checkbox" id="trellixExTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
-                        <span>Test only: ignore TLS for all targets</span>
-                    </label>
-                </div>
-                <p class="text-secondary text-xs">Test uses <strong class="text-primary">saved</strong> targets and enable flag (save after editing).</p>
-            </form>
-            <div id="trellixExMessage" class="mt-2 hidden text-sm"></div>
-            <div id="trellixExTestResult" class="hidden rounded-lg border border-white/10 bg-black/30 p-3 text-sm space-y-1 mt-3"></div>
-        </div>
-
-        <div id="trellix-exnx-sub-cms" class="trellix-exnx-subpane hidden space-y-3 pt-2 border-t border-white/10 mt-4">
-            <h4 class="text-sm font-semibold text-primary">Trellix CMS (central manager)</h4>
-            <p class="text-secondary text-sm mb-2">Push approved YARA rules through the <strong class="text-primary">CMS</strong> web API (<code class="px-0.5 rounded bg-white/10 text-xs">/cms/yara_rules_ng/...</code>), not the direct EX path (<code class="px-0.5 rounded bg-white/10 text-xs">/ex/...</code>). Use the CMS appliance hostname as <strong class="text-primary">base URL</strong>. Session login uses the same JSON flow as EX (<code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code> by default).</p>
-            <p class="text-secondary text-xs mb-4">Most CMS deployments require a <strong class="text-primary">sensor ID</strong> (from DevTools on the YARA page: <code class="px-0.5 rounded bg-white/10 text-xs">s_s[sensor]</code> in <code class="px-0.5 rounded bg-white/10 text-xs">get_yara_files</code>). Optional: sensor group (<code class="px-0.5 rounded bg-white/10 text-xs">All</code>) and sensor rule list names (comma-separated, maps to <code class="px-0.5 rounded bg-white/10 text-xs">s_s[s_r_l][]</code>). Do not point CMS targets at the EX integration tab.</p>
-
-            <form id="trellixCmsForm" class="space-y-4 max-w-3xl">
-                <div>
-                    <label for="trellix_cms_enabled" class="block text-sm font-semibold text-secondary mb-1">Enable Trellix CMS YARA push on approve</label>
-                    <select id="trellix_cms_enabled" name="trellix_cms_enabled" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                        <option value="false" {% if settings.trellix_cms_enabled == 'false' %}selected{% endif %}>No</option>
-                        <option value="true" {% if settings.trellix_cms_enabled == 'true' %}selected{% endif %}>Yes</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="block text-sm font-semibold text-secondary mb-2">CMS targets</label>
-                    <p class="text-secondary text-xs mb-2">One row per CMS host. Leave password empty when saving to keep the stored password.</p>
-                    <div id="trellixCmsTargetsList" class="space-y-3" data-initial="{{ settings.trellix_cms_targets | e }}"></div>
-                    <button type="button" id="trellixCmsAddTarget" class="mt-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition">+ Add CMS target</button>
-                </div>
-                <div class="flex flex-wrap gap-2 items-center">
-                    <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Trellix CMS settings</button>
-                    <button type="button" id="trellixCmsTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-cyan-500/40 hover:bg-cyan-900/30 text-cyan-200 transition">Test login + upload + cleanup</button>
-                    <label class="flex items-center gap-2 text-xs text-secondary cursor-pointer select-none">
-                        <input type="checkbox" id="trellixCmsTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
-                        <span>Test only: ignore TLS for all targets</span>
-                    </label>
-                </div>
-                <p class="text-secondary text-xs">Test uses <strong class="text-primary">saved</strong> targets and enable flag (save after editing).</p>
-            </form>
-            <div id="trellixCmsMessage" class="mt-2 hidden text-sm"></div>
-            <div id="trellixCmsTestResult" class="hidden rounded-lg border border-white/10 bg-black/30 p-3 text-sm space-y-1 mt-3"></div>
-        </div>
-
-        <div id="trellix-exnx-sub-nx" class="trellix-exnx-subpane hidden space-y-3 pt-2 border-t border-white/10 mt-4">
-            <h4 class="text-sm font-semibold text-primary">Network Security (NX)</h4>
-            <p class="text-secondary text-xs mb-2">Per appliance: <strong class="text-primary">wsapis</strong> = REST API key targets (same as Automations YARA push). <strong class="text-primary">wmps</strong> = browser session to <code class="px-0.5 rounded bg-white/10 text-xs">/login/login</code>, then multipart upload to <code class="px-0.5 rounded bg-white/10 text-xs">/wmps/yara_rules_ng/upload_yara</code> with <code class="px-0.5 rounded bg-white/10 text-xs">f_type=txt</code> and <code class="px-0.5 rounded bg-white/10 text-xs">content_type=base</code> (delete uses <code class="px-0.5 rounded bg-white/10 text-xs">files[0][type]=txt</code>).</p>
-            <p class="text-secondary text-sm mb-4">Appliance HTTPS root and wsapis version. Paths follow Trellix docs (add/remove; remove uses POST). These rows are expanded to generic HTTP targets and merged with your custom YARA list under <a href="{{ url_for('admin_pages.admin_automations') }}" class="text-cyan-400 hover:underline">Automations → YARA push</a> when automation runs.</p>
-
-        <form id="trellixNxForm" class="space-y-4">
-            <div class="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-3">
-                <input type="checkbox" id="automation_fireeye_ignore_ssl" name="automation_fireeye_ignore_ssl" class="mt-1 h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600 focus:ring-cyan-500"
-                       {% if settings.automation_fireeye_ignore_ssl == 'true' %}checked{% endif %}>
-                <div>
-                    <label for="automation_fireeye_ignore_ssl" class="block text-sm font-semibold text-primary cursor-pointer">Allow self-signed / untrusted TLS</label>
-                    <p class="text-secondary text-xs mt-1">Used for NX tests here and for YARA pushes (same setting as on Automations → YARA push).</p>
-                </div>
-            </div>
-            <div>
-                <label for="automation_trellix_nx_enabled" class="block text-sm font-semibold text-secondary mb-1">Include NX appliances in YARA automation</label>
-                <select id="automation_trellix_nx_enabled" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                    <option value="false" {% if settings.automation_trellix_nx_enabled == 'false' %}selected{% endif %}>No</option>
-                    <option value="true" {% if settings.automation_trellix_nx_enabled == 'true' %}selected{% endif %}>Yes</option>
-                </select>
-            </div>
-            <div>
-                <label class="block text-sm font-semibold text-secondary mb-2">NX appliances</label>
-                <div id="trellixNxTargetsList" class="space-y-3" data-initial="{{ settings.automation_trellix_nx_targets | e }}"></div>
-                <button type="button" id="trellixNxAddTarget" class="mt-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition">+ Add appliance</button>
-            </div>
-            <div class="flex flex-wrap gap-2 items-center">
-                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Trellix NX settings</button>
-                <button type="button" id="trellixNxTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-cyan-500/40 hover:bg-cyan-900/30 text-cyan-200 transition">Test wmps: login + upload + cleanup</button>
-                <button type="button" id="trellixNxWsapisTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/20 hover:bg-white/10 text-primary transition">Test wsapis (REST)</button>
-                <label class="flex items-center gap-2 text-xs text-secondary cursor-pointer select-none">
-                    <input type="checkbox" id="trellixNxTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
-                    <span>Test only: ignore TLS (wmps)</span>
-                </label>
-            </div>
-            <p class="text-secondary text-xs">wmps test uses <strong class="text-primary">saved</strong> targets (save after editing). wsapis test uses the current form rows.</p>
-        </form>
-        <div id="trellixNxMessage" class="mt-4 hidden text-sm"></div>
-        <div id="trellixNxTestResult" class="hidden rounded-lg border border-white/10 bg-black/30 p-3 text-sm space-y-1 mt-4"></div>
-        </div>
-    </div>
+<div id="integ-tab-overview" class="integ-top-pane">
+{% include 'admin/partials/integration_overview.html' %}
 </div>
+
+<div id="integ-tab-import" class="integ-top-pane hidden">
+{% include 'admin/partials/integration_import.html' %}
+</div>
+
+<div id="integ-tab-export" class="integ-top-pane hidden">
+{% include 'admin/partials/integration_export.html' %}
+</div>
+
+<div id="integ-tab-push-ioc" class="integ-top-pane hidden">
+<nav class="push-ioc-sub-tabs settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-4">
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn active" data-tab="cortex-xdr">Cortex XDR</button>
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn" data-tab="google-secops">Google SecOps</button>
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn" data-tab="cisco-esa">Cisco ESA</button>
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn" data-tab="ioc-push">HTTP IOC push</button>
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn" data-tab="misp-push">MISP push</button>
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn" data-tab="opendxl">OpenDXL</button>
+</nav>
 
 <!-- Tab: Cisco ESA -->
 <div id="settings-tab-cisco-esa" class="settings-tab-pane hidden">
@@ -249,7 +151,7 @@
 </div>
 
 <!-- Tab: Cortex XDR (IOC API  -  planned wiring) -->
-<div id="settings-tab-cortex-xdr" class="settings-tab-pane hidden">
+<div id="settings-tab-cortex-xdr" class="settings-tab-pane">
     <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
         <h3 class="text-lg font-semibold accent-blue mb-2">Cortex XDR</h3>
         <p class="text-secondary text-sm mb-4">Uses the documented Cortex XDR <strong class="text-primary">Platform API</strong> (same host as <code class="px-0.5 rounded bg-white/10 text-xs">https://api-…paloaltonetworks.com</code>): IOC management via <code class="px-0.5 rounded bg-white/10 text-xs">indicators/insert_jsons</code> (push) and <code class="px-0.5 rounded bg-white/10 text-xs">indicators/delete</code> (revoke), and for <strong class="text-primary">Hash</strong> IOCs only, optional Action Center <strong class="text-primary">file block list</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>). When <strong class="text-primary">Enable</strong> is Yes, outbound IOC events call <code class="px-0.5 rounded bg-white/10 text-xs">cortex_xdr_push_ioc_from_context</code> in the background. Supported types on push: <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">Hash</strong> (URL/Email are skipped).</p>
@@ -412,18 +314,24 @@
     </div>
 </div>
 
+{% include 'admin/partials/automation_panel_ioc_push.html' %}
+{% include 'admin/partials/integration_misp_push.html' %}
+{% include 'admin/partials/automation_panel_opendxl.html' %}
+</div>
+
+<div id="integ-tab-push-yara" class="integ-top-pane hidden">
+<nav class="push-yara-sub-tabs settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-4">
+    <button type="button" class="push-yara-sub-btn settings-tab-btn active" data-tab="trellix-ex-nx">Trellix EX/NX</button>
+    <button type="button" class="push-yara-sub-btn settings-tab-btn" data-tab="yara-push">HTTP YARA push</button>
+</nav>
+{% include 'admin/partials/integration_trellix.html' %}
+{% include 'admin/partials/automation_panel_yara_push.html' %}
+</div>
+
+{% include 'admin/partials/integration_hub_scripts.html' %}
+{% include 'admin/partials/automation_panel_scripts.html' %}
+<script src="{{ url_for('static', filename='js/admin-integrations-hub.js') }}"></script>
 <script>
-document.querySelectorAll('.settings-tab-btn').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-        var tab = this.getAttribute('data-tab');
-        document.querySelectorAll('.settings-tab-btn').forEach(function(b) { b.classList.remove('active', 'bg-cyan-600', 'text-white'); b.classList.add('bg-tertiary', 'text-primary'); });
-        this.classList.add('active', 'bg-cyan-600', 'text-white');
-        this.classList.remove('bg-tertiary', 'text-primary');
-        document.querySelectorAll('.settings-tab-pane').forEach(function(p) { p.classList.add('hidden'); });
-        var pane = document.getElementById('settings-tab-' + tab);
-        if (pane) pane.classList.remove('hidden');
-    });
-});
 
 document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {

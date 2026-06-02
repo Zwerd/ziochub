@@ -148,6 +148,10 @@ def _champs_excluded_usernames():
         sync_user = (_get_setting('misp_sync_user', 'misp_sync') or 'misp_sync').strip()
         if sync_user:
             excluded.add(sync_user.lower())
+    if _get_setting('taxii_exclude_from_champs', 'true').lower() == 'true':
+        sync_user = (_get_setting('taxii_sync_user', 'taxii_sync') or 'taxii_sync').strip()
+        if sync_user:
+            excluded.add(sync_user.lower())
     return excluded or None
 
 

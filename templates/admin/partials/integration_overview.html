@@ -1,0 +1,11 @@
+<div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+    <h3 class="text-lg font-semibold accent-blue mb-3">Integrations overview</h3>
+    <p class="text-secondary text-sm mb-4">Configure how threat intelligence flows in and out of ZIoCHub. Use the tabs above by direction:</p>
+    <ul class="text-secondary text-sm space-y-2 list-disc list-inside mb-6">
+        <li><strong class="text-primary">Import (pull)</strong> — MISP and remote TAXII 2.1 clients pull IOCs into the platform.</li>
+        <li><strong class="text-primary">Export (feeds)</strong> — Public feed URLs and TAXII <em>server</em> (ZIoCHub as provider).</li>
+        <li><strong class="text-primary">Push IOC</strong> — Cortex XDR, Google SecOps, Cisco ESA, HTTP IOC push, MISP push on submit, OpenDXL.</li>
+        <li><strong class="text-primary">Push YARA</strong> — Trellix EX/CMS/NX and generic HTTP YARA upload targets.</li>
+    </ul>
+    <p class="text-secondary text-xs">Live connection status: <strong class="text-primary">Feed Pulse</strong> on the main app (Pull / Push state). Platform settings (LDAP, Syslog, Tags, Scoring) stay under <a href="{{ url_for('admin_pages.admin_settings') }}" class="text-cyan-400 hover:underline">Settings</a>.</p>
+</div>

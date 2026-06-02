@@ -1,0 +1,129 @@
+<div id="settings-tab-opendxl" class="settings-tab-pane hidden">
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+        <h3 class="text-lg font-semibold accent-blue mb-2">OpenDXL / Trellix TIE</h3>
+        <p class="text-secondary text-sm mb-4">When <strong class="text-primary">OpenDXL enabled</strong> is Yes, ZIoCHub connects to your organization’s <strong class="text-primary">DXL fabric</strong> (managed by Trellix ePO or an OpenDXL broker) and publishes <strong class="text-primary">Hash</strong> IOCs (MD5 / SHA1 / SHA256) to <strong class="text-primary">Threat Intelligence Exchange (TIE)</strong> as <em>Known Malicious</em> file reputation. Managed endpoints that use TIE can then block or score those files. This is <strong class="text-primary">not</strong> a generic “publish any message to the bus” integration — ZIoCHub uses the documented TIE client API (<code class="px-0.5 rounded bg-white/10 text-xs">set_file_reputation</code>) over DXL. Domain, IP, URL, and Email IOCs are not sent on this path.</p>
+        <p class="text-secondary text-xs mb-4">Requires Python packages <code class="px-0.5 rounded bg-white/10 text-xs">dxlclient</code> and <code class="px-0.5 rounded bg-white/10 text-xs">dxltieclient</code> on the Linux host (<code class="px-0.5 rounded bg-white/10 text-xs">pip install -r requirements.txt</code>). Outbound TCP from the ZIoCHub server to DXL broker hosts (typically port <strong class="text-primary">8883</strong>) must be allowed.</p>
+
+        <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary open:border-cyan-500/50">
+            <summary class="cursor-pointer font-semibold text-cyan-300 select-none">How to connect ZIoCHub to the DXL fabric (ePO / OpenDXL)</summary>
+            <ol class="mt-3 list-decimal list-inside space-y-2 text-primary/90">
+                <li><strong class="text-primary">On ePO (Trellix)</strong> — confirm Data Exchange Layer is deployed: DXL brokers are running and the ZIoCHub server can reach them on the network (firewall → broker <code class="px-0.5 rounded bg-white/10 text-xs">host:8883</code>). See <a href="https://opendxl.github.io/opendxl-client-python/pydoc/provisioningoverview.html" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">OpenDXL provisioning overview</a> (ePO-managed fabrics require DXL ePO extensions 4.0+).</li>
+                <li><strong class="text-primary">Provision a DXL client for Linux</strong> — create a new client identity that ZIoCHub will use. Common methods:
+                    <ul class="mt-1 ml-5 list-disc space-y-1 text-secondary">
+                        <li><strong class="text-primary">ePO UI:</strong> ePO → <em>Data Exchange Layer</em> → client / provisioning workflow → download the Linux provisioning package (config + certificates).</li>
+                        <li><strong class="text-primary">CLI (on a machine with network access to ePO):</strong> after installing the OpenDXL Python SDK, run <code class="px-0.5 rounded bg-white/10 text-xs">dxlclient provisionconfig &lt;output-dir&gt; &lt;epo-host&gt; &lt;client-name&gt;</code> (default ePO HTTPS port <code class="px-0.5 rounded bg-white/10 text-xs">8443</code>; use <code class="px-0.5 rounded bg-white/10 text-xs">-t &lt;port&gt;</code> if different). See <a href="https://opendxl.github.io/opendxl-client-python/pydoc/basiccliprovisioning.html" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">OpenDXL CLI provisioning (basic)</a> and <a href="https://opendxl.github.io/opendxl-client-python/pydoc/provisioningoverview.html" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">provisioning overview</a>.</li>
+                    </ul>
+                </li>
+                <li><strong class="text-primary">Authorize the client on the fabric</strong> — in ePO, open <strong class="text-primary">Server Settings → DXL Topic Authorization</strong> and allow this client certificate to <em>send</em> on the TIE reputation-set topic group (documented as <strong class="text-primary">TIE Server Set Enterprise Reputation</strong> — topic <code class="px-0.5 rounded bg-white/10 text-xs">/mcafee/service/tie/file/reputation/set</code>). Without this, <strong class="text-primary">Test connection</strong> may connect to the broker but fail on <em>TIE set reputation</em>. See <a href="https://opendxl.github.io/opendxl-client-python/pydoc/topicauthoverview.html" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">OpenDXL authorization overview</a>, <a href="https://opendxl.github.io/opendxl-client-python/pydoc/topicauthgrouprestrictions.html" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">managing authorization restrictions</a>, and <a href="https://opendxl.github.io/opendxl-tie-client-python/pydoc/dxltieclient.client.html#dxltieclient.client.TieClient.set_file_reputation" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">TieClient.set_file_reputation</a>.</li>
+                <li><strong class="text-primary">Install Python DXL libraries on the ZIoCHub Linux host</strong> — same Python environment as the app: <code class="px-0.5 rounded bg-white/10 text-xs">pip install dxlclient dxltieclient</code> (or <code class="px-0.5 rounded bg-white/10 text-xs">pip install -r requirements.txt</code>). Offline: download wheels on another host and <code class="px-0.5 rounded bg-white/10 text-xs">pip install --no-index --find-links . …</code></li>
+                <li><strong class="text-primary">Upload provisioning files below</strong> (or copy them manually to <code class="px-0.5 rounded bg-white/10 text-xs">data/dxl/</code> on the server). ZIoCHub stores them with fixed names and rewrites certificate paths inside <code class="px-0.5 rounded bg-white/10 text-xs">dxlclient.config</code> to match.</li>
+                <li><strong class="text-primary">In ZIoCHub:</strong> confirm <strong class="text-primary">Path to dxlclient.config</strong> (auto-filled after config upload), click <strong class="text-primary">Test connection</strong> — all steps must pass (including a test TIE reputation write), then set <strong class="text-primary">OpenDXL enabled</strong> to Yes and Save.</li>
+            </ol>
+            <p class="mt-3 text-xs text-secondary">Reference: <a href="https://opendxl.github.io/opendxl-client-python/pydoc/index.html" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">OpenDXL Python SDK</a> · <a href="https://opendxl.github.io/opendxl-tie-client-python/pydoc/overview.html" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">OpenDXL TIE client overview</a> · <a href="https://opendxl.github.io/opendxl-client-python/pydoc/updatingconfigfromcli.html" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Update client config (CLI)</a>. Internal runbook: <code class="px-0.5 rounded bg-white/10 text-xs">docs/DXL_INTEGRATION.md</code> in the ZIoCHub repo.</p>
+        </details>
+
+        <details class="mb-6 rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-secondary">
+            <summary class="cursor-pointer font-semibold text-primary select-none">What to upload — the four provisioning files</summary>
+            <p class="mt-3 text-xs text-secondary mb-3">These come from the ePO / OpenDXL Linux provisioning package (or from <code class="px-0.5 rounded bg-white/10 text-xs">dxlclient provisionconfig</code>). ZIoCHub saves them under <strong class="text-primary">data/dxl/</strong> on the server with the names in the right column. You may upload one file at a time or several together; upload the config file last (or again after certs) so the path is set and <code class="px-0.5 rounded bg-white/10 text-xs">[Certs]</code> paths are rewritten.</p>
+            <div class="overflow-x-auto">
+                <table class="w-full text-xs text-left border-collapse">
+                    <thead>
+                        <tr class="border-b border-white/10 text-secondary">
+                            <th class="py-2 pr-3 font-semibold">Upload field</th>
+                            <th class="py-2 pr-3 font-semibold">Typical source name (ePO / CLI)</th>
+                            <th class="py-2 font-semibold">Saved as on server</th>
+                        </tr>
+                    </thead>
+                    <tbody class="text-primary/90">
+                        <tr class="border-b border-white/5">
+                            <td class="py-2 pr-3 align-top"><strong class="text-primary">dxlclient.config</strong><br><span class="text-secondary">Broker list + cert paths</span></td>
+                            <td class="py-2 pr-3 align-top"><code class="px-0.5 rounded bg-white/10">dxlclient.config</code></td>
+                            <td class="py-2 align-top"><code class="px-0.5 rounded bg-white/10">data/dxl/dxlclient.config</code></td>
+                        </tr>
+                        <tr class="border-b border-white/5">
+                            <td class="py-2 pr-3 align-top"><strong class="text-primary">Broker certificate chain</strong><br><span class="text-secondary">Trust anchor for DXL brokers (<code class="px-0.5 rounded bg-white/10">BrokerCertChain</code>)</span></td>
+                            <td class="py-2 pr-3 align-top"><code class="px-0.5 rounded bg-white/10">brokercerts.crt</code>, <code class="px-0.5 rounded bg-white/10">ca-bundle.crt</code>, or similar PEM bundle</td>
+                            <td class="py-2 align-top"><code class="px-0.5 rounded bg-white/10">data/dxl/brokercerts.crt</code></td>
+                        </tr>
+                        <tr class="border-b border-white/5">
+                            <td class="py-2 pr-3 align-top"><strong class="text-primary">Client certificate</strong><br><span class="text-secondary">Your client identity on the fabric (<code class="px-0.5 rounded bg-white/10">CertFile</code>)</span></td>
+                            <td class="py-2 pr-3 align-top"><code class="px-0.5 rounded bg-white/10">client.crt</code> (or custom name from <code class="px-0.5 rounded bg-white/10">-f</code> CLI flag)</td>
+                            <td class="py-2 align-top"><code class="px-0.5 rounded bg-white/10">data/dxl/client.crt</code></td>
+                        </tr>
+                        <tr>
+                            <td class="py-2 pr-3 align-top"><strong class="text-primary">Client private key</strong><br><span class="text-secondary">Matching private key (<code class="px-0.5 rounded bg-white/10">PrivateKey</code>); keep restricted permissions</span></td>
+                            <td class="py-2 pr-3 align-top"><code class="px-0.5 rounded bg-white/10">client.key</code></td>
+                            <td class="py-2 align-top"><code class="px-0.5 rounded bg-white/10">data/dxl/client.key</code> (mode 600)</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="mt-3 text-xs text-amber-200/90"><strong class="text-primary">Note:</strong> The <code class="px-0.5 rounded bg-white/10 text-xs">[Brokers]</code> section inside <code class="px-0.5 rounded bg-white/10 text-xs">dxlclient.config</code> must list your live broker hostnames/IPs (from ePO). ZIoCHub does not edit broker entries — only the <code class="px-0.5 rounded bg-white/10 text-xs">[Certs]</code> paths. If brokers move, re-export config from ePO or run <code class="px-0.5 rounded bg-white/10 text-xs">dxlclient updateconfig</code> and re-upload.</p>
+        </details>
+
+        <h4 class="text-sm font-semibold text-primary mb-3">Upload provisioning files</h4>
+        <form id="dxlUploadForm" class="space-y-4 mb-4" enctype="multipart/form-data">
+            <div>
+                <label for="dxl_config_file" class="block text-sm font-semibold text-secondary mb-1">1. dxlclient.config</label>
+                <input type="file" id="dxl_config_file" name="config_file" accept=".config,text/plain" class="w-full text-sm text-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-cyan-600/30 file:text-cyan-200 file:font-medium">
+                <p class="text-secondary text-xs mt-1">Main OpenDXL client config from ePO provisioning. Must include <code class="px-0.5 rounded bg-white/10 text-xs">[Brokers]</code> and <code class="px-0.5 rounded bg-white/10 text-xs">[Certs]</code> (paths are rewritten on upload).</p>
+            </div>
+            <div>
+                <label for="dxl_broker_certs" class="block text-sm font-semibold text-secondary mb-1">2. Broker certificate chain (.crt / .pem)</label>
+                <input type="file" id="dxl_broker_certs" name="broker_certs" accept=".crt,.pem,.cer" class="w-full text-sm text-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-cyan-600/30 file:text-cyan-200 file:font-medium">
+                <p class="text-secondary text-xs mt-1">CA bundle used to validate DXL brokers (<code class="px-0.5 rounded bg-white/10 text-xs">BrokerCertChain</code>). Upload even if ePO named it <code class="px-0.5 rounded bg-white/10 text-xs">ca-bundle.crt</code>.</p>
+            </div>
+            <div>
+                <label for="dxl_client_cert" class="block text-sm font-semibold text-secondary mb-1">3. Client certificate (.crt)</label>
+                <input type="file" id="dxl_client_cert" name="client_cert" accept=".crt,.pem,.cer" class="w-full text-sm text-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-cyan-600/30 file:text-cyan-200 file:font-medium">
+                <p class="text-secondary text-xs mt-1">Client certificate issued for this ZIoCHub DXL identity (must match the private key below).</p>
+            </div>
+            <div>
+                <label for="dxl_client_key" class="block text-sm font-semibold text-secondary mb-1">4. Client private key (.key)</label>
+                <input type="file" id="dxl_client_key" name="client_key" accept=".key,.pem" class="w-full text-sm text-secondary file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-cyan-600/30 file:text-cyan-200 file:font-medium">
+                <p class="text-secondary text-xs mt-1">Private key for the client certificate. Stored with restrictive permissions on the server.</p>
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Upload selected files</button>
+        </form>
+        <div id="dxlUploadMessage" class="mb-6 hidden text-sm"></div>
+
+        <h4 class="text-sm font-semibold text-primary mb-3">Runtime settings</h4>
+        <form id="dxlForm" class="space-y-4">
+            <div>
+                <label for="dxl_enabled" class="block text-sm font-semibold text-secondary mb-1">OpenDXL enabled</label>
+                <select id="dxl_enabled" name="dxl_enabled" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="false" {% if settings.dxl_enabled == 'false' %}selected{% endif %}>No</option>
+                    <option value="true" {% if settings.dxl_enabled == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+                <p class="text-secondary text-xs mt-1">When Yes, each new <strong class="text-primary">Hash</strong> IOC triggers a background TIE reputation update. Failures are logged only — the IOC is still saved in ZIoCHub.</p>
+            </div>
+            <div>
+                <label for="dxl_config_path" class="block text-sm font-semibold text-secondary mb-1">Path to dxlclient.config</label>
+                <input type="text" id="dxl_config_path" name="dxl_config_path" placeholder="/path/to/data/dxl/dxlclient.config" value="{{ settings.dxl_config_path }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm">
+                <p class="text-secondary text-xs mt-1">Absolute path on the <strong class="text-primary">Linux server</strong> (not your Windows SMB path). Auto-filled after uploading the config file; default storage is <code class="px-0.5 rounded bg-white/10 text-xs">&lt;ZIoCHub data&gt;/dxl/dxlclient.config</code>. The process user must be able to read this file and the certificate files it references.</p>
+            </div>
+            <div class="flex flex-wrap gap-2 items-center">
+                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save OpenDXL settings</button>
+                <button type="button" id="dxlTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test connection</button>
+            </div>
+        </form>
+        <div id="dxlMessage" class="mt-4 hidden text-sm"></div>
+        <p class="text-secondary text-xs mt-2">Test runs: load config → connect to DXL broker → send a test <em>Known Malicious</em> SHA256 reputation to TIE → disconnect. All steps must succeed before enabling production push.</p>
+        <div id="dxlTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs max-h-64 overflow-auto">
+            <div id="dxlTestLogContent" class="space-y-1"></div>
+        </div>
+        <div id="dxlTestSpinner" class="mt-2 hidden text-amber-400 text-sm">Testing DXL / TIE…</div>
+
+        <details class="mt-4 rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-secondary">
+            <summary class="cursor-pointer font-semibold text-primary select-none">Troubleshooting Test connection</summary>
+            <ul class="mt-3 list-disc ml-5 space-y-2 text-xs text-primary/90">
+                <li><strong class="text-primary">DXL libraries fail</strong> — install <code class="px-0.5 rounded bg-white/10 text-xs">dxlclient</code> / <code class="px-0.5 rounded bg-white/10 text-xs">dxltieclient</code> in the same Python venv as Gunicorn, then restart ZIoCHub.</li>
+                <li><strong class="text-primary">Config file not found</strong> — path must be on the Linux host; use upload or copy files to <code class="px-0.5 rounded bg-white/10 text-xs">data/dxl/</code> and point to the absolute path.</li>
+                <li><strong class="text-primary">Connect to broker fail</strong> — check broker host/port in <code class="px-0.5 rounded bg-white/10 text-xs">[Brokers]</code>, firewall (TCP 8883), and that broker / client certificates match the ePO CA bundle.</li>
+                <li><strong class="text-primary">TIE set reputation fail</strong> (broker OK) — the DXL client is not authorized for TIE reputation writes in ePO; assign the correct OpenDXL permission group to this client’s certificate CN.</li>
+                <li><strong class="text-primary">Hash not appearing in TIE</strong> — confirm OpenDXL enabled is Yes after a successful test; only <strong class="text-primary">Hash</strong> type IOCs are pushed; check server logs and Feed Pulse → Connections for last DXL push telemetry.</li>
+            </ul>
+        </details>
+    </div>
+</div>

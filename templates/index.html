@@ -230,6 +230,13 @@
                                     title="Browse lists by country or type (used when the search box is empty). Typing a value searches the full database.">
                                 <option value="" data-i18n="search.browse_none">All Groups</option>
                             </select>
+                            <select id="searchLifecycleFilter"
+                                    class="px-3 py-2 bg-tertiary text-sm min-w-[9rem]"
+                                    title="Filter by IOC lifecycle: active, inactive (deleted/expired), or all">
+                                <option value="all" data-i18n="search.lifecycle.all">All statuses</option>
+                                <option value="active" data-i18n="search.lifecycle.active">Active only</option>
+                                <option value="inactive" data-i18n="search.lifecycle.inactive">Inactive only</option>
+                            </select>
                             <select id="searchFilter" 
                                     class="px-4 py-2 bg-tertiary">
                                 <option value="all" data-i18n="search.filter.all">All</option>
@@ -1816,7 +1823,7 @@
 
     <!-- Pull state: inbound IOC sync from external platforms (e.g. MISP) -->
     <div id="feedPullStateModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
-        <div class="bg-secondary rounded-lg p-4 sm:p-6 max-w-2xl w-full max-h-[85vh] flex flex-col border border-white/10 min-w-0">
+        <div class="feed-state-modal-panel bg-secondary rounded-lg p-4 sm:p-6 flex flex-col border border-white/10">
             <div class="flex items-center justify-between mb-4 flex-shrink-0 gap-2 min-w-0">
                 <h3 class="text-xl font-bold accent-blue flex items-center gap-2 min-w-0">
                     <img src="{{ url_for('static', filename='ziochub_smaller.png') }}" alt="" class="w-7 h-7 object-contain shrink-0">
@@ -1824,9 +1831,33 @@
                 </h3>
                 <button type="button" id="feedPullStateModalClose" class="text-secondary hover:text-primary text-2xl leading-none shrink-0" aria-label="Close">&times;</button>
             </div>
-            <p class="text-sm text-secondary mb-4 flex-shrink-0 break-words" data-i18n="feedpulse.pull_state_modal_sub">When ZIoCHub last connected <strong class="text-primary">outbound</strong> to another system to pull IOCs into the database (currently MISP).</p>
+            <p class="text-sm text-secondary mb-4 flex-shrink-0 break-words" data-i18n="feedpulse.pull_state_modal_sub">When ZIoCHub last connected outbound to another system to pull IOCs into the database (currently MISP). Auto-sync checks every 5 minutes; interval is set in Admin → Settings → MISP.</p>
             <div class="overflow-y-auto overflow-x-hidden flex-1 min-h-0 min-w-0 text-sm">
-                <div id="connPullStateList" class="bg-tertiary rounded border border-white/5 divide-y divide-white/5 font-mono text-xs max-h-[min(24rem,55vh)] min-w-0 overflow-y-auto overflow-x-hidden"></div>
+                <div class="feed-state-table-scroll bg-tertiary rounded border border-white/5">
+                    <table class="feed-state-table">
+                        <colgroup>
+                            <col style="width:12%">
+                            <col class="feed-state-col-address">
+                            <col style="width:8%">
+                            <col class="feed-state-col-date">
+                            <col class="feed-state-col-date">
+                            <col style="width:7%">
+                            <col class="feed-state-col-tail">
+                        </colgroup>
+                        <thead class="bg-tertiary border-b border-white/10 sticky top-0">
+                            <tr>
+                                <th class="font-semibold" data-i18n="feedpulse.pull_col_system">System</th>
+                                <th class="font-semibold" data-i18n="feedpulse.pull_col_address">Address</th>
+                                <th class="font-semibold" data-i18n="feedpulse.pull_col_interval">Interval</th>
+                                <th class="font-semibold" data-i18n="feedpulse.pull_col_last">Last pull</th>
+                                <th class="font-semibold" data-i18n="feedpulse.pull_col_next">Next pull</th>
+                                <th class="font-semibold" data-i18n="feedpulse.connections_col_status">Status</th>
+                                <th class="font-semibold" data-i18n="feedpulse.pull_col_summary">Last result</th>
+                            </tr>
+                        </thead>
+                        <tbody id="connPullStateBody" class="divide-y divide-white/5"></tbody>
+                    </table>
+                </div>
                 <p id="connPullStateEmpty" class="hidden text-secondary text-xs mt-2" data-i18n="feedpulse.connections_pull_empty">No inbound pull sources configured.</p>
             </div>
         </div>
@@ -1834,7 +1865,7 @@
 
     <!-- Push state: outbound IOC/YARA updates to linked systems -->
     <div id="feedPushStateModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
-        <div class="bg-secondary rounded-lg p-4 sm:p-6 max-w-2xl w-full max-h-[85vh] flex flex-col border border-white/10 min-w-0">
+        <div class="feed-state-modal-panel bg-secondary rounded-lg p-4 sm:p-6 flex flex-col border border-white/10">
             <div class="flex items-center justify-between mb-4 flex-shrink-0 gap-2 min-w-0">
                 <h3 class="text-xl font-bold accent-blue flex items-center gap-2 min-w-0">
                     <img src="{{ url_for('static', filename='ziochub_smaller.png') }}" alt="" class="w-7 h-7 object-contain shrink-0">
@@ -1849,20 +1880,29 @@
                         <span class="shrink-0">📤</span>
                         <span class="break-words min-w-0">Outbound push (last attempt per system)</span>
                     </h4>
-                    <div class="bg-tertiary rounded border border-white/5 overflow-x-auto max-h-[min(26rem,60vh)] min-w-0">
-                        <table class="w-full min-w-[56rem] text-xs border-collapse">
+                    <div class="feed-state-table-scroll bg-tertiary rounded border border-white/5">
+                        <table class="feed-state-table">
+                            <colgroup>
+                                <col style="width:11%">
+                                <col style="width:10%">
+                                <col class="feed-state-col-address">
+                                <col style="width:9%">
+                                <col class="feed-state-col-date">
+                                <col style="width:7%">
+                                <col class="feed-state-col-tail">
+                            </colgroup>
                             <thead class="bg-tertiary border-b border-white/10 sticky top-0">
                                 <tr>
-                                    <th class="text-left px-2 py-1 font-semibold">System</th>
-                                    <th class="text-left px-2 py-1 font-semibold">System type</th>
-                                    <th class="text-left px-2 py-1 font-semibold">Address</th>
-                                    <th class="text-left px-2 py-1 font-semibold">Transferred</th>
-                                    <th class="text-left px-2 py-1 font-semibold">Last attempt</th>
-                                    <th class="text-left px-2 py-1 font-semibold">Status</th>
-                                    <th class="text-left px-2 py-1 font-semibold">Reason</th>
+                                    <th class="font-semibold">System</th>
+                                    <th class="font-semibold">System type</th>
+                                    <th class="font-semibold">Address</th>
+                                    <th class="font-semibold">Transferred</th>
+                                    <th class="font-semibold">Last attempt</th>
+                                    <th class="font-semibold">Status</th>
+                                    <th class="font-semibold">Reason</th>
                                 </tr>
                             </thead>
-                            <tbody id="connPushUnifiedBody" class="divide-y divide-white/5 font-mono"></tbody>
+                            <tbody id="connPushUnifiedBody" class="divide-y divide-white/5"></tbody>
                         </table>
                     </div>
                     <p id="connPushUnifiedEmpty" class="hidden text-secondary text-xs mt-2">No outbound push activity recorded yet.</p>

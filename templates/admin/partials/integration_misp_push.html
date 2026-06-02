@@ -1,0 +1,30 @@
+<div id="settings-tab-misp-push" class="settings-tab-pane hidden">
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
+        <h3 class="text-lg font-semibold accent-blue mb-4">MISP push (on IOC submit)</h3>
+        <p class="text-secondary text-sm mb-6">When analysts submit IOCs in ZIoCHub, optionally mirror them as MISP attributes. Inbound MISP pull is under <strong class="text-primary">Import</strong>.</p>
+
+        <form id="mispPushForm" class="space-y-4">
+            <div>
+                <label for="misp_push_enabled" class="block text-sm font-semibold text-secondary mb-1">Push new IOCs to MISP when submitting</label>
+                <select id="misp_push_enabled" name="misp_push_enabled" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="false" {% if settings.misp_push_enabled == 'false' %}selected{% endif %}>No</option>
+                    <option value="true" {% if settings.misp_push_enabled == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+            </div>
+            <div>
+                <label for="misp_push_include_comment" class="block text-sm font-semibold text-secondary mb-1">Include ZIoCHub comment in MISP attribute</label>
+                <select id="misp_push_include_comment" name="misp_push_include_comment" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="true" {% if settings.misp_push_include_comment != 'false' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if settings.misp_push_include_comment == 'false' %}selected{% endif %}>No</option>
+                </select>
+            </div>
+            <div>
+                <label for="misp_push_default_event_id" class="block text-sm font-semibold text-secondary mb-1">Default MISP Event ID (optional)</label>
+                <input type="text" id="misp_push_default_event_id" name="misp_push_default_event_id" placeholder="Leave empty to create a new event per push" value="{{ settings.misp_push_default_event_id }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save MISP push settings</button>
+        </form>
+        <div id="mispPushMessage" class="mt-4 hidden text-sm"></div>
+    </div>
+</div>

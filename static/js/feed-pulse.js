@@ -8,6 +8,81 @@
 
     let feedPulseData = null;
 
+    /** Clipped table cell: ellipsis + hover tooltip (data-title). colKind: address|tail|date|other */
+    function feedStateClipTd(innerHtml, titleText, tdExtraClass, innerExtraClass, colKind) {
+        var title = escapeAttr(titleText == null ? '' : String(titleText));
+        var colCls = colKind === 'address' ? ' feed-state-td--address'
+            : (colKind === 'tail' ? ' feed-state-td--tail'
+            : (colKind === 'date' ? ' feed-state-td--date' : ''));
+        var hardCls = (colKind === 'address' || colKind === 'tail' || colKind === 'date')
+            ? ' feed-state-cell__inner--hard' : '';
+        var innerCls = 'feed-state-cell__inner' + hardCls + (innerExtraClass ? ' ' + innerExtraClass : '');
+        var dataTitle = title ? ' data-title="' + title + '"' : '';
+        return '<td class="' + (tdExtraClass || '') + colCls + '"' + dataTitle + '>' +
+            '<span class="' + innerCls + '">' + innerHtml + '</span></td>';
+    }
+
+    function initFeedStateTooltips() {
+        var tip = document.getElementById('feedStateTooltip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'feedStateTooltip';
+            tip.className = 'feed-state-tooltip hidden';
+            tip.setAttribute('role', 'tooltip');
+            document.body.appendChild(tip);
+        }
+        function hideTip() {
+            tip.classList.add('hidden');
+            tip.textContent = '';
+        }
+        function showTip(td) {
+            var text = td.getAttribute('data-title');
+            if (!text) {
+                hideTip();
+                return;
+            }
+            var inner = td.querySelector('.feed-state-cell__inner');
+            if (inner && inner.scrollWidth <= inner.clientWidth + 1) {
+                hideTip();
+                return;
+            }
+            tip.textContent = text;
+            tip.classList.remove('hidden');
+            tip.style.left = '-9999px';
+            tip.style.top = '0';
+            var tipW = tip.offsetWidth;
+            var tipH = tip.offsetHeight;
+            var rect = td.getBoundingClientRect();
+            var left = rect.left;
+            var top = rect.bottom + 6;
+            if (left + tipW > window.innerWidth - 8) {
+                left = Math.max(8, window.innerWidth - tipW - 8);
+            }
+            if (top + tipH > window.innerHeight - 8) {
+                top = Math.max(8, rect.top - tipH - 6);
+            }
+            tip.style.left = left + 'px';
+            tip.style.top = top + 'px';
+        }
+        document.addEventListener('mouseover', function (e) {
+            var td = e.target.closest('.feed-state-modal-panel .feed-state-table td[data-title]');
+            if (!td || !td.getAttribute('data-title')) {
+                return;
+            }
+            showTip(td);
+        });
+        document.addEventListener('mouseout', function (e) {
+            var fromTd = e.target.closest('.feed-state-modal-panel .feed-state-table td[data-title]');
+            if (!fromTd) return;
+            var toTd = e.relatedTarget && e.relatedTarget.closest
+                ? e.relatedTarget.closest('.feed-state-modal-panel .feed-state-table td[data-title]')
+                : null;
+            if (fromTd !== toTd) hideTip();
+        });
+        document.addEventListener('scroll', hideTip, true);
+    }
+    initFeedStateTooltips();
+
     async function loadFeedPulse() {
         const typeSel = document.getElementById('feedPulseType');
         const hoursSel = document.getElementById('feedPulseHours');
@@ -183,12 +258,15 @@
             if (st === 'ok') return 'OK';
             if (st === 'fail') return 'FAIL';
             if (st === 'partial') return 'PARTIAL';
+            if (st === 'disabled') return 'Disabled';
+            if (st === 'skip') return 'Skipped';
             return '—';
         }
         function statusClass(st) {
             if (st === true || st === 'ok') return 'text-green-300 font-semibold';
             if (st === false || st === 'fail') return 'text-red-300 font-semibold';
             if (st === 'partial') return 'text-amber-300 font-semibold';
+            if (st === 'disabled' || st === 'skip') return 'text-slate-400';
             return 'text-secondary';
         }
         function transferredText(count, kind) {
@@ -200,21 +278,28 @@
 
         // Vendor integrations: one row per system+kind, using last_attempt_* when available.
         vendor.forEach(function (r) {
-            const system = r.display_name || '—';
-            const systemType = 'Vendor integration';
+            const system = (r.display_name || '—') + (r.data_kind ? (' (' + r.data_kind + ')') : '');
+            const systemType = r.enabled === false
+                ? 'Vendor integration (disabled)'
+                : 'Vendor integration';
             const addr = (r.address || '').trim() || '—';
             const kind = (r.data_kind || '').trim() || 'IOC';
             const at = r.last_attempt_at || r.last_push_at || null;
-            const ok = (r.last_attempt_ok !== undefined) ? r.last_attempt_ok : null;
-            const msg = (r.last_attempt_message || '').trim();
+            const ok = (r.last_attempt_ok !== undefined && r.last_attempt_ok !== null) ? r.last_attempt_ok : null;
+            var msg = (r.last_attempt_message || '').trim();
+            if (!msg && r.enabled === false) msg = 'Integration disabled in Admin → Integrations';
+            if (!msg && !at) msg = 'No push attempt recorded yet';
             const count = (r.last_attempt_count !== undefined) ? r.last_attempt_count : null;
+            var displayStatus = ok;
+            if (msg === 'disabled') displayStatus = 'disabled';
+            else if (msg.indexOf('skip_') === 0) displayStatus = 'skip';
             rows.push({
                 system: system,
                 system_type: systemType,
                 address: addr,
                 transferred: transferredText(count, kind),
                 at: at,
-                status: ok,
+                status: displayStatus,
                 reason: msg || '',
             });
         });
@@ -254,18 +339,18 @@
             const stLbl = statusLabel(r.status);
             const stCls = statusClass(r.status);
             return '<tr class="hover:bg-white/5">' +
-                '<td class="px-2 py-1.5 text-slate-200 break-words">' + escapeHtml(r.system) + '</td>' +
-                '<td class="px-2 py-1.5 text-cyan-200/90 break-words">' + escapeHtml(r.system_type) + '</td>' +
-                '<td class="px-2 py-1.5 text-slate-200 font-mono text-[11px] break-all">' + escapeHtml(r.address) + '</td>' +
-                '<td class="px-2 py-1.5 text-slate-200">' + escapeHtml(r.transferred) + '</td>' +
-                '<td class="px-2 py-1.5 text-secondary whitespace-nowrap">' + escapeHtml(fmtConnTs(r.at)) + '</td>' +
-                '<td class="px-2 py-1.5 ' + stCls + '">' + escapeHtml(stLbl) + '</td>' +
-                '<td class="px-2 py-1.5 text-secondary break-words">' + escapeHtml(r.reason || '') + '</td>' +
+                feedStateClipTd(escapeHtml(r.system), r.system, 'text-slate-200', '', 'other') +
+                feedStateClipTd(escapeHtml(r.system_type), r.system_type, 'text-cyan-200/90', '', 'other') +
+                feedStateClipTd(escapeHtml(r.address), r.address, 'text-slate-200', 'feed-state-cell--mono', 'address') +
+                feedStateClipTd(escapeHtml(r.transferred), r.transferred, 'text-slate-200', '', 'other') +
+                feedStateClipTd(escapeHtml(fmtConnTs(r.at)), fmtConnTs(r.at), 'text-secondary', 'feed-state-cell--nowrap', 'date') +
+                '<td class="' + stCls + ' feed-state-cell--nowrap">' + escapeHtml(stLbl) + '</td>' +
+                feedStateClipTd(escapeHtml(r.reason || ''), r.reason, 'text-secondary', '', 'tail') +
                 '</tr>';
         }).join('');
     }
     function renderPullState(data) {
-        var body = document.getElementById('connPullStateList');
+        var body = document.getElementById('connPullStateBody');
         var empty = document.getElementById('connPullStateEmpty');
         if (!body) return;
         var list = (data && data.pull_state) ? data.pull_state : [];
@@ -278,10 +363,18 @@
             return st || '—';
         }
         function statusClass(st) {
-            if (st === 'ok') return 'text-green-300';
-            if (st === 'fail') return 'text-red-300';
+            if (st === 'ok') return 'text-green-300 font-semibold';
+            if (st === 'fail') return 'text-red-300 font-semibold';
             if (st === 'disabled' || st === 'not_configured') return 'text-slate-400';
             return 'text-amber-300';
+        }
+        function intervalLabel(min) {
+            var n = parseInt(min, 10);
+            if (!n || isNaN(n)) return '—';
+            if (n < 60) return n + ' min';
+            if (n === 60) return '1 h';
+            if (n % 60 === 0) return (n / 60) + ' h';
+            return n + ' min';
         }
         if (!list.length) {
             body.innerHTML = '';
@@ -294,20 +387,20 @@
             var addrRaw = (row.address || '').trim();
             var addrDisp = escapeHtml(addrRaw || row.host || '—');
             var seen = escapeHtml(fmtConnTs(row.last_pull_at));
+            var nextSeen = escapeHtml(fmtConnTs(row.next_pull_at));
             var st = row.status || '';
             var stLbl = escapeHtml(statusLabel(st));
             var stCls = statusClass(st);
-            var urlAttr = escapeAttr(addrRaw || '');
-            return '<div class="px-3 py-1.5 flex flex-col gap-0.5 min-w-0 w-full max-w-full box-border" title="' + urlAttr + '">' +
-                '<div class="flex justify-between items-start gap-2 min-w-0">' +
-                '<span class="font-mono text-slate-300 break-words min-w-0 flex-1">' + name + '</span>' +
-                '<span class="text-xs font-semibold shrink-0 text-right max-w-[40%] break-words ' + stCls + '">' + stLbl + '</span>' +
-                '</div>' +
-                '<div class="flex flex-col gap-0.5 min-w-0 sm:flex-row sm:justify-between sm:items-baseline sm:gap-2 text-[11px]">' +
-                '<span class="text-cyan-200/90 break-all min-w-0">' + addrDisp + '</span>' +
-                '<span class="text-secondary shrink-0 sm:whitespace-nowrap text-[11px] sm:text-end">' + seen + '</span>' +
-                '</div>' +
-                '</div>';
+            var summary = escapeHtml(row.last_summary || '—');
+            return '<tr class="hover:bg-white/5">' +
+                feedStateClipTd(name, row.name, 'text-slate-200 font-semibold', '', 'other') +
+                feedStateClipTd(addrDisp, addrRaw || row.host, 'text-cyan-200/90', 'feed-state-cell--mono', 'address') +
+                '<td class="text-slate-300 feed-state-cell--nowrap">' + escapeHtml(intervalLabel(row.pull_interval_min)) + '</td>' +
+                feedStateClipTd(seen, fmtConnTs(row.last_pull_at), 'text-secondary', 'feed-state-cell--nowrap', 'date') +
+                feedStateClipTd(nextSeen, fmtConnTs(row.next_pull_at), 'text-secondary', 'feed-state-cell--nowrap', 'date') +
+                '<td class="' + stCls + ' feed-state-cell--nowrap">' + stLbl + '</td>' +
+                feedStateClipTd(summary, row.last_summary, 'text-secondary', '', 'tail') +
+                '</tr>';
         }).join('');
     }
     function renderVendorPushState(data) {
@@ -458,18 +551,17 @@
 
     async function openPullStateModal() {
         const pullModal = document.getElementById('feedPullStateModal');
-        const pl = document.getElementById('connPullStateList');
+        const pl = document.getElementById('connPullStateBody');
         const ple = document.getElementById('connPullStateEmpty');
         if (!pullModal || !pl) return;
         pullModal.classList.remove('hidden');
         if (ple) ple.classList.add('hidden');
-        pl.innerHTML = '<div class="px-3 py-3 text-secondary text-xs">' +
-            ((typeof t === 'function' && t('feedpulse.loading')) ? t('feedpulse.loading') : 'Loading...') + '</div>';
+        pl.innerHTML = '<tr><td colspan="7" class="px-3 py-3 text-secondary text-xs">' +
+            ((typeof t === 'function' && t('feedpulse.loading')) ? t('feedpulse.loading') : 'Loading...') + '</td></tr>';
         try {
             const data = await fetchIntegrationConnectionsJson();
             if (!data.success) {
                 renderPullState({ pull_state: [] });
-                pl.innerHTML = '';
                 if (ple) ple.classList.remove('hidden');
                 if (typeof showToast === 'function' && data.message) showToast(data.message, 'error');
                 return;
@@ -477,7 +569,6 @@
             renderPullState(data);
         } catch (err) {
             renderPullState({ pull_state: [] });
-            pl.innerHTML = '';
             if (ple) ple.classList.remove('hidden');
             if (typeof showToast === 'function') showToast((err && err.message) || 'Error', 'error');
         }

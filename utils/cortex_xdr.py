@@ -362,9 +362,15 @@ def _interpret_tim_reply(data: Optional[dict[str, Any]], *, op: str) -> tuple[bo
 
 
 def _looks_like_indicator_already_exists(data: Optional[dict[str, Any]], raw: str) -> bool:
-    """True if Cortex response suggests the indicator row already exists (we treat that as success)."""
+    """True if Cortex response suggests the indicator row already exists (may be stale after our delete)."""
     parts: list[str] = [(raw or '').lower()]
     if isinstance(data, dict):
+        rep = data.get('reply')
+        if isinstance(rep, dict):
+            for err in rep.get('validation_errors') or []:
+                if isinstance(err, dict):
+                    parts.append((err.get('error') or '').lower())
+                    parts.append((err.get('indicator') or '').lower())
         try:
             parts.append(json.dumps(data, ensure_ascii=False).lower())
         except (TypeError, ValueError):
@@ -374,6 +380,35 @@ def _looks_like_indicator_already_exists(data: Optional[dict[str, Any]], raw: st
         if needle in blob:
             return True
     return False
+
+
+def _delete_indicator_by_value(
+    root: str,
+    key_id: str,
+    api_key: str,
+    verify_ssl: bool,
+    value: str,
+    *,
+    security_level: str = _DEFAULT_SECURITY_LEVEL,
+) -> tuple[bool, str]:
+    """Delete one indicator via ``indicators/delete`` (filter on indicator value)."""
+    delete_body = {
+        'request_data': {
+            'filters': [
+                {'field': 'indicator', 'operator': 'EQ', 'value': [value]},
+            ],
+        },
+    }
+    code, data, raw = _post_indicators(
+        root, key_id, api_key, verify_ssl, 'delete',
+        delete_body, security_level=security_level, iocs_source=False,
+    )
+    if code is not None and not (200 <= code < 300):
+        return False, f'indicators/delete HTTP {code}: {raw[:240]}'
+    ok, msg = _interpret_tim_reply(data, op='indicators/delete')
+    if not ok:
+        logger.warning('Cortex XDR indicators/delete failed: %s', msg)
+    return ok, msg
 
 
 def _normalize_hash_value(value: str) -> str:
@@ -400,24 +435,16 @@ def _interpret_hash_exception_reply(data: Optional[dict[str, Any]], op: str) -> 
     return False, f'{op}: unexpected reply'
 
 
-def _push_insert_jsons(
+def _attempt_insert_jsons(
     root: str,
     key_id: str,
     api_key: str,
     verify_ssl: bool,
     rec: dict[str, Any],
-    value: str,
     *,
     security_level: str = _DEFAULT_SECURITY_LEVEL,
-) -> tuple[bool, str]:
-    """
-    Insert one IOC via the documented ``indicators/insert_jsons`` endpoint.
-
-    If Cortex reports the indicator already exists we treat that as success - the IOC is
-    present in the tenant, which is the desired end state. ZIoCHub's revoke flow uses
-    ``indicators/delete`` (filter-based) rather than the legacy disable/enable cycle, so
-    we don't need the old ``enable_iocs`` fallback anymore.
-    """
+) -> tuple[bool, str, Optional[dict[str, Any]], str]:
+    """Single ``insert_jsons`` call. Returns (ok, message, parsed_json, raw_text)."""
     code, data, raw = _post_indicators(
         root,
         key_id,
@@ -429,21 +456,52 @@ def _push_insert_jsons(
         iocs_source=True,
     )
     if code is not None and not (200 <= code < 300):
-        if _looks_like_indicator_already_exists(data, raw):
-            logger.info(
-                'Cortex XDR: insert_jsons HTTP %s for %r treated as success (already exists)',
-                code, value[:128],
-            )
-            return True, f'insert_jsons_ok (already exists; HTTP {code})'
-        return False, f'insert_jsons HTTP {code}: {raw[:240]}'
+        return False, f'insert_jsons HTTP {code}: {raw[:240]}', data, raw
     ok, msg = _interpret_tim_reply(data, op='insert_jsons')
+    if ok and _looks_like_indicator_already_exists(data, raw):
+        return False, f'insert_jsons duplicate: {msg}', data, raw
+    return ok, msg, data, raw
+
+
+def _push_insert_jsons(
+    root: str,
+    key_id: str,
+    api_key: str,
+    verify_ssl: bool,
+    rec: dict[str, Any],
+    value: str,
+    *,
+    security_level: str = _DEFAULT_SECURITY_LEVEL,
+) -> tuple[bool, str]:
+    """
+    Insert one IOC via ``indicators/insert_jsons``.
+
+    After ZIoCHub deletes an IOC, Cortex may still retain a stale row so re-insert returns
+    "already exists" without re-activating the block rule. On duplicate, delete then insert again.
+    """
+    ok, msg, data, raw = _attempt_insert_jsons(
+        root, key_id, api_key, verify_ssl, rec, security_level=security_level,
+    )
     if ok:
         return True, msg
-    if _looks_like_indicator_already_exists(data, raw):
-        logger.info('Cortex XDR: insert_jsons reported existing indicator %r; treating as ok', value[:128])
-        return True, f'insert_jsons_ok (already exists; {msg[:240]})'
-    logger.warning('Cortex XDR insert_jsons failed: %s', msg)
-    return False, msg
+    if not _looks_like_indicator_already_exists(data, raw):
+        logger.warning('Cortex XDR insert_jsons failed: %s', msg)
+        return False, msg
+
+    logger.info(
+        'Cortex XDR: insert_jsons duplicate for %r; delete then re-insert',
+        value[:128],
+    )
+    _delete_indicator_by_value(
+        root, key_id, api_key, verify_ssl, value, security_level=security_level,
+    )
+    ok2, msg2, _, _ = _attempt_insert_jsons(
+        root, key_id, api_key, verify_ssl, rec, security_level=security_level,
+    )
+    if ok2:
+        return True, f'reinsert_ok ({msg2})'
+    logger.warning('Cortex XDR re-insert after duplicate failed: %s', msg2)
+    return False, f'reinsert_after_duplicate: {msg2}'
 
 
 def _hash_blocklist_add(
@@ -541,23 +599,10 @@ def _cortex_xdr_push_ioc_from_context_inner(ioc: dict[str, Any]) -> tuple[bool, 
     if action == 'remove':
         if not value:
             return False, 'remove_missing_value'
-        # Use the documented filter-based delete endpoint instead of the legacy ``disable_iocs``.
-        delete_body = {
-            'request_data': {
-                'filters': [
-                    {'field': 'indicator', 'operator': 'EQ', 'value': [value]},
-                ],
-            },
-        }
-        code, data, raw = _post_indicators(
-            root, key_id, api_key, verify_ssl, 'delete',
-            delete_body, security_level=security_level, iocs_source=False,
+        ok, msg = _delete_indicator_by_value(
+            root, key_id, api_key, verify_ssl, value, security_level=security_level,
         )
-        if code is not None and not (200 <= code < 300):
-            return False, f'indicators/delete HTTP {code}: {raw[:240]}'
-        ok, msg = _interpret_tim_reply(data, op='indicators/delete')
         if not ok:
-            logger.warning('Cortex XDR indicators/delete failed: %s', msg)
             return ok, msg
         if _hash_blocklist_enabled(g) and (ioc.get('type') or '').strip() == 'Hash':
             hb_ok, hb_msg = _hash_blocklist_remove(

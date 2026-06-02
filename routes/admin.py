@@ -426,6 +426,22 @@ _SETTINGS_DEFAULTS = {
     'misp_last_sync': '',
     'misp_last_sync_result': '',
     'misp_exclude_from_champs': 'true',
+    'taxii_pull_enabled': 'false',
+    'taxii_discovery_url': '',
+    'taxii_api_root_id': '',
+    'taxii_collection_id': '',
+    'taxii_username': '',
+    'taxii_password': '',
+    'taxii_api_key': '',
+    'taxii_verify_ssl': 'false',
+    'taxii_last_days': '30',
+    'taxii_pull_interval': '60',
+    'taxii_sync_user': 'taxii_sync',
+    'taxii_exclude_from_champs': 'true',
+    'taxii_skip_revoked': 'true',
+    'taxii_default_ttl': 'permanent',
+    'taxii_last_sync': '',
+    'taxii_last_sync_result': '',
     'syslog_udp_enabled': 'false',
     'syslog_udp_host': '',
     'syslog_udp_port': '514',
@@ -887,6 +903,18 @@ _MISP_SYNC_KEYS_FALLBACK = (
     'misp_filter_tags', 'misp_filter_types', 'misp_published_only', 'misp_default_ttl', 'misp_sync_user',
 )
 
+_TAXII_SAVE_KEYS_FALLBACK = (
+    'taxii_pull_enabled', 'taxii_discovery_url', 'taxii_api_root_id', 'taxii_collection_id',
+    'taxii_username', 'taxii_password', 'taxii_api_key', 'taxii_verify_ssl', 'taxii_last_days',
+    'taxii_pull_interval', 'taxii_sync_user', 'taxii_exclude_from_champs', 'taxii_skip_revoked',
+    'taxii_default_ttl',
+)
+_TAXII_SYNC_KEYS_FALLBACK = (
+    'taxii_discovery_url', 'taxii_api_root_id', 'taxii_collection_id',
+    'taxii_username', 'taxii_password', 'taxii_api_key', 'taxii_verify_ssl', 'taxii_last_days',
+    'taxii_default_ttl', 'taxii_sync_user', 'taxii_skip_revoked',
+)
+
 
 @bp.route('/settings', methods=['POST'])
 @admin_required
@@ -900,6 +928,11 @@ def save_settings():
             misp_keys = MISP_SAVE_KEYS
         except ImportError:
             misp_keys = _MISP_SAVE_KEYS_FALLBACK
+        try:
+            from taxii_pull_settings import TAXII_SAVE_KEYS
+            taxii_keys = TAXII_SAVE_KEYS
+        except ImportError:
+            taxii_keys = _TAXII_SAVE_KEYS_FALLBACK
         syslog_keys = ('syslog_udp_enabled', 'syslog_udp_host', 'syslog_udp_port')
         ldap_keys = ('auth_mode', 'ldap_enabled', 'ldap_url', 'ldap_base_dn', 'ldap_bind_dn', 'ldap_bind_password', 'ldap_servers', 'ldap_user_filter')
         session_keys = ('session_inactivity_timeout_minutes',)
@@ -948,7 +981,7 @@ def save_settings():
         )
         sections = []
         for key in (
-            session_keys + ldap_keys + misp_keys + syslog_keys + dxl_keys + automation_keys + trellix_ex_keys
+            session_keys + ldap_keys + misp_keys + taxii_keys + syslog_keys + dxl_keys + automation_keys + trellix_ex_keys
             + trellix_cms_keys + sanity_keys + feed_keys + search_keys + tags_keys + ioc_push_keys + esa_keys
             + vendor_ioc_keys
         ):
@@ -1067,6 +1100,12 @@ def save_settings():
                     _set_setting(key, json.dumps(allowed, ensure_ascii=False))
                 elif key in ('tags_restricted_enabled', 'tags_allow_suggest'):
                     _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
+                elif key == 'misp_pull_interval':
+                    from utils.misp_sync_runner import normalize_misp_pull_interval
+                    _set_setting(key, str(normalize_misp_pull_interval(val)))
+                elif key == 'taxii_pull_interval':
+                    from utils.taxii_sync_runner import normalize_taxii_pull_interval
+                    _set_setting(key, str(normalize_taxii_pull_interval(val)))
                 else:
                     _set_setting(key, str(val).strip())
                 if key in ldap_keys and 'LDAP' not in sections:
@@ -1075,6 +1114,8 @@ def save_settings():
                     sections.append('Session')
                 elif key in misp_keys and 'MISP' not in sections:
                     sections.append('MISP')
+                elif key in taxii_keys and 'TAXII' not in sections:
+                    sections.append('TAXII')
                 elif key in syslog_keys and 'Syslog' not in sections:
                     sections.append('Syslog')
                 elif key in dxl_keys and 'DXL' not in sections:
@@ -1741,7 +1782,7 @@ def update_user(user_id):
         if not user:
             return jsonify({'success': False, 'message': 'User not found'}), 404
         if user.source == 'system':
-            return jsonify({'success': False, 'message': 'System users (e.g. MISP sync) cannot be edited'}), 400
+            return jsonify({'success': False, 'message': 'System users (e.g. MISP/TAXII sync) cannot be edited'}), 400
         data = request.get_json() or {}
         is_ldap = user.source == 'ldap'
 
@@ -1985,6 +2026,72 @@ def misp_sync_now():
         return _api_error(str(e), 500)
 
 
+# --- TAXII 2.1 inbound pull ---
+
+@bp.route('/taxii/test', methods=['POST'])
+@admin_required
+def taxii_test():
+    """Test remote TAXII 2.1 connectivity."""
+    _api_ok, _api_error, _get_setting = _from_app('_api_ok', '_api_error', '_get_setting')
+    try:
+        data = request.get_json() or {}
+        from utils.taxii_sync import test_connection_steps
+        steps = test_connection_steps(
+            (data.get('taxii_discovery_url') or _get_setting('taxii_discovery_url', '')).strip(),
+            api_root_id=(data.get('taxii_api_root_id') or _get_setting('taxii_api_root_id', '')).strip(),
+            collection_id=(data.get('taxii_collection_id') or _get_setting('taxii_collection_id', '')).strip(),
+            username=(data.get('taxii_username') or _get_setting('taxii_username', '')).strip(),
+            password=(data.get('taxii_password') or _get_setting('taxii_password', '')).strip(),
+            api_key=(data.get('taxii_api_key') or _get_setting('taxii_api_key', '')).strip(),
+            verify_ssl=(data.get('taxii_verify_ssl') or _get_setting('taxii_verify_ssl', 'false')).lower() == 'true',
+        )
+        success = all(s.get('status') == 'ok' for s in steps)
+        return _api_ok(data={'success': success, 'steps': steps})
+    except Exception as e:
+        logging.exception('admin taxii_test failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/taxii/sync', methods=['POST'])
+@admin_required
+def taxii_sync_now():
+    """Run TAXII inbound pull manually (admin only)."""
+    _api_ok, _api_error, _get_setting, _set_setting, audit_log = _from_app(
+        '_api_ok', '_api_error', '_get_setting', '_set_setting', 'audit_log'
+    )
+    try:
+        try:
+            from taxii_pull_settings import TAXII_SYNC_KEYS
+            sync_keys = list(TAXII_SYNC_KEYS) + ['taxii_last_sync']
+        except ImportError:
+            sync_keys = list(_TAXII_SYNC_KEYS_FALLBACK) + ['taxii_last_sync']
+        settings = {key: _get_setting(key, '') for key in sync_keys}
+
+        from utils.taxii_sync import run_sync
+        log_lines = []
+        result = run_sync(settings, log_lines=log_lines)
+
+        import json
+        from datetime import datetime, timezone
+        now_str = iso_utc(datetime.now(timezone.utc).replace(tzinfo=None))
+        _set_setting('taxii_last_sync', now_str)
+        _set_setting('taxii_last_sync_result', json.dumps(result)[:1000])
+
+        audit_log('taxii_sync', f"manual by={current_user.username} added={result.get('added', 0)} skipped={result.get('skipped', 0)}")
+
+        if result.get('success'):
+            inv = result.get('invalid', 0)
+            inv_msg = f', {inv} invalid' if inv else ''
+            return _api_ok(
+                message=f"Sync complete: {result.get('added', 0)} added, {result.get('skipped', 0)} duplicates skipped{inv_msg}",
+                data={**result, 'steps': log_lines},
+            )
+        return jsonify({'success': False, 'message': result.get('error', 'Sync failed'), 'data': {**result, 'steps': log_lines}}), 400
+    except Exception as e:
+        logging.exception('admin taxii_sync_now failed')
+        return _api_error(str(e), 500)
+
+
 @bp.route('/backfill-ioc-aggregate-fields', methods=['POST'])
 @admin_required
 def backfill_ioc_aggregate_fields():
@@ -2084,6 +2191,14 @@ def _get_ldap_servers_for_form(get_setting_fn):
     return []
 
 
+def _taxii_settings_fallback(get_setting_fn):
+    from taxii_pull_settings import TAXII_DEFAULTS
+    return {
+        k: str((get_setting_fn(k, v) if callable(get_setting_fn) else get_setting_fn.get(k, v)) or v).strip() or v
+        for k, v in TAXII_DEFAULTS.items()
+    }
+
+
 def _build_admin_settings_form_context():
     """Shared dict for admin Settings and Integrations pages (forms read system_settings)."""
     _get_setting, = _from_app('_get_setting')
@@ -2092,6 +2207,11 @@ def _build_admin_settings_form_context():
         misp_settings_dict = get_settings_for_form(_get_setting)
     except ImportError:
         misp_settings_dict = _misp_settings_fallback(_get_setting)
+    try:
+        from taxii_pull_settings import get_settings_for_form as taxii_settings_for_form
+        taxii_settings_dict = taxii_settings_for_form(_get_setting)
+    except ImportError:
+        taxii_settings_dict = _taxii_settings_fallback(_get_setting)
     ldap_servers = _get_ldap_servers_for_form(_get_setting)
     try:
         from utils.feed_cache import FEED_CACHE_TTL_DEFAULT, normalize_feed_cache_ttl_seconds
@@ -2113,6 +2233,7 @@ def _build_admin_settings_form_context():
         'ldap_servers': ldap_servers,
         'ldap_user_filter': _get_setting('ldap_user_filter', '(sAMAccountName=%(user)s)'),
         **misp_settings_dict,
+        **taxii_settings_dict,
         'syslog_udp_enabled': _get_setting('syslog_udp_enabled', 'false'),
         'syslog_udp_host': _get_setting('syslog_udp_host', ''),
         'syslog_udp_port': _get_setting('syslog_udp_port', '514'),
@@ -2203,13 +2324,18 @@ def admin_integrations():
 @pages_bp.route('/automations')
 @admin_required_page
 def admin_automations():
-    """Outbound automations: IOC push, YARA push, OpenDXL (DXL fabric)."""
-    try:
-        return render_template('admin/automations.html', settings=_build_admin_settings_form_context())
-    except Exception:
-        logging.exception('admin_automations page failed')
-        from flask import abort
-        abort(500)
+    """Legacy URL → unified Integrations hub (Push IOC / Push YARA)."""
+    from flask import redirect, request, url_for
+    tab = request.args.get('tab', 'push-ioc')
+    if tab in ('yara-push', 'trellix-ex-nx'):
+        return redirect(url_for('admin_pages.admin_integrations', tab='push-yara', sub=tab))
+    if tab in ('ioc-push', 'opendxl', 'misp-push'):
+        return redirect(url_for('admin_pages.admin_integrations', tab='push-ioc', sub=tab))
+    if tab in ('misp', 'taxii'):
+        return redirect(url_for('admin_pages.admin_integrations', tab='import'))
+    if tab == 'feeds':
+        return redirect(url_for('admin_pages.admin_integrations', tab='export'))
+    return redirect(url_for('admin_pages.admin_integrations', tab=tab if tab in ('overview', 'import', 'export', 'push-ioc', 'push-yara') else 'push-ioc', sub=request.args.get('sub')))
 
 
 @pages_bp.route('/sanity')

@@ -129,6 +129,45 @@ def _from_app(*names):
     return tuple(getattr(_app, n) for n in names)
 
 
+def _append_ioc_push_context_if_reactivated(
+    push_list: list,
+    was_active_before: bool,
+    *,
+    ioc_type: str,
+    value: str,
+    analyst: str,
+    ticket_id=None,
+    comment=None,
+    expiration_date=None,
+    campaign_id=None,
+    tags_json=None,
+    submission_method: str = 'single',
+    user_id=None,
+    created_at=None,
+) -> None:
+    """Queue Cortex/HTTP/ESA push when an inactive row (revoked or expired) becomes active again."""
+    if was_active_before:
+        return
+    try:
+        from utils.ioc_push import ioc_context_from_submission
+        push_list.append(ioc_context_from_submission(
+            ioc_type=ioc_type,
+            value=value,
+            analyst=analyst,
+            ticket_id=ticket_id,
+            comment=comment,
+            expiration_date=expiration_date,
+            campaign_id=campaign_id,
+            tags_json=tags_json,
+            submission_method=submission_method,
+            user_id=user_id,
+            created_at=created_at,
+            action='create',
+        ))
+    except Exception as e:
+        logging.warning('IOC push context for reactivation failed: %s', e)
+
+
 def _schedule_ioc_push_from_submission(**kwargs):
     """Fire-and-forget IOC push to configured HTTP targets (background thread)."""
     try:
@@ -1285,6 +1324,20 @@ def bulk_csv():
                         _log_sanity_warning_history(
                             _log_ioc_history, ioc_type, value, get_sanity_warnings(value, ioc_type)
                         )
+                        _append_ioc_push_context_if_reactivated(
+                            new_iocs_for_push,
+                            was_active_before,
+                            ioc_type=ioc_type,
+                            value=value,
+                            analyst=username,
+                            ticket_id=ticket_id_val,
+                            comment=comment,
+                            expiration_date=exp_date,
+                            campaign_id=campaign_id,
+                            tags_json=tags_json,
+                            submission_method='csv',
+                            user_id=current_user.id if current_user.is_authenticated else None,
+                        )
                 else:
                     rare = _compute_rare_find_fields(ioc_type, value)
                     db.session.add(_create_ioc(
@@ -2002,6 +2055,22 @@ def submit_staging():
                     _log_sanity_warning_history(
                         _log_ioc_history, ioc_type, ioc_value, get_sanity_warnings(ioc_value, ioc_type)
                     )
+                    if analyst.lower() != misp_sync_user:
+                        _append_ioc_push_context_if_reactivated(
+                            new_iocs_for_push,
+                            was_active_before,
+                            ioc_type=ioc_type,
+                            value=ioc_value,
+                            analyst=analyst,
+                            ticket_id=ticket_id,
+                            comment=comment,
+                            expiration_date=exp_date,
+                            campaign_id=campaign_id,
+                            tags_json=item_tags_json,
+                            submission_method=submission_source,
+                            user_id=user_id,
+                            created_at=created_at,
+                        )
             else:
                 rare = _compute_rare_find_fields(ioc_type, ioc_value)
                 db.session.add(_create_ioc(
@@ -2283,6 +2352,21 @@ def upload_txt():
                             ticket_id=meta.get('ticket_id'),
                             campaign_name=campaign_name,
                             tags_list=tags_list,
+                        )
+                        _append_ioc_push_context_if_reactivated(
+                            new_iocs_for_push,
+                            was_active_before,
+                            ioc_type=ioc_type,
+                            value=value,
+                            analyst=store_analyst,
+                            ticket_id=meta['ticket_id'],
+                            comment=meta['comment'],
+                            expiration_date=exp_date,
+                            campaign_id=campaign_id,
+                            tags_json=tags_json,
+                            submission_method='txt',
+                            user_id=store_user_id,
+                            created_at=meta['created_at'],
                         )
                 else:
                     rare = _compute_rare_find_fields(ioc_type, value)

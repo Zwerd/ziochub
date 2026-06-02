@@ -1,0 +1,185 @@
+<script>
+(function() {
+    var feedsForm = document.getElementById('feedsForm');
+    if (feedsForm) {
+        feedsForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            var msgEl = document.getElementById('feedsMessage');
+            msgEl.classList.add('hidden');
+            try {
+                var res = await fetch('/api/admin/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        feeds_public_enabled: document.getElementById('feeds_public_enabled').checked ? 'true' : 'false',
+                        feed_cache_enabled: document.getElementById('feed_cache_enabled').checked ? 'true' : 'false',
+                        feed_cache_ttl_seconds: document.getElementById('feed_cache_ttl_seconds').value
+                    })
+                });
+                var data = await res.json();
+                msgEl.classList.remove('hidden');
+                msgEl.className = 'mt-4 text-sm ' + (data.success ? 'text-green-400' : 'text-red-400');
+                msgEl.textContent = data.success ? 'Settings saved.' : (data.message || 'Failed');
+            } catch (err) {
+                msgEl.classList.remove('hidden');
+                msgEl.className = 'mt-4 text-sm text-red-400';
+                msgEl.textContent = 'Network error.';
+            }
+        });
+    }
+    function mispPullPayload() {
+        return {
+            misp_enabled: document.getElementById('misp_enabled').value,
+            misp_url: document.getElementById('misp_url').value,
+            misp_api_key: document.getElementById('misp_api_key').value,
+            misp_verify_ssl: document.getElementById('misp_verify_ssl').value,
+            misp_last_days: document.getElementById('misp_last_days').value,
+            misp_filter_tags: document.getElementById('misp_filter_tags').value,
+            misp_filter_types: document.getElementById('misp_filter_types').value,
+            misp_published_only: document.getElementById('misp_published_only').value,
+            misp_default_ttl: document.getElementById('misp_default_ttl').value,
+            misp_sync_user: document.getElementById('misp_sync_user').value,
+            misp_pull_interval: document.getElementById('misp_pull_interval').value,
+            misp_exclude_from_champs: document.getElementById('misp_exclude_from_champs').value
+        };
+    }
+    var mispForm = document.getElementById('mispForm');
+    if (mispForm) {
+        mispForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            try {
+                var res = await fetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mispPullPayload()) });
+                var data = await res.json();
+                var el = document.getElementById('mispMessage');
+                el.classList.remove('hidden');
+                el.className = 'mt-4 text-sm ' + (data.success ? 'text-green-400' : 'text-red-400');
+                el.textContent = data.success ? 'MISP settings saved.' : (data.message || 'Failed');
+            } catch (err) {
+                showMispMsg('Network error.', false);
+            }
+        });
+    }
+    function showMispMsg(text, ok) {
+        var el = document.getElementById('mispMessage');
+        if (!el) return;
+        el.classList.remove('hidden');
+        el.className = 'mt-4 text-sm ' + (ok ? 'text-green-400' : 'text-red-400');
+        el.textContent = text;
+    }
+    window.showMispMsg = showMispMsg;
+    var mispTestBtn = document.getElementById('mispTestBtn');
+    if (mispTestBtn) mispTestBtn.addEventListener('click', async function() {
+        var logEl = document.getElementById('mispLog'), contentEl = document.getElementById('mispLogContent'), spinnerEl = document.getElementById('mispSpinner');
+        logEl.classList.add('hidden'); contentEl.innerHTML = ''; spinnerEl.classList.remove('hidden'); this.disabled = true;
+        try {
+            var res = await fetch('/api/admin/misp/test', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ misp_url: document.getElementById('misp_url').value, misp_api_key: document.getElementById('misp_api_key').value, misp_verify_ssl: document.getElementById('misp_verify_ssl').value }) });
+            var data = await res.json();
+            spinnerEl.classList.add('hidden');
+            if (data && data.data && data.data.steps) contentEl.innerHTML = data.data.steps.map(function(s) { return '<div>' + s.step + ': ' + (s.message || '') + '</div>'; }).join('');
+            else contentEl.innerHTML = '<div class="text-red-400">' + (data.message || '') + '</div>';
+            logEl.classList.remove('hidden');
+            showMispMsg(data.message || '', !!data.success);
+        } catch (e) { spinnerEl.classList.add('hidden'); showMispMsg('Network error.', false); }
+        this.disabled = false;
+    });
+    var mispSyncBtn = document.getElementById('mispSyncBtn');
+    if (mispSyncBtn) mispSyncBtn.addEventListener('click', async function() {
+        if (typeof appConfirm === 'function') { var ok = await appConfirm({ title: 'MISP Sync', message: 'Run MISP sync now?', okText: 'Run' }); if (!ok) return; }
+        else if (!confirm('Run MISP sync?')) return;
+        var spinnerEl = document.getElementById('mispSpinner'); spinnerEl.classList.remove('hidden'); this.disabled = true;
+        try {
+            var res = await fetch('/api/admin/misp/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+            var data = await res.json();
+            spinnerEl.classList.add('hidden');
+            showMispMsg(data.message || (data.success ? 'Done' : 'Failed'), !!data.success);
+        } catch (e) { spinnerEl.classList.add('hidden'); showMispMsg('Network error.', false); }
+        this.disabled = false;
+    });
+    var mispPushForm = document.getElementById('mispPushForm');
+    if (mispPushForm) {
+        mispPushForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            try {
+                var res = await fetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        misp_push_enabled: document.getElementById('misp_push_enabled').value,
+                        misp_push_include_comment: document.getElementById('misp_push_include_comment').value,
+                        misp_push_default_event_id: (document.getElementById('misp_push_default_event_id').value || '').trim()
+                    }) });
+                var data = await res.json();
+                var el = document.getElementById('mispPushMessage');
+                el.classList.remove('hidden');
+                el.className = 'mt-4 text-sm ' + (data.success ? 'text-green-400' : 'text-red-400');
+                el.textContent = data.success ? 'MISP push settings saved.' : (data.message || 'Failed');
+            } catch (err) {
+                var el = document.getElementById('mispPushMessage');
+                el.classList.remove('hidden'); el.className = 'mt-4 text-sm text-red-400'; el.textContent = 'Network error.';
+            }
+        });
+    }
+    function taxiiPayload() {
+        return {
+            taxii_pull_enabled: document.getElementById('taxii_pull_enabled').value,
+            taxii_discovery_url: document.getElementById('taxii_discovery_url').value,
+            taxii_api_root_id: document.getElementById('taxii_api_root_id').value,
+            taxii_collection_id: document.getElementById('taxii_collection_id').value,
+            taxii_username: document.getElementById('taxii_username').value,
+            taxii_password: document.getElementById('taxii_password').value,
+            taxii_api_key: document.getElementById('taxii_api_key').value,
+            taxii_verify_ssl: document.getElementById('taxii_verify_ssl').value,
+            taxii_last_days: document.getElementById('taxii_last_days').value,
+            taxii_pull_interval: document.getElementById('taxii_pull_interval').value,
+            taxii_sync_user: document.getElementById('taxii_sync_user').value,
+            taxii_exclude_from_champs: document.getElementById('taxii_exclude_from_champs').value,
+            taxii_skip_revoked: document.getElementById('taxii_skip_revoked').value,
+            taxii_default_ttl: document.getElementById('taxii_default_ttl').value
+        };
+    }
+    var taxiiForm = document.getElementById('taxiiForm');
+    if (taxiiForm) {
+        taxiiForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            try {
+                var res = await fetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(taxiiPayload()) });
+                var data = await res.json();
+                var el = document.getElementById('taxiiMessage');
+                el.classList.remove('hidden');
+                el.className = 'mt-4 text-sm ' + (data.success ? 'text-green-400' : 'text-red-400');
+                el.textContent = data.success ? 'TAXII settings saved.' : (data.message || 'Failed');
+            } catch (err) {
+                var el = document.getElementById('taxiiMessage');
+                el.classList.remove('hidden'); el.className = 'mt-4 text-sm text-red-400'; el.textContent = 'Network error.';
+            }
+        });
+    }
+    var taxiiTestBtn = document.getElementById('taxiiTestBtn');
+    if (taxiiTestBtn) taxiiTestBtn.addEventListener('click', async function() {
+        var logEl = document.getElementById('taxiiLog'), contentEl = document.getElementById('taxiiLogContent'), spinnerEl = document.getElementById('taxiiSpinner');
+        logEl.classList.add('hidden'); spinnerEl.classList.remove('hidden'); this.disabled = true;
+        try {
+            var res = await fetch('/api/admin/taxii/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(taxiiPayload()) });
+            var data = await res.json();
+            spinnerEl.classList.add('hidden');
+            contentEl.innerHTML = data && data.data && data.data.steps ? data.data.steps.map(function(s) { return '<div>' + s.step + '</div>'; }).join('') : (data.message || '');
+            logEl.classList.remove('hidden');
+        } catch (e) { spinnerEl.classList.add('hidden'); }
+        this.disabled = false;
+    });
+    var taxiiSyncBtn = document.getElementById('taxiiSyncBtn');
+    if (taxiiSyncBtn) taxiiSyncBtn.addEventListener('click', async function() {
+        if (typeof appConfirm === 'function') { var ok = await appConfirm({ title: 'TAXII Sync', message: 'Pull now?', okText: 'Run' }); if (!ok) return; }
+        else if (!confirm('Run TAXII sync?')) return;
+        this.disabled = true;
+        try {
+            var res = await fetch('/api/admin/taxii/sync', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+            var data = await res.json();
+            var el = document.getElementById('taxiiMessage');
+            el.classList.remove('hidden');
+            el.className = 'mt-4 text-sm ' + (data.success ? 'text-green-400' : 'text-red-400');
+            el.textContent = data.message || '';
+        } catch (e) {}
+        this.disabled = false;
+    });
+})();
+</script>

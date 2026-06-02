@@ -2017,6 +2017,18 @@ try:
 except Exception:
     pass
 
+try:
+    from utils.misp_sync_scheduler import start_misp_sync_scheduler
+    start_misp_sync_scheduler(app)
+except Exception:
+    pass
+
+try:
+    from utils.taxii_sync_scheduler import start_taxii_sync_scheduler
+    start_taxii_sync_scheduler(app)
+except Exception:
+    pass
+
 
 if __name__ == '__main__':
     _init_db()

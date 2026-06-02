@@ -79,6 +79,11 @@
     "no_results": "לא נמצאו רשומות",
     "prev": "הקודם",
     "next": "הבא",
+    "lifecycle": {
+      "all": "הכל (ברירת מחדל)",
+      "active": "פעיל בלבד",
+      "inactive": "לא פעיל (נמחק / פג תוקף)"
+    },
     "filter": {
       "all": "כל העמודות",
       "metadata": "מטא־דאטה בלבד (ללא ערך IOC)",
@@ -554,7 +559,13 @@
     "connections_feed_modal_title": "לקוחות פיד ו-TAXII",
     "connections_feed_modal_sub": "לקוחות שמשכו בהצלחה פידים בטקסט רגיל (/feed/…) או TAXII 2 (/taxii2/…). טלמטריה מצומצמת לפי IP ונתיב.",
     "pull_state_modal_title": "מצב משיכה",
-    "pull_state_modal_sub": "מתי ZIoCHub התחבר בפעם האחרונה כלפי חוץ למערכת אחרת כדי למשוך IOCs למסד (כיום MISP).",
+    "pull_state_modal_sub": "מתי ZIoCHub התחבר לאחרונה למערכת חיצונית כדי למשוך IOCs (כיום MISP). בדיקה אוטומטית כל 5 דקות; המרווח מוגדר ב-Admin → Settings → MISP.",
+    "pull_col_system": "מערכת",
+    "pull_col_address": "כתובת",
+    "pull_col_interval": "מרווח",
+    "pull_col_last": "משיכה אחרונה",
+    "pull_col_next": "משיכה הבאה",
+    "pull_col_summary": "תוצאה אחרונה",
     "push_state_modal_title": "מצב דחיפה",
     "push_state_modal_sub": "מתי ZIoCHub דחף או עדכן IOC/YARA בפלטפורמות מקושרות (APIs, אוטומציות HTTP, DXL/TIE וכו׳).",
     "push_state_bridges_section": "פעילות יוצאת (DXL, אצוות אוטומציה)",

@@ -221,6 +221,9 @@
         const query = searchInput.value.trim();
         const filter = document.getElementById('searchFilter').value || 'all';
         _searchLastFilter = filter || 'all';
+        var lifecycleEl = document.getElementById('searchLifecycleFilter');
+        var lifecycle = (lifecycleEl && lifecycleEl.value) ? lifecycleEl.value : 'all';
+        _searchLastLifecycle = lifecycle;
         var browseRaw = '';
         var browseEl = document.getElementById('searchBrowseSelect');
         if (browseEl) browseRaw = browseEl.value || '';
@@ -229,7 +232,7 @@
         var browseAgg = (br.aggregate || '').trim().toLowerCase();
         // Empty search with "All Groups" + "All Columns" should list everything (paginated).
 
-        let url = `/api/search?q=${encodeURIComponent(query)}&filter=${encodeURIComponent(filter)}`;
+        let url = `/api/search?q=${encodeURIComponent(query)}&filter=${encodeURIComponent(filter)}&lifecycle=${encodeURIComponent(lifecycle)}`;
         // Country / type browse apply only when browsing without a search term (see API).
         if (countryCode && !query) {
             url += '&country_code=' + encodeURIComponent(countryCode);
@@ -313,6 +316,7 @@
     let _searchSortBy = null;
     let _searchSortDir = 'asc';
     let _searchLastFilter = 'all';
+    let _searchLastLifecycle = 'all';
 
     function _getSortValue(result, key) {
         const v = result[key];

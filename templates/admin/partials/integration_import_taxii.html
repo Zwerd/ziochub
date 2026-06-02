@@ -1,0 +1,136 @@
+<div id="import-sub-taxii" class="import-sub-pane hidden">
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
+        <h3 class="text-lg font-semibold accent-blue mb-4">TAXII 2.1 Pull (remote server)</h3>
+        <p class="text-secondary text-sm mb-6">Pull STIX 2.1 indicators from an external TAXII server. ZIoCHub as TAXII <em>provider</em> is under <strong class="text-primary">Export</strong>.</p>
+
+        <form id="taxiiForm" class="space-y-4">
+            <div>
+                <label for="taxii_pull_enabled" class="block text-sm font-semibold text-secondary mb-1">TAXII Pull Enabled</label>
+                <select id="taxii_pull_enabled" name="taxii_pull_enabled" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="false" {% if settings.taxii_pull_enabled == 'false' %}selected{% endif %}>No</option>
+                    <option value="true" {% if settings.taxii_pull_enabled == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+            </div>
+            <div>
+                <label for="taxii_discovery_url" class="block text-sm font-semibold text-secondary mb-1">TAXII Discovery URL</label>
+                <input type="text" id="taxii_discovery_url" name="taxii_discovery_url" placeholder="https://cti.example.com/taxii2/" value="{{ settings.taxii_discovery_url }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <p class="text-secondary text-xs mt-1">Discovery endpoint (usually ends with <code class="px-0.5 rounded bg-white/10 text-xs">/taxii2/</code>).</p>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label for="taxii_api_root_id" class="block text-sm font-semibold text-secondary mb-1">API Root ID (optional)</label>
+                    <input type="text" id="taxii_api_root_id" name="taxii_api_root_id" placeholder="e.g. ziochub" value="{{ settings.taxii_api_root_id }}"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+                <div>
+                    <label for="taxii_collection_id" class="block text-sm font-semibold text-secondary mb-1">Collection ID (optional)</label>
+                    <input type="text" id="taxii_collection_id" name="taxii_collection_id" placeholder="e.g. indicators" value="{{ settings.taxii_collection_id }}"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+            </div>
+            <div class="border-t border-white/5 pt-4">
+                <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Authentication</p>
+            </div>
+            <div>
+                <label for="taxii_api_key" class="block text-sm font-semibold text-secondary mb-1">API Key (Bearer)</label>
+                <input type="password" id="taxii_api_key" name="taxii_api_key" placeholder="Optional if using Basic auth" value="{{ settings.taxii_api_key }}" autocomplete="off"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label for="taxii_username" class="block text-sm font-semibold text-secondary mb-1">Username (Basic)</label>
+                    <input type="text" id="taxii_username" name="taxii_username" value="{{ settings.taxii_username }}" autocomplete="off"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+                <div>
+                    <label for="taxii_password" class="block text-sm font-semibold text-secondary mb-1">Password (Basic)</label>
+                    <input type="password" id="taxii_password" name="taxii_password" placeholder="***" value="{{ settings.taxii_password }}" autocomplete="off"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+            </div>
+            <div>
+                <label for="taxii_verify_ssl" class="block text-sm font-semibold text-secondary mb-1">Verify SSL</label>
+                <select id="taxii_verify_ssl" name="taxii_verify_ssl" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="false" {% if settings.taxii_verify_ssl == 'false' %}selected{% endif %}>No</option>
+                    <option value="true" {% if settings.taxii_verify_ssl == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+            </div>
+            <div class="border-t border-white/5 pt-4">
+                <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Fetch parameters</p>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label for="taxii_last_days" class="block text-sm font-semibold text-secondary mb-1">Lookback (days, first sync)</label>
+                    <input type="number" id="taxii_last_days" name="taxii_last_days" min="1" max="365" value="{{ settings.taxii_last_days }}"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+                <div>
+                    <label for="taxii_pull_interval" class="block text-sm font-semibold text-secondary mb-1">Auto-sync interval</label>
+                    {% set taxii_interval = settings.taxii_pull_interval | default('60') | string %}
+                    <select id="taxii_pull_interval" name="taxii_pull_interval" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                        <option value="10" {% if taxii_interval == '10' %}selected{% endif %}>Every 10 minutes</option>
+                        <option value="30" {% if taxii_interval == '30' %}selected{% endif %}>Every 30 minutes</option>
+                        <option value="60" {% if taxii_interval == '60' %}selected{% endif %}>Every hour</option>
+                        <option value="120" {% if taxii_interval == '120' %}selected{% endif %}>Every 2 hours</option>
+                        <option value="360" {% if taxii_interval == '360' %}selected{% endif %}>Every 6 hours</option>
+                        <option value="1440" {% if taxii_interval == '1440' %}selected{% endif %}>Daily</option>
+                        {% if taxii_interval not in ['10','30','60','120','360','1440'] %}
+                        <option value="{{ taxii_interval }}" selected>Custom: {{ taxii_interval }} min</option>
+                        {% endif %}
+                    </select>
+                </div>
+            </div>
+            <div>
+                <label for="taxii_skip_revoked" class="block text-sm font-semibold text-secondary mb-1">Skip revoked STIX indicators</label>
+                <select id="taxii_skip_revoked" name="taxii_skip_revoked" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="true" {% if settings.taxii_skip_revoked != 'false' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if settings.taxii_skip_revoked == 'false' %}selected{% endif %}>No</option>
+                </select>
+            </div>
+            <div class="border-t border-white/5 pt-4">
+                <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Import settings</p>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label for="taxii_default_ttl" class="block text-sm font-semibold text-secondary mb-1">Default TTL (days, 0 = permanent)</label>
+                    <input type="text" id="taxii_default_ttl" name="taxii_default_ttl" placeholder="permanent" value="{{ settings.taxii_default_ttl }}"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+                <div>
+                    <label for="taxii_sync_user" class="block text-sm font-semibold text-secondary mb-1">Sync analyst username</label>
+                    <input type="text" id="taxii_sync_user" name="taxii_sync_user" value="{{ settings.taxii_sync_user }}" placeholder="taxii_sync"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+            </div>
+            <div>
+                <label for="taxii_exclude_from_champs" class="block text-sm font-semibold text-secondary mb-1">Exclude from Champs leaderboard</label>
+                <select id="taxii_exclude_from_champs" name="taxii_exclude_from_champs" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="true" {% if settings.taxii_exclude_from_champs != 'false' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if settings.taxii_exclude_from_champs == 'false' %}selected{% endif %}>No</option>
+                </select>
+            </div>
+            <div class="flex items-center gap-3 pt-2">
+                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save TAXII Settings</button>
+                <button type="button" id="taxiiTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test Connection</button>
+                <button type="button" id="taxiiSyncBtn" class="px-4 py-2 rounded-lg font-semibold bg-green-600 hover:bg-green-500 text-white transition">Sync Now</button>
+            </div>
+        </form>
+        <div id="taxiiMessage" class="mt-4 hidden text-sm"></div>
+        <div class="mt-6 pt-6 border-t border-white/10">
+            <h4 class="text-sm font-semibold text-secondary mb-2">TAXII operation log</h4>
+            <div id="taxiiLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto overflow-y-auto max-h-64">
+                <div id="taxiiLogContent" class="space-y-1 whitespace-pre-wrap"></div>
+            </div>
+            <div id="taxiiSpinner" class="mt-2 hidden text-amber-400 text-sm">Running...</div>
+        </div>
+        {% if settings.taxii_last_sync %}
+        <div class="mt-4 text-xs text-secondary border-t border-white/5 pt-3">
+            <span class="font-semibold">Last sync:</span> {{ settings.taxii_last_sync }}
+            {% if settings.taxii_last_sync_result %}
+            <span class="ml-2">{{ settings.taxii_last_sync_result }}</span>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>

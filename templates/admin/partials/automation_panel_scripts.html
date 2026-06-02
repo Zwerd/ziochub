@@ -1,0 +1,170 @@
+<script>
+document.getElementById('dxlUploadForm') && document.getElementById('dxlUploadForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('dxlUploadMessage');
+    msgEl.classList.add('hidden');
+    var fd = new FormData();
+    ['dxl_config_file','dxl_broker_certs','dxl_client_cert','dxl_client_key'].forEach(function(id) {
+        var f = document.getElementById(id);
+        if (f && f.files[0]) fd.append(f.name || id, f.files[0]);
+    });
+    try {
+        var res = await fetch('/api/admin/dxl/upload', { method: 'POST', credentials: 'same-origin', body: fd });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        msgEl.className = 'text-sm ' + (data.success ? 'text-green-400' : 'text-red-400');
+        msgEl.textContent = data.message || (data.success ? 'Uploaded.' : 'Failed');
+        if (data.success && data.data && data.data.dxl_config_path) document.getElementById('dxl_config_path').value = data.data.dxl_config_path;
+    } catch (err) {
+        msgEl.classList.remove('hidden'); msgEl.className = 'text-sm text-red-400'; msgEl.textContent = 'Network error.';
+    }
+});
+document.getElementById('dxlForm') && document.getElementById('dxlForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('dxlMessage');
+    try {
+        var res = await fetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dxl_enabled: document.getElementById('dxl_enabled').value, dxl_config_path: document.getElementById('dxl_config_path').value.trim() }) });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        msgEl.className = 'mt-4 text-sm ' + (data.success ? 'text-green-400' : 'text-red-400');
+        msgEl.textContent = data.success ? 'OpenDXL settings saved.' : (data.message || 'Failed');
+    } catch (err) { msgEl.classList.remove('hidden'); msgEl.className = 'mt-4 text-sm text-red-400'; msgEl.textContent = 'Network error.'; }
+});
+document.getElementById('dxlTestBtn') && document.getElementById('dxlTestBtn').addEventListener('click', async function() {
+    var logEl = document.getElementById('dxlTestLog'), contentEl = document.getElementById('dxlTestLogContent'), spinnerEl = document.getElementById('dxlTestSpinner'), msgEl = document.getElementById('dxlMessage');
+    logEl.classList.remove('hidden'); spinnerEl.classList.remove('hidden'); contentEl.innerHTML = '';
+    if (msgEl) msgEl.classList.add('hidden');
+    this.disabled = true;
+    try {
+        var res = await fetch('/api/admin/dxl/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+            body: JSON.stringify({ dxl_config_path: document.getElementById('dxl_config_path').value.trim() }) });
+        var data = await res.json();
+        var steps = (data.data && data.data.steps) ? data.data.steps : [];
+        if (steps.length) {
+            contentEl.innerHTML = steps.map(function(s) {
+                var icon = s.status === 'ok' ? '\u2713' : '\u2717';
+                var color = s.status === 'ok' ? 'text-green-400' : 'text-red-400';
+                return '<div class="' + color + '">' + icon + ' ' + (s.step || '') + ' — ' + (s.message || '') + '</div>';
+            }).join('');
+        } else {
+            contentEl.innerHTML = '<div class="text-red-400">' + (data.message || JSON.stringify(data)) + '</div>';
+        }
+        if (msgEl) {
+            msgEl.classList.remove('hidden');
+            var ok = data.success || (data.data && data.data.success);
+            msgEl.className = 'mt-4 text-sm ' + (ok ? 'text-green-400' : 'text-red-400');
+            msgEl.textContent = ok ? 'DXL / TIE test passed.' : (data.message || 'DXL / TIE test failed — see steps below.');
+        }
+    } catch (e) {
+        contentEl.innerHTML = '<div class="text-red-400">Network error.</div>';
+        if (msgEl) { msgEl.classList.remove('hidden'); msgEl.className = 'mt-4 text-sm text-red-400'; msgEl.textContent = 'Network error.'; }
+    }
+    spinnerEl.classList.add('hidden');
+    this.disabled = false;
+});
+(function() {
+    var form = document.getElementById('yaraAutomationForm');
+    if (!form) return;
+    var listEl = document.getElementById('fireeyeAppliancesList');
+    var appliances = [];
+    try { appliances = JSON.parse(listEl.getAttribute('data-initial') || '[]'); } catch (e) { appliances = []; }
+    function renderAppliances() {
+        listEl.innerHTML = '';
+        appliances.forEach(function(a, idx) {
+            var row = document.createElement('div');
+            row.className = 'fireeye-row space-y-2 p-3 rounded-lg border border-white/10 bg-black/20';
+            row.innerHTML = '<div class="flex gap-2"><input type="text" class="fireeye-name flex-1 px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary" placeholder="Name" value="' + (a.name||'').replace(/"/g,'&quot;') + '"><input type="text" class="fireeye-base_url flex-1 px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary" placeholder="https://host" value="' + (a.base_url||'').replace(/"/g,'&quot;') + '"><button type="button" class="fireeye-remove px-2 py-1.5 rounded text-sm bg-red-600/80 text-white" data-idx="' + idx + '">Remove</button></div><input type="text" class="fireeye-path w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm" placeholder="/api/v1/yara" value="' + (a.path||'/api/v1/yara').replace(/"/g,'&quot;') + '">';
+            listEl.appendChild(row);
+        });
+        listEl.querySelectorAll('.fireeye-remove').forEach(function(btn) {
+            btn.onclick = function() { appliances.splice(parseInt(btn.getAttribute('data-idx'),10), 1); renderAppliances(); };
+        });
+    }
+    document.getElementById('fireeyeAddAppliance') && document.getElementById('fireeyeAddAppliance').addEventListener('click', function() {
+        appliances.push({ name: '', base_url: '', path: '/api/v1/yara' }); renderAppliances();
+    });
+    renderAppliances();
+    function collect() {
+        var out = [];
+        listEl.querySelectorAll('.fireeye-row').forEach(function(row) {
+            var n = row.querySelector('.fireeye-name'), u = row.querySelector('.fireeye-base_url'), p = row.querySelector('.fireeye-path');
+            if (n && u) out.push({ name: n.value.trim(), base_url: u.value.trim(), path: (p && p.value.trim()) || '/api/v1/yara' });
+        });
+        return out;
+    }
+    form.addEventListener('submit', async function(e) {
+        e.preventDefault();
+        var sslEl = document.getElementById('automation_fireeye_ignore_ssl');
+        try {
+            var res = await fetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ automation_fireeye_enabled: document.getElementById('automation_fireeye_enabled').value, automation_fireeye_appliances: collect(), automation_fireeye_ignore_ssl: sslEl && sslEl.checked ? 'true' : 'false' }) });
+            var data = await res.json();
+            var msgEl = document.getElementById('yaraAutomationMessage');
+            msgEl.classList.remove('hidden'); msgEl.className = 'mt-4 text-sm ' + (data.success ? 'text-green-400' : 'text-red-400');
+            msgEl.textContent = data.success ? 'YARA push settings saved.' : (data.message || 'Failed');
+        } catch (err) { document.getElementById('yaraAutomationMessage').textContent = 'Network error.'; }
+    });
+    document.getElementById('automationTestBtn') && document.getElementById('automationTestBtn').addEventListener('click', async function() {
+        var outEl = document.getElementById('automationTestResult');
+        var sslEl = document.getElementById('automation_fireeye_ignore_ssl');
+        outEl.classList.remove('hidden');
+        try {
+            var res = await fetch('/api/admin/automation-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appliances: collect(), ignore_ssl: sslEl && sslEl.checked }) });
+            var data = await res.json();
+            outEl.textContent = data.message || JSON.stringify(data);
+        } catch (e) { outEl.textContent = 'Network error'; }
+    });
+})();
+(function() {
+    var listEl = document.getElementById('iocPushTargetsList');
+    if (!listEl) return;
+    {% raw %}var defaultTemplate = '{\n  "ioc_type": "{{ ioc.type }}",\n  "ioc_value": {{ ioc.value | tojson }}\n}';{% endraw %}
+    var targets = [];
+    try { targets = JSON.parse(listEl.getAttribute('data-initial') || '[]'); } catch (e) { targets = []; }
+    function renderTargets() {
+        listEl.innerHTML = '';
+        targets.forEach(function(t, idx) {
+            var row = document.createElement('div');
+            row.className = 'ioc-push-row p-4 rounded-lg border border-white/10 bg-black/20 space-y-2';
+            row.innerHTML = '<input type="text" class="ioc-push-name w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary" placeholder="Name" value="' + (t.name||'') + '"><input type="text" class="ioc-push-url w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary" placeholder="URL" value="' + (t.url||'') + '"><textarea class="ioc-push-template w-full min-h-[100px] px-2 py-2 rounded bg-tertiary border border-white/10 text-primary font-mono text-xs">' + (t.body_template || defaultTemplate) + '</textarea><button type="button" class="ioc-push-remove text-sm text-red-400" data-idx="' + idx + '">Remove</button>';
+            listEl.appendChild(row);
+        });
+        listEl.querySelectorAll('.ioc-push-remove').forEach(function(btn) {
+            btn.onclick = function() { targets = collect(); targets.splice(parseInt(btn.getAttribute('data-idx'),10), 1); renderTargets(); };
+        });
+    }
+    function collect() {
+        var out = [];
+        listEl.querySelectorAll('.ioc-push-row').forEach(function(row) {
+            out.push({ name: row.querySelector('.ioc-push-name').value.trim(), enabled: true, url: row.querySelector('.ioc-push-url').value.trim(), method: 'POST', auth_type: 'none', body_template: row.querySelector('.ioc-push-template').value.trim(), content_type: 'application/json' });
+        });
+        return out;
+    }
+    document.getElementById('iocPushAddTarget') && document.getElementById('iocPushAddTarget').addEventListener('click', function() {
+        targets.push({ name: '', url: '', body_template: defaultTemplate }); renderTargets();
+    });
+    renderTargets();
+    document.getElementById('iocPushForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        try {
+            var res = await fetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ioc_push_enabled: document.getElementById('ioc_push_enabled').value, ioc_push_ignore_ssl: document.getElementById('ioc_push_ignore_ssl').checked ? 'true' : 'false', ioc_push_targets: collect() }) });
+            var data = await res.json();
+            var msgEl = document.getElementById('iocPushMessage');
+            msgEl.classList.remove('hidden'); msgEl.className = 'mt-4 text-sm ' + (data.success ? 'text-green-400' : 'text-red-400');
+            msgEl.textContent = data.success ? 'IOC push settings saved.' : (data.message || 'Failed');
+        } catch (err) { document.getElementById('iocPushMessage').textContent = 'Network error.'; }
+    });
+    document.getElementById('iocPushTestBtn') && document.getElementById('iocPushTestBtn').addEventListener('click', async function() {
+        var outEl = document.getElementById('iocPushTestResult');
+        outEl.classList.remove('hidden');
+        try {
+            var res = await fetch('/api/admin/ioc-push-test', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ targets: collect(), ignore_ssl: document.getElementById('ioc_push_ignore_ssl').checked }) });
+            var data = await res.json();
+            outEl.textContent = data.message || JSON.stringify(data);
+        } catch (e) { outEl.textContent = 'Network error'; }
+    });
+})();
+</script>

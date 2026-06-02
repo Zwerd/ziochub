@@ -52,15 +52,6 @@ def schedule_auxiliary_vendor_integrations(
         return
 
     try:
-        from utils.cortex_xdr import cortex_xdr_enabled
-        from utils.google_secops import google_secops_enabled
-
-        if not cortex_xdr_enabled() and not google_secops_enabled():
-            return
-    except Exception:
-        return
-
-    try:
         app_obj = app._get_current_object()
     except Exception:
         app_obj = app
@@ -69,17 +60,15 @@ def schedule_auxiliary_vendor_integrations(
         with app_obj.app_context():
             for ctx in filtered:
                 try:
-                    from utils.cortex_xdr import cortex_xdr_enabled as _cx_on, cortex_xdr_push_ioc_from_context
+                    from utils.cortex_xdr import cortex_xdr_push_ioc_from_context
 
-                    if _cx_on():
-                        cortex_xdr_push_ioc_from_context(ctx)
+                    cortex_xdr_push_ioc_from_context(ctx)
                 except Exception:
                     logger.exception('Cortex XDR auxiliary IOC push failed')
                 try:
-                    from utils.google_secops import google_secops_enabled as _gs_on, google_secops_push_ioc_from_context
+                    from utils.google_secops import google_secops_push_ioc_from_context
 
-                    if _gs_on():
-                        google_secops_push_ioc_from_context(ctx)
+                    google_secops_push_ioc_from_context(ctx)
                 except Exception:
                     logger.exception('Google SecOps auxiliary IOC push failed')
                 if delay_sec > 0:

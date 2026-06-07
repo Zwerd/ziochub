@@ -147,7 +147,9 @@
             const dateCounts = {};
             (iocs || []).forEach(item => {
                 if (item.date) {
-                    const dateStr = item.date.split('T')[0];
+                    const dateStr = typeof formatUtcToLocalDate === 'function'
+                        ? formatUtcToLocalDate(item.date)
+                        : item.date.split('T')[0];
                     dateCounts[dateStr] = (dateCounts[dateStr] || 0) + 1;
                 }
             });
@@ -194,7 +196,7 @@
                     const itemsHtml = sortedIocs.map(item => {
                     const icon = getIocTypeIcon(item.file_type, item.ioc, item.country_code);
                     const comment = (item.comment && item.comment.trim()) ? escapeHtml(item.comment.trim()) : '';
-                    const meta = [item.file_type, escapeHtml(item.user || ''), comment, new Date(item.date).toLocaleDateString()].filter(Boolean).join(' • ');
+                    const meta = [item.file_type, escapeHtml(item.user || ''), comment, (typeof formatUtcToLocalDate === 'function' ? formatUtcToLocalDate(item.date) : new Date(item.date).toLocaleDateString())].filter(Boolean).join(' • ');
                     return `<div class="bg-tertiary rounded p-3 text-sm">
                         <div class="font-mono accent-blue flex items-center justify-between gap-2 min-w-0">
                             <span class="flex-1 min-w-0 truncate">${icon} ${escapeHtml(item.ioc || '')}</span>
@@ -219,7 +221,9 @@
                 const dateCounts = {};
                 iocs.forEach(item => {
                     if (item.date) {
-                        const dateStr = item.date.split('T')[0];
+                        const dateStr = typeof formatUtcToLocalDate === 'function'
+                            ? formatUtcToLocalDate(item.date)
+                            : item.date.split('T')[0];
                         dateCounts[dateStr] = (dateCounts[dateStr] || 0) + 1;
                     }
                 });
@@ -319,7 +323,9 @@
                 const itemsHtml = result.recent.map(item => {
                     const isYara = item.type === 'YARA' || item.file_type === 'YARA';
                     const icon = getIocTypeIcon(item.file_type || item.type, item.ioc || item.value, item.country_code);
-                    const date = item.date ? new Date(item.date).toLocaleDateString() : '';
+                    const date = item.date
+                        ? (typeof formatUtcToLocalDate === 'function' ? formatUtcToLocalDate(item.date) : new Date(item.date).toLocaleDateString())
+                        : '';
                     const comment = (item.comment && item.comment.trim()) ? escapeHtml(item.comment.trim()) : '';
                     const meta = [item.file_type || item.type, escapeHtml(item.user || item.analyst || ''), comment, date].filter(Boolean).join(' • ');
                     const displayValue = item.ioc || item.value || '';

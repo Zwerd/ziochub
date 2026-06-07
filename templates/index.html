@@ -288,6 +288,10 @@
                                         <th class="border border-white/10 px-4 py-2 text-left" data-i18n="search.col.actions">Actions</th>
                                     </tr>
                                 </thead>
+                                {# IOC rows are built in search.js; dates use formatUtcToLocal() (UTC → {{ display_timezone }}).
+                                   Server-rendered example:
+                                   {% from 'macros/datetime.html' import local_time_td %}
+                                   {{ local_time_td(ioc.created_at) }} #}
                                 <tbody id="resultsTableBody">
                                 </tbody>
                             </table>
@@ -2238,6 +2242,8 @@
         if (btn) btn.classList.add('active');
     })();
     </script>
+    <script>window.ZIOCHUB_DISPLAY_TZ = {{ display_timezone | tojson }};</script>
+    <script src="{{ url_for('static', filename='js/display-time.js') }}?v={{ version|urlencode }}"></script>
     <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
     <script src="{{ url_for('static', filename='js/api.js') }}"></script>
     {# Prefix for static assets (subpath / reverse-proxy safe). Plain GitHub Pages demo: falls back in JS to ./static/ #}

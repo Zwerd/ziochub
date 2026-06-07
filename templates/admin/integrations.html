@@ -157,7 +157,10 @@
         <p class="text-secondary text-sm mb-4">Uses the documented Cortex XDR <strong class="text-primary">Platform API</strong> (same host as <code class="px-0.5 rounded bg-white/10 text-xs">https://api-…paloaltonetworks.com</code>): IOC management via <code class="px-0.5 rounded bg-white/10 text-xs">indicators/insert_jsons</code> (push) and <code class="px-0.5 rounded bg-white/10 text-xs">indicators/delete</code> (revoke), and for <strong class="text-primary">Hash</strong> IOCs only, optional Action Center <strong class="text-primary">file block list</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>). When <strong class="text-primary">Enable</strong> is Yes, outbound IOC events call <code class="px-0.5 rounded bg-white/10 text-xs">cortex_xdr_push_ioc_from_context</code> in the background. Supported types on push: <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">Hash</strong> (URL/Email are skipped).</p>
 
         <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary open:border-cyan-500/50">
-            <summary class="cursor-pointer font-semibold text-cyan-300 select-none">How to create a Cortex XDR API key (Standard or Advanced)</summary>
+            <summary class="cursor-pointer font-semibold text-cyan-300 select-none list-none [&amp;::-webkit-details-marker]:hidden flex items-center gap-2">
+                <span class="text-cyan-400" aria-hidden="true">▸</span>
+                How to create a Cortex XDR API key (Standard or Advanced)
+            </summary>
             <ol class="mt-3 list-decimal list-inside space-y-2 text-primary/90">
                 <li>In the Cortex XDR console, open <strong class="text-primary">Settings → Configurations → Integrations → API Keys</strong> (see <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-REST-API/Cortex-XDR-API-Overview" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Cortex XDR API overview</a>).</li>
                 <li>Click <strong class="text-primary">+ New Key</strong>. Choose a <strong class="text-primary">Security Level</strong> - <em>Standard</em> (raw key in Authorization, no signing) or <em>Advanced</em> (HMAC-style signed header). Use the matching value in <strong class="text-primary">Security level</strong> below; a mismatch always returns HTTP 401.</li>
@@ -214,6 +217,15 @@
                     <option value="false" {% if settings.cortex_xdr_verify_ssl == 'false' %}selected{% endif %}>No</option>
                 </select>
             </div>
+            <div>
+                <label for="cortex_xdr_comment_mode" class="block text-sm font-semibold text-secondary mb-1">IOC comment in Cortex XDR</label>
+                <select id="cortex_xdr_comment_mode" class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="full" {% if settings.cortex_xdr_comment_mode != 'attribution' and settings.cortex_xdr_comment_mode != 'attribution_meta' %}selected{% endif %}>Full context (ticket, analyst, submission comment)</option>
+                    <option value="attribution" {% if settings.cortex_xdr_comment_mode == 'attribution' %}selected{% endif %}>Attribution only (display name or ZIoCHub IOC)</option>
+                    <option value="attribution_meta" {% if settings.cortex_xdr_comment_mode == 'attribution_meta' %}selected{% endif %}>Attribution + ticket/analyst (no submission comment)</option>
+                </select>
+                <p class="text-secondary text-xs mt-1">Sent with each IOC push and hash blocklist entry. After delete-and-re-insert (reactivation), <code class="px-0.5 rounded bg-white/10 text-xs">re-synced by ZIoCHub</code> is appended automatically.</p>
+            </div>
             <div class="flex items-start gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-3">
                 <input type="checkbox" id="cortex_xdr_hash_blocklist_enabled" class="mt-1 h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600 focus:ring-cyan-500"
                        {% if settings.cortex_xdr_hash_blocklist_enabled != 'false' %}checked{% endif %}>
@@ -242,7 +254,90 @@
 <div id="settings-tab-google-secops" class="settings-tab-pane hidden">
     <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
         <h3 class="text-lg font-semibold accent-blue mb-2">Google SecOps (Chronicle SIEM)</h3>
-        <p class="text-secondary text-sm mb-4">Outbound IOCs are written to a Google SecOps <strong class="text-primary">Data Table</strong> via Chronicle REST <code class="px-0.5 rounded bg-white/10 text-xs">v1beta</code> (<code class="px-0.5 rounded bg-white/10 text-xs">dataTableRows:bulkCreate</code> / list+delete on remove). Create a table with <strong class="text-primary">two string columns</strong> in order: indicator type slug, then value (e.g. <code class="px-0.5 rounded bg-white/10 text-xs">domain</code>, <code class="px-0.5 rounded bg-white/10 text-xs">zwerd.com</code>). Service account needs IAM such as <code class="px-0.5 rounded bg-white/10 text-xs">chronicle.dataTableRows.bulkCreate</code> and OAuth scopes <code class="px-0.5 rounded bg-white/10 text-xs">https://www.googleapis.com/auth/chronicle</code> plus <code class="px-0.5 rounded bg-white/10 text-xs">malachite-ingestion</code> (for the optional ingestion probe below).</p>
+        <p class="text-secondary text-sm mb-4">Pushes outbound IOCs into a Google SecOps <strong class="text-primary">Data Table</strong> via the documented Chronicle REST API (<code class="px-0.5 rounded bg-white/10 text-xs">v1beta</code>): <code class="px-0.5 rounded bg-white/10 text-xs">dataTableRows:bulkCreate</code> on submit/reactivation, and <code class="px-0.5 rounded bg-white/10 text-xs">dataTableRows.list</code> + <code class="px-0.5 rounded bg-white/10 text-xs">delete</code> when an analyst revokes or deletes an IOC in ZIoCHub. When <strong class="text-primary">Enable</strong> is Yes, lifecycle events call <code class="px-0.5 rounded bg-white/10 text-xs">google_secops_push_ioc_from_context</code> in the background (same hook as Cortex XDR). Supported types: <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">URL</strong>, <strong class="text-primary">Hash</strong>, <strong class="text-primary">Email</strong>, <strong class="text-primary">YARA</strong>.</p>
+
+        <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary open:border-cyan-500/50">
+            <summary class="cursor-pointer font-semibold text-cyan-300 select-none list-none [&amp;::-webkit-details-marker]:hidden flex items-center gap-2">
+                <span class="text-cyan-400" aria-hidden="true">▸</span>
+                How to set up Google SecOps for ZIoCHub (Data Table + service account)
+            </summary>
+            <p class="mt-3 text-primary/90">Complete these steps with your <strong class="text-primary">Google SecOps / GCP administrator</strong> before enabling outbound push. ZIoCHub only needs a pre-created Data Table, a service account JSON key, and the resource identifiers listed in the form below.</p>
+
+            <p class="mt-4 text-primary/90 font-semibold">Part A — Create the IOC Data Table in SecOps</p>
+            <ol class="mt-2 list-decimal list-inside space-y-2 text-primary/90">
+                <li>In the Google SecOps console, open the area where <strong class="text-primary">Data Tables</strong> are managed (reference / lookup tables for Search and detection). See Google’s <a href="https://cloud.google.com/chronicle/docs/reference/data-table-api" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Data Table documentation</a>.</li>
+                <li>Create a new table (suggested id/name: <code class="px-0.5 rounded bg-white/10 text-xs">ziochub_iocs</code> or similar). Note the <strong class="text-primary">Data table ID</strong> — the resource id used in API paths (<code class="px-0.5 rounded bg-white/10 text-xs">dataTables/{id}</code>), not only the display title.</li>
+                <li>Define <strong class="text-primary">exactly two string columns</strong>, in this order: <em>Column 1</em> = indicator type slug, <em>Column 2</em> = indicator value. Example row: <code class="px-0.5 rounded bg-white/10 text-xs">domain</code>, <code class="px-0.5 rounded bg-white/10 text-xs">evil.example.com</code>.</li>
+                <li>After the table exists, plan how analysts will use it in SecOps Search / YARA-L (join table values to UDM events). ZIoCHub only maintains the rows; hunt logic is configured in SecOps.</li>
+            </ol>
+
+            <p class="mt-4 text-primary/90 font-semibold">Part B — Collect SecOps and GCP identifiers</p>
+            <ol class="mt-2 list-decimal list-inside space-y-2 text-primary/90">
+                <li>In SecOps, open <strong class="text-primary">Settings → Profile</strong> (or equivalent) and copy the <strong class="text-primary">Customer ID</strong> (UUID) → paste into <strong class="text-primary">Customer ID</strong> below.</li>
+                <li>In GCP, open the project linked to your SecOps instance. Copy the <strong class="text-primary">Project number</strong> (numeric, not Project ID) → <strong class="text-primary">GCP project number</strong>.</li>
+                <li>Note the SecOps <strong class="text-primary">region</strong> (e.g. <code class="px-0.5 rounded bg-white/10 text-xs">me-west1</code>, <code class="px-0.5 rounded bg-white/10 text-xs">europe-west4</code>) → <strong class="text-primary">Location</strong>. ZIoCHub can derive the Chronicle REST host as <code class="px-0.5 rounded bg-white/10 text-xs">https://&lt;location&gt;-chronicle.googleapis.com</code>, or paste the full host from the <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest#rest_endpoints" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">REST endpoints</a> table into <strong class="text-primary">Chronicle REST API host</strong>.</li>
+                <li>If your tenant uses a separate <strong class="text-primary">Instance ID</strong> (UUID) distinct from Customer ID, paste it into <strong class="text-primary">Instance ID</strong>; otherwise leave empty and Customer ID is used in the API path.</li>
+                <li>Paste the Data Table resource id from Part A into <strong class="text-primary">Data table ID</strong>.</li>
+            </ol>
+
+            <p class="mt-4 text-primary/90 font-semibold">Part C — Create a GCP service account and grant access</p>
+            <ol class="mt-2 list-decimal list-inside space-y-2 text-primary/90">
+                <li>In GCP Console → <strong class="text-primary">IAM &amp; Admin → Service Accounts</strong>, create a dedicated account (e.g. <code class="px-0.5 rounded bg-white/10 text-xs">ziochub-secops-push@…</code>).</li>
+                <li>Keys → <strong class="text-primary">Add key → Create new key → JSON</strong>. Download once and store securely. Paste the full JSON into <strong class="text-primary">Service account JSON</strong> below (or deliver via your secrets process).</li>
+                <li>Grant IAM on the Chronicle instance / Data Table. Minimum permissions ZIoCHub uses:
+                    <ul class="mt-1 list-disc list-inside ps-4 space-y-1">
+                        <li><code class="px-0.5 rounded bg-white/10 text-xs">chronicle.dataTables.get</code> — Test connection + verify table exists</li>
+                        <li><code class="px-0.5 rounded bg-white/10 text-xs">chronicle.dataTableRows.bulkCreate</code> — push new IOC rows</li>
+                        <li><code class="px-0.5 rounded bg-white/10 text-xs">chronicle.dataTableRows.list</code> — find rows to remove</li>
+                        <li><code class="px-0.5 rounded bg-white/10 text-xs">chronicle.dataTableRows.delete</code> — remove rows on analyst delete / expiry</li>
+                    </ul>
+                    A custom role with these four permissions on the instance or table resource is sufficient.</li>
+                <li>No Domain-wide delegation is required. ZIoCHub requests OAuth scopes <code class="px-0.5 rounded bg-white/10 text-xs">https://www.googleapis.com/auth/chronicle</code> (production push) and <code class="px-0.5 rounded bg-white/10 text-xs">https://www.googleapis.com/auth/malachite-ingestion</code> (optional diagnostics only).</li>
+            </ol>
+
+            <p class="mt-4 text-primary/90 font-semibold">Part D — Configure and verify in ZIoCHub</p>
+            <ol class="mt-2 list-decimal list-inside space-y-2 text-primary/90">
+                <li>Paste all values into the form below. Leave <strong class="text-primary">Ingestion API host</strong> empty unless you want the optional ingestion probe during tests (not used for IOC push).</li>
+                <li>Set <strong class="text-primary">Enable Google SecOps outbound</strong> to <em>Yes</em> only after tests pass.</li>
+                <li>Click <strong class="text-primary">Save Google SecOps settings</strong>.</li>
+                <li>Click <strong class="text-primary">Check module</strong> (import OK) → <strong class="text-primary">Check config</strong> (fields + JSON valid) → <strong class="text-primary">Test connection</strong> (OAuth + GET Data Table).</li>
+                <li>Enable <strong class="text-primary">Include push/remove test row</strong> and run Test again to confirm <code class="px-0.5 rounded bg-white/10 text-xs">bulkCreate</code> and delete IAM (writes one temporary <code class="px-0.5 rounded bg-white/10 text-xs">*.invalid</code> row, then removes it).</li>
+                <li>Submit a test IOC in ZIoCHub and confirm a new row appears in the SecOps Data Table; delete the IOC and confirm the row is removed.</li>
+            </ol>
+
+            <p class="mt-3 text-xs text-secondary">Field mapping summary: <strong class="text-primary">Customer ID</strong> + <strong class="text-primary">Location</strong> + <strong class="text-primary">GCP project number</strong> + <strong class="text-primary">Data table ID</strong> build the API parent path <code class="px-0.5 rounded bg-white/10 text-xs">projects/{number}/locations/{loc}/instances/{id}/dataTables/{table}</code>. <strong class="text-primary">Service account JSON</strong> authenticates all REST calls.</p>
+            <p class="mt-2 text-xs text-amber-200/90">HTTP 403 on <em>data_table</em> or <em>roundtrip_create</em>: fix IAM on the table resource. HTTP 401 on OAuth: invalid or revoked JSON key. On the server: <code class="px-0.5 rounded bg-white/10 text-xs">python scripts/test_google_secops_setup.py --roundtrip</code>. After code deploy, restart <code class="px-0.5 rounded bg-white/10 text-xs">ziochub</code> and hard-refresh the browser (Ctrl+F5) if this panel looks outdated.</p>
+        </details>
+
+        <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary open:border-cyan-500/50">
+            <summary class="cursor-pointer font-semibold text-cyan-300 select-none list-none [&amp;::-webkit-details-marker]:hidden flex items-center gap-2">
+                <span class="text-cyan-400" aria-hidden="true">▸</span>
+                Why Data Tables, and how this integration works
+            </summary>
+
+            <p class="mt-3 text-primary/90"><strong class="text-primary">Why a Data Table (and not log ingestion)?</strong> ZIoCHub does <em>not</em> send IOCs through the Chronicle <strong class="text-primary">Ingestion API</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">malachite-ingestion</code>). Ingestion is for shipping raw log/event payloads into the platform. Our goal is different: make every ZIoCHub IOC a <strong class="text-primary">first-class reference dataset inside SecOps</strong> that analysts can use while hunting.</p>
+
+            <p class="mt-3 text-primary/90">In Google SecOps, a <strong class="text-primary">Data Table</strong> is a managed lookup table tied to your Chronicle instance. Once ZIoCHub writes a row (<code class="px-0.5 rounded bg-white/10 text-xs">type</code> + <code class="px-0.5 rounded bg-white/10 text-xs">value</code>), SecOps can <strong class="text-primary">join that table to UDM events</strong> in Search, dashboards, and detection logic. Practically: when TI publishes <code class="px-0.5 rounded bg-white/10 text-xs">evil.example.com</code>, analysts can pivot from the table to <strong class="text-primary">find matching traffic, DNS, proxy, or auth events</strong> in stored logs — without maintaining a separate IOC spreadsheet or manual list. Removing the row on revoke keeps hunts aligned with ZIoCHub (stale indicators drop out of correlation).</p>
+
+            <p class="mt-3 text-primary/90"><strong class="text-primary">End-to-end flow in ZIoCHub</strong></p>
+            <ol class="mt-2 list-decimal list-inside space-y-2 text-primary/90">
+                <li>Analyst submits, reactivates, or deletes an IOC in ZIoCHub (GUI or API).</li>
+                <li><code class="px-0.5 rounded bg-white/10 text-xs">schedule_auxiliary_vendor_integrations</code> queues a background job with the IOC context (<code class="px-0.5 rounded bg-white/10 text-xs">type</code>, <code class="px-0.5 rounded bg-white/10 text-xs">value</code>, <code class="px-0.5 rounded bg-white/10 text-xs">action=create|remove</code>).</li>
+                <li>ZIoCHub loads the GCP <strong class="text-primary">service account JSON</strong>, requests an OAuth token (scopes <code class="px-0.5 rounded bg-white/10 text-xs">https://www.googleapis.com/auth/chronicle</code> + optional <code class="px-0.5 rounded bg-white/10 text-xs">malachite-ingestion</code> for diagnostics only).</li>
+                <li><strong class="text-primary">Create:</strong> <code class="px-0.5 rounded bg-white/10 text-xs">POST …/v1beta/{parent}/dataTableRows:bulkCreate</code> with one row: <code class="px-0.5 rounded bg-white/10 text-xs">["domain", "evil.example.com"]</code> (column 1 = type slug, column 2 = value).</li>
+                <li><strong class="text-primary">Remove:</strong> <code class="px-0.5 rounded bg-white/10 text-xs">GET …/dataTableRows?filter=&lt;value&gt;</code>, match type+value, then <code class="px-0.5 rounded bg-white/10 text-xs">DELETE</code> each row resource (manual delete in Search UI and TTL expiry both trigger remove).</li>
+            </ol>
+
+            <p class="mt-3 text-primary/90"><strong class="text-primary">Table shape (required before enabling push)</strong></p>
+            <ul class="mt-2 list-disc list-inside space-y-1 text-primary/90">
+                <li>Create the Data Table in SecOps (UI or API) with <strong class="text-primary">two string columns</strong>, in order: (1) indicator type slug, (2) indicator value.</li>
+                <li>Type slugs ZIoCHub writes: <code class="px-0.5 rounded bg-white/10 text-xs">ip</code>, <code class="px-0.5 rounded bg-white/10 text-xs">domain</code>, <code class="px-0.5 rounded bg-white/10 text-xs">url</code>, <code class="px-0.5 rounded bg-white/10 text-xs">hash</code>, <code class="px-0.5 rounded bg-white/10 text-xs">email</code>, <code class="px-0.5 rounded bg-white/10 text-xs">yara</code>.</li>
+                <li>Enter the table’s <strong class="text-primary">resource id</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">dataTables/{id}</code>) in <strong class="text-primary">Data table ID</strong> below — not the human-readable title.</li>
+            </ul>
+
+            <p class="mt-3 text-xs text-secondary">API references: <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest/v1beta/projects.locations.instances.dataTables.dataTableRows/bulkCreate" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">bulkCreate rows</a> · <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest/v1beta/projects.locations.instances.dataTables.dataTableRows/list" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">list rows</a> · <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest#rest_endpoints" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">REST endpoints by region</a>.</p>
+        </details>
+
         <form id="googleSecopsForm" class="space-y-4">
             <div>
                 <label for="google_secops_enabled" class="block text-sm font-semibold text-secondary mb-1">Enable Google SecOps outbound</label>
@@ -257,9 +352,18 @@
                 <p class="text-secondary text-xs mt-1">Shown in <strong class="text-primary">Feed Pulse → Connections → Push state</strong>. Leave empty for default label.</p>
             </div>
             <div>
-                <label for="google_secops_chronicle_api_base" class="block text-sm font-semibold text-secondary mb-1">Chronicle REST API host (optional)</label>
-                <input type="text" id="google_secops_chronicle_api_base" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="https://me-west1-chronicle.googleapis.com" value="{{ settings.google_secops_chronicle_api_base }}" autocomplete="off">
-                <p class="text-secondary text-xs mt-1">From Google <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest#rest_endpoints" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">REST endpoints</a>. If empty, host defaults to <code class="px-0.5 rounded bg-white/10 text-xs">https://&lt;location&gt;-chronicle.googleapis.com</code> when Location is set.</p>
+                <span class="block text-sm font-semibold text-secondary mb-2">Connection mode</span>
+                <div class="flex flex-wrap gap-4 text-sm text-primary">
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="google_secops_connection_mode" id="google_secops_connection_mode_direct" value="direct" class="h-4 w-4" {% if (settings.google_secops_connection_mode or 'direct') != 'apigee' %}checked{% endif %}>
+                        Direct GCP service account
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer">
+                        <input type="radio" name="google_secops_connection_mode" id="google_secops_connection_mode_apigee" value="apigee" class="h-4 w-4" {% if settings.google_secops_connection_mode == 'apigee' %}checked{% endif %}>
+                        API Gateway / Apigee
+                    </label>
+                </div>
+                <p class="text-secondary text-xs mt-1">Direct mode uses a service account JSON key against the native Chronicle host. Apigee mode routes the same Data Table API paths through your internal gateway.</p>
             </div>
             <div>
                 <label for="google_secops_project_number" class="block text-sm font-semibold text-secondary mb-1">GCP project number</label>
@@ -283,14 +387,69 @@
                 <input type="text" id="google_secops_data_table_id" class="w-full max-w-xl px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="e.g. iocs_table" value="{{ settings.google_secops_data_table_id }}" autocomplete="off">
                 <p class="text-secondary text-xs mt-1">Resource id of the pre-created Data Table (the <code class="px-0.5 rounded bg-white/10 text-xs">dataTables/{id}</code> segment), not the display title.</p>
             </div>
-            <div>
-                <label for="google_secops_base_url" class="block text-sm font-semibold text-secondary mb-1">Ingestion API host (optional)</label>
-                <input type="text" id="google_secops_base_url" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="https://malachiteingestion-pa.googleapis.com" value="{{ settings.google_secops_base_url }}" autocomplete="off">
-                <p class="text-secondary text-xs mt-1">Used only for <strong class="text-primary">Test connection</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">GET /v2/logtypes</code>). Leave empty for default US ingestion host.</p>
+            <div id="gsModeDirect" class="space-y-4 rounded-lg border border-white/10 p-4">
+                <p class="text-sm font-semibold text-cyan-300">Direct GCP connection</p>
+                <div>
+                    <label for="google_secops_chronicle_api_base" class="block text-sm font-semibold text-secondary mb-1">Chronicle REST API host (optional)</label>
+                    <input type="text" id="google_secops_chronicle_api_base" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="https://me-west1-chronicle.googleapis.com" value="{{ settings.google_secops_chronicle_api_base }}" autocomplete="off">
+                    <p class="text-secondary text-xs mt-1">From Google <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest#rest_endpoints" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">REST endpoints</a>. If empty, host defaults to <code class="px-0.5 rounded bg-white/10 text-xs">https://&lt;location&gt;-chronicle.googleapis.com</code> when Location is set.</p>
+                </div>
+                <div>
+                    <label for="google_secops_base_url" class="block text-sm font-semibold text-secondary mb-1">Ingestion API host (optional)</label>
+                    <input type="text" id="google_secops_base_url" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="https://malachiteingestion-pa.googleapis.com" value="{{ settings.google_secops_base_url }}" autocomplete="off">
+                    <p class="text-secondary text-xs mt-1">Used only for <strong class="text-primary">Test connection</strong> in direct mode (<code class="px-0.5 rounded bg-white/10 text-xs">GET /v2/logtypes</code>). Leave empty for default US ingestion host.</p>
+                </div>
+                <div>
+                    <label for="google_secops_credentials_json" class="block text-sm font-semibold text-secondary mb-1">Service account JSON (paste)</label>
+                    <textarea id="google_secops_credentials_json" rows="6" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-xs focus:border-accent-green" placeholder="{}">{{ settings.google_secops_credentials_json }}</textarea>
+                </div>
             </div>
-            <div>
-                <label for="google_secops_credentials_json" class="block text-sm font-semibold text-secondary mb-1">Service account JSON (paste)</label>
-                <textarea id="google_secops_credentials_json" rows="6" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-xs focus:border-accent-green" placeholder="{}">{{ settings.google_secops_credentials_json }}</textarea>
+            <div id="gsModeApigee" class="space-y-4 rounded-lg border border-white/10 p-4 hidden">
+                <p class="text-sm font-semibold text-cyan-300">API Gateway / Apigee</p>
+                <div>
+                    <label for="google_secops_gateway_base_url" class="block text-sm font-semibold text-secondary mb-1">API Gateway base URL</label>
+                    <input type="text" id="google_secops_gateway_base_url" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="https://api.example.com/secops" value="{{ settings.google_secops_gateway_base_url }}" autocomplete="off">
+                    <p class="text-secondary text-xs mt-1">ZIoCHub appends <code class="px-0.5 rounded bg-white/10 text-xs">/v1beta/projects/…/dataTables/…</code> to this base. A trailing slash is stripped automatically (no <code class="px-0.5 rounded bg-white/10 text-xs">//v1beta</code>).</p>
+                    <p class="text-amber-200/90 text-xs mt-1"><strong class="text-primary">Do not</strong> include <code class="px-0.5 rounded bg-white/10 text-xs">/v1beta</code> or a full <code class="px-0.5 rounded bg-white/10 text-xs">projects/…</code> path here — only the Apigee proxy root (e.g. <code class="px-0.5 rounded bg-white/10 text-xs">https://my-apigee.internal/secops-proxy</code>, not <code class="px-0.5 rounded bg-white/10 text-xs">…/secops-proxy/v1beta</code>). Gateway route details: <code class="px-0.5 rounded bg-white/10 text-xs">docs/google_secops_apigee_routes.md</code>.</p>
+                </div>
+                <div>
+                    <label for="google_secops_gateway_auth_method" class="block text-sm font-semibold text-secondary mb-1">Authentication method</label>
+                    <select id="google_secops_gateway_auth_method" class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                        <option value="api_key" {% if (settings.google_secops_gateway_auth_method or 'api_key') != 'oauth2' %}selected{% endif %}>API Key</option>
+                        <option value="oauth2" {% if settings.google_secops_gateway_auth_method == 'oauth2' %}selected{% endif %}>OAuth2 Client Credentials</option>
+                    </select>
+                </div>
+                <div id="gsGatewayApiKey" class="space-y-3">
+                    <div>
+                        <label for="google_secops_gateway_api_key_header" class="block text-sm font-semibold text-secondary mb-1">API key header name</label>
+                        <input type="text" id="google_secops_gateway_api_key_header" class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green" value="{{ settings.google_secops_gateway_api_key_header or 'x-api-key' }}" autocomplete="off">
+                    </div>
+                    <div>
+                        <label for="google_secops_gateway_api_key" class="block text-sm font-semibold text-secondary mb-1">API key value</label>
+                        <input type="password" id="google_secops_gateway_api_key" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green" placeholder="Leave empty to keep saved secret" autocomplete="off">
+                    </div>
+                </div>
+                <div id="gsGatewayOAuth" class="space-y-3 hidden">
+                    <div>
+                        <label for="google_secops_gateway_oauth_client_id" class="block text-sm font-semibold text-secondary mb-1">Client ID</label>
+                        <input type="text" id="google_secops_gateway_oauth_client_id" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green" value="{{ settings.google_secops_gateway_oauth_client_id }}" autocomplete="off">
+                    </div>
+                    <div>
+                        <label for="google_secops_gateway_oauth_client_secret" class="block text-sm font-semibold text-secondary mb-1">Client secret</label>
+                        <input type="password" id="google_secops_gateway_oauth_client_secret" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green" placeholder="Leave empty to keep saved secret" autocomplete="off">
+                    </div>
+                    <div>
+                        <label for="google_secops_gateway_oauth_token_url" class="block text-sm font-semibold text-secondary mb-1">Token auth URL</label>
+                        <input type="text" id="google_secops_gateway_oauth_token_url" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green" placeholder="https://api.example.com/oauth/token" value="{{ settings.google_secops_gateway_oauth_token_url }}" autocomplete="off">
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-secondary mb-1">Custom headers (optional)</label>
+                    <input type="hidden" id="google_secops_gateway_custom_headers" value="{{ settings.google_secops_gateway_custom_headers or '[]' }}">
+                    <div id="gsCustomHeadersList" class="space-y-2"></div>
+                    <button type="button" id="gsCustomHeaderAdd" class="mt-2 px-3 py-1.5 rounded-lg text-sm bg-tertiary border border-white/10 hover:border-cyan-400 text-cyan-300">Add header</button>
+                    <p class="text-secondary text-xs mt-1">Applied to Data Table and token requests (e.g. routing headers).</p>
+                </div>
             </div>
             <div>
                 <label for="google_secops_verify_ssl" class="block text-sm font-semibold text-secondary mb-1">Verify TLS</label>
@@ -301,16 +460,34 @@
             </div>
             <div class="flex flex-wrap items-center gap-3">
                 <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Google SecOps settings</button>
+                <button type="button" id="googleSecopsPingBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-cyan-400 text-cyan-300 transition" title="Import check only (no GCP call)">Check module</button>
+                <button type="button" id="googleSecopsConfigBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-cyan-400 text-cyan-300 transition" title="Validate saved + form fields locally">Check config</button>
                 <button type="button" id="googleSecopsTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test connection</button>
+                <label class="flex items-center gap-2 text-sm text-secondary cursor-pointer">
+                    <input type="checkbox" id="googleSecopsTestRoundtrip" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
+                    Include push/remove test row
+                </label>
                 <label class="flex items-center gap-2 text-sm text-secondary cursor-pointer">
                     <input type="checkbox" id="googleSecopsTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
                     Ignore TLS for this test
                 </label>
             </div>
         </form>
+        <details class="admin-troubleshoot-panel text-xs text-secondary">
+            <summary class="text-primary">Troubleshooting checklist (GCP / SecOps)</summary>
+            <div class="admin-troubleshoot-panel__body text-primary/90">
+                <ul class="admin-troubleshoot-panel__list">
+                    <li><strong class="text-primary">Data Table</strong> in SecOps: 2 string columns — type slug (<code class="px-0.5 rounded bg-white/10">domain</code>, <code class="px-0.5 rounded bg-white/10">ip</code>, …) then value.</li>
+                    <li><strong class="text-primary">Service account JSON</strong> pasted above (or saved after Save).</li>
+                    <li><strong class="text-primary">OAuth scopes</strong> on token: <code class="px-0.5 rounded bg-white/10 break-all">https://www.googleapis.com/auth/chronicle</code> (push/delete) + <code class="px-0.5 rounded bg-white/10">malachite-ingestion</code> (optional probe).</li>
+                    <li><strong class="text-primary">IAM</strong> (minimum): <code class="px-0.5 rounded bg-white/10">chronicle.dataTables.get</code>, <code class="px-0.5 rounded bg-white/10">chronicle.dataTableRows.bulkCreate</code>, <code class="px-0.5 rounded bg-white/10">chronicle.dataTableRows.list</code>, <code class="px-0.5 rounded bg-white/10">chronicle.dataTableRows.delete</code>.</li>
+                    <li><strong class="text-primary">CLI on server</strong>: <code class="px-0.5 rounded bg-white/10">python scripts/test_google_secops_setup.py</code> · add <code class="px-0.5 rounded bg-white/10">--config-only</code> or <code class="px-0.5 rounded bg-white/10">--roundtrip</code>.</li>
+                </ul>
+            </div>
+        </details>
         <div id="googleSecopsMessage" class="mt-4 hidden text-sm"></div>
-        <p class="text-secondary text-xs mt-2">Test uses <strong class="text-primary">saved</strong> settings: validates OAuth, then <code class="px-0.5 rounded bg-white/10 text-xs">GET</code> the Data Table if configured, then ingestion <code class="px-0.5 rounded bg-white/10 text-xs">logtypes</code>.</p>
-        <div id="googleSecopsTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto max-h-48"></div>
+        <p class="text-secondary text-xs mt-2">Tests use <strong class="text-primary">saved settings merged with the form</strong> (unsaved secrets in password fields are included when filled; leave empty to use the last saved value). <strong class="text-primary">Test connection</strong>: auth for the selected mode + GET Data Table (+ ingestion probe in direct mode). <strong class="text-primary">Include push/remove</strong>: writes one <code class="px-0.5 rounded bg-white/10 text-xs">*.invalid</code> row then deletes it.</p>
+        <div id="googleSecopsTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto max-h-64 whitespace-pre-wrap"></div>
     </div>
 </div>
 
@@ -364,7 +541,8 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                 cortex_xdr_api_key_id: document.getElementById('cortex_xdr_api_key_id').value.trim(),
                 cortex_xdr_verify_ssl: document.getElementById('cortex_xdr_verify_ssl').value,
                 cortex_xdr_hash_blocklist_enabled: document.getElementById('cortex_xdr_hash_blocklist_enabled').checked ? 'true' : 'false',
-                cortex_xdr_security_level: (document.getElementById('cortex_xdr_security_level') || {}).value || 'advanced'
+                cortex_xdr_security_level: (document.getElementById('cortex_xdr_security_level') || {}).value || 'advanced',
+                cortex_xdr_comment_mode: (document.getElementById('cortex_xdr_comment_mode') || {}).value || 'full'
             };
             if (keyEl && keyEl.value && keyEl.value.length > 0) payload.cortex_xdr_api_key = keyEl.value;
             try {
@@ -511,24 +689,180 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
         });
     }
     var gs = document.getElementById('googleSecopsForm');
+    function googleSecopsConnectionMode() {
+        var apigee = document.getElementById('google_secops_connection_mode_apigee');
+        return (apigee && apigee.checked) ? 'apigee' : 'direct';
+    }
+    function syncGoogleSecopsModePanels() {
+        var mode = googleSecopsConnectionMode();
+        var directEl = document.getElementById('gsModeDirect');
+        var apigeeEl = document.getElementById('gsModeApigee');
+        if (directEl) directEl.classList.toggle('hidden', mode !== 'direct');
+        if (apigeeEl) apigeeEl.classList.toggle('hidden', mode !== 'apigee');
+        syncGoogleSecopsGatewayAuthPanels();
+    }
+    function syncGoogleSecopsGatewayAuthPanels() {
+        var authEl = document.getElementById('google_secops_gateway_auth_method');
+        var apiKeyEl = document.getElementById('gsGatewayApiKey');
+        var oauthEl = document.getElementById('gsGatewayOAuth');
+        var method = authEl ? authEl.value : 'api_key';
+        if (apiKeyEl) apiKeyEl.classList.toggle('hidden', method === 'oauth2');
+        if (oauthEl) oauthEl.classList.toggle('hidden', method !== 'oauth2');
+    }
+    function gsCustomHeadersFromDom() {
+        var rows = document.querySelectorAll('#gsCustomHeadersList .gs-custom-header-row');
+        var out = [];
+        rows.forEach(function(row) {
+            var k = (row.querySelector('.gs-custom-header-key') || {}).value || '';
+            var v = (row.querySelector('.gs-custom-header-value') || {}).value || '';
+            k = k.trim();
+            if (!k) return;
+            out.push({ key: k, value: v });
+        });
+        return out;
+    }
+    function gsRenderCustomHeaders() {
+        var hidden = document.getElementById('google_secops_gateway_custom_headers');
+        var list = document.getElementById('gsCustomHeadersList');
+        if (!hidden || !list) return;
+        var items = [];
+        try { items = JSON.parse(hidden.value || '[]'); } catch (e) { items = []; }
+        if (!Array.isArray(items)) items = [];
+        list.innerHTML = '';
+        items.forEach(function(item, idx) {
+            var row = document.createElement('div');
+            row.className = 'gs-custom-header-row flex flex-wrap gap-2 items-end';
+            row.innerHTML =
+                '<div class="flex-1 min-w-[8rem]"><label class="block text-xs text-secondary mb-0.5">Header</label>' +
+                '<input type="text" class="gs-custom-header-key w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm font-mono" value="' +
+                String(item.key || '').replace(/"/g, '&quot;') + '"></div>' +
+                '<div class="flex-1 min-w-[8rem]"><label class="block text-xs text-secondary mb-0.5">Value</label>' +
+                '<input type="text" class="gs-custom-header-value w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm font-mono" value="' +
+                String(item.value || '').replace(/"/g, '&quot;') + '"></div>' +
+                '<button type="button" class="gs-custom-header-remove px-2 py-1.5 rounded text-xs text-red-300 border border-white/10 hover:border-red-400">Remove</button>';
+            row.querySelector('.gs-custom-header-remove').addEventListener('click', function() {
+                row.remove();
+                hidden.value = JSON.stringify(gsCustomHeadersFromDom());
+            });
+            ['keyup', 'change'].forEach(function(ev) {
+                row.querySelector('.gs-custom-header-key').addEventListener(ev, function() {
+                    hidden.value = JSON.stringify(gsCustomHeadersFromDom());
+                });
+                row.querySelector('.gs-custom-header-value').addEventListener(ev, function() {
+                    hidden.value = JSON.stringify(gsCustomHeadersFromDom());
+                });
+            });
+            list.appendChild(row);
+        });
+    }
+    function googleSecopsSettingsFromForm() {
+        var hiddenHeaders = document.getElementById('google_secops_gateway_custom_headers');
+        if (hiddenHeaders) hiddenHeaders.value = JSON.stringify(gsCustomHeadersFromDom());
+        var payload = {
+            google_secops_connection_mode: googleSecopsConnectionMode(),
+            google_secops_project_number: (document.getElementById('google_secops_project_number') || {}).value || '',
+            google_secops_location: (document.getElementById('google_secops_location') || {}).value || '',
+            google_secops_instance_id: (document.getElementById('google_secops_instance_id') || {}).value || '',
+            google_secops_customer_id: (document.getElementById('google_secops_customer_id') || {}).value || '',
+            google_secops_data_table_id: (document.getElementById('google_secops_data_table_id') || {}).value || '',
+            google_secops_verify_ssl: (document.getElementById('google_secops_verify_ssl') || {}).value || 'true',
+            google_secops_chronicle_api_base: (document.getElementById('google_secops_chronicle_api_base') || {}).value || '',
+            google_secops_base_url: (document.getElementById('google_secops_base_url') || {}).value || '',
+            google_secops_credentials_json: (document.getElementById('google_secops_credentials_json') || {}).value || '',
+            google_secops_gateway_base_url: (document.getElementById('google_secops_gateway_base_url') || {}).value || '',
+            google_secops_gateway_auth_method: (document.getElementById('google_secops_gateway_auth_method') || {}).value || 'api_key',
+            google_secops_gateway_api_key_header: (document.getElementById('google_secops_gateway_api_key_header') || {}).value || 'x-api-key',
+            google_secops_gateway_api_key: (document.getElementById('google_secops_gateway_api_key') || {}).value || '',
+            google_secops_gateway_oauth_client_id: (document.getElementById('google_secops_gateway_oauth_client_id') || {}).value || '',
+            google_secops_gateway_oauth_client_secret: (document.getElementById('google_secops_gateway_oauth_client_secret') || {}).value || '',
+            google_secops_gateway_oauth_token_url: (document.getElementById('google_secops_gateway_oauth_token_url') || {}).value || '',
+            google_secops_gateway_custom_headers: hiddenHeaders ? hiddenHeaders.value : '[]'
+        };
+        return payload;
+    }
+    if (gs) {
+        document.querySelectorAll('input[name="google_secops_connection_mode"]').forEach(function(el) {
+            el.addEventListener('change', syncGoogleSecopsModePanels);
+        });
+        var gsAuthMethod = document.getElementById('google_secops_gateway_auth_method');
+        if (gsAuthMethod) gsAuthMethod.addEventListener('change', syncGoogleSecopsGatewayAuthPanels);
+        var gsHeaderAdd = document.getElementById('gsCustomHeaderAdd');
+        if (gsHeaderAdd) {
+            gsHeaderAdd.addEventListener('click', function() {
+                var hidden = document.getElementById('google_secops_gateway_custom_headers');
+                var items = gsCustomHeadersFromDom();
+                items.push({ key: '', value: '' });
+                if (hidden) hidden.value = JSON.stringify(items);
+                gsRenderCustomHeaders();
+            });
+        }
+        gsRenderCustomHeaders();
+        syncGoogleSecopsModePanels();
+    }
+    function renderGoogleSecopsSteps(logEl, data, res) {
+        var lines = [];
+        if (data.hint) lines.push('Hint: ' + data.hint);
+        if (!res.ok) lines.push('API error: ' + (data.message || ('HTTP ' + res.status)));
+        if (data.steps && data.steps.length) {
+            data.steps.forEach(function(s) {
+                var icon = s.status === 'ok' ? '✓' : (s.status === 'warn' ? '⚠' : (s.status === 'skipped' ? '○' : '✗'));
+                lines.push(icon + ' ' + (s.step || '') + '  -  ' + (s.message || ''));
+            });
+        } else if (res.ok) {
+            lines.push(JSON.stringify(data, null, 2));
+        }
+        logEl.textContent = lines.join('\n') || 'No output.';
+        logEl.classList.remove('text-green-300', 'text-red-300', 'text-yellow-200');
+        if (data.success) logEl.classList.add('text-green-300');
+        else logEl.classList.add('text-red-300');
+    }
+    async function runGoogleSecopsTest(opts) {
+        var logEl = document.getElementById('googleSecopsTestLog');
+        var ign = document.getElementById('googleSecopsTestIgnoreSsl');
+        var rt = document.getElementById('googleSecopsTestRoundtrip');
+        if (!logEl) return;
+        logEl.classList.remove('hidden');
+        logEl.textContent = 'Running…';
+        var body = { settings: googleSecopsSettingsFromForm() };
+        if (opts && opts.config_only) body.config_only = true;
+        if (opts && opts.roundtrip) body.roundtrip = true;
+        else if (rt && rt.checked) body.roundtrip = true;
+        if (ign && ign.checked) body.ignore_ssl = true;
+        try {
+            var res = await fetch('/api/admin/google-secops/test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify(body)
+            });
+            var data = await res.json().catch(function() { return {}; });
+            renderGoogleSecopsSteps(logEl, data, res);
+        } catch (err) {
+            logEl.textContent = 'Network error: ' + (err.message || err);
+            logEl.classList.add('text-red-300');
+        }
+    }
     if (gs) {
         gs.addEventListener('submit', async function(e) {
             e.preventDefault();
             var msgEl = document.getElementById('googleSecopsMessage');
             msgEl.classList.add('hidden');
-            var payload = {
-                google_secops_enabled: document.getElementById('google_secops_enabled').value,
-                google_secops_display_name: document.getElementById('google_secops_display_name').value.trim(),
-                google_secops_chronicle_api_base: document.getElementById('google_secops_chronicle_api_base').value.trim(),
-                google_secops_project_number: document.getElementById('google_secops_project_number').value.trim(),
-                google_secops_location: document.getElementById('google_secops_location').value.trim(),
-                google_secops_instance_id: document.getElementById('google_secops_instance_id').value.trim(),
-                google_secops_customer_id: document.getElementById('google_secops_customer_id').value.trim(),
-                google_secops_data_table_id: document.getElementById('google_secops_data_table_id').value.trim(),
-                google_secops_base_url: document.getElementById('google_secops_base_url').value.trim(),
-                google_secops_credentials_json: document.getElementById('google_secops_credentials_json').value,
-                google_secops_verify_ssl: document.getElementById('google_secops_verify_ssl').value
-            };
+            var payload = googleSecopsSettingsFromForm();
+            payload.google_secops_enabled = document.getElementById('google_secops_enabled').value;
+            payload.google_secops_display_name = document.getElementById('google_secops_display_name').value.trim();
+            payload.google_secops_chronicle_api_base = (document.getElementById('google_secops_chronicle_api_base') || {}).value.trim();
+            payload.google_secops_project_number = document.getElementById('google_secops_project_number').value.trim();
+            payload.google_secops_location = document.getElementById('google_secops_location').value.trim();
+            payload.google_secops_instance_id = document.getElementById('google_secops_instance_id').value.trim();
+            payload.google_secops_customer_id = document.getElementById('google_secops_customer_id').value.trim();
+            payload.google_secops_data_table_id = document.getElementById('google_secops_data_table_id').value.trim();
+            payload.google_secops_base_url = (document.getElementById('google_secops_base_url') || {}).value.trim();
+            payload.google_secops_credentials_json = (document.getElementById('google_secops_credentials_json') || {}).value;
+            payload.google_secops_gateway_base_url = (document.getElementById('google_secops_gateway_base_url') || {}).value.trim();
+            var apiKeyEl = document.getElementById('google_secops_gateway_api_key');
+            var oauthSecretEl = document.getElementById('google_secops_gateway_oauth_client_secret');
+            if (apiKeyEl && apiKeyEl.value) payload.google_secops_gateway_api_key = apiKeyEl.value;
+            if (oauthSecretEl && oauthSecretEl.value) payload.google_secops_gateway_oauth_client_secret = oauthSecretEl.value;
             try {
                 var res = await fetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
                 var data = await res.json();
@@ -549,42 +883,39 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             }
         });
     }
-    var gsTestBtn = document.getElementById('googleSecopsTestBtn');
-    if (gsTestBtn) {
-        gsTestBtn.addEventListener('click', async function() {
+    var gsPingBtn = document.getElementById('googleSecopsPingBtn');
+    if (gsPingBtn) {
+        gsPingBtn.addEventListener('click', async function() {
             var logEl = document.getElementById('googleSecopsTestLog');
-            var ign = document.getElementById('googleSecopsTestIgnoreSsl');
+            if (!logEl) return;
             logEl.classList.remove('hidden');
-            logEl.textContent = 'Testing…';
-            this.disabled = true;
+            logEl.textContent = 'GET /api/admin/google-secops/ping …';
             try {
-                var body = {};
-                if (ign && ign.checked) body.ignore_ssl = true;
-                var res = await fetch('/api/admin/google-secops/test', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'same-origin',
-                    body: JSON.stringify(body)
-                });
+                var res = await fetch('/api/admin/google-secops/ping', { credentials: 'same-origin', headers: { 'Accept': 'application/json' } });
                 var data = await res.json().catch(function() { return {}; });
-                var lines = [];
-                if (!res.ok) {
-                    lines.push('API error: ' + (data.message || ('HTTP ' + res.status)));
-                } else if (data.steps && data.steps.length) {
-                    data.steps.forEach(function(s) {
-                        lines.push((s.status === 'ok' ? '✓ ' : '✗ ') + (s.step || '') + '  -  ' + (s.message || ''));
-                    });
-                } else {
-                    lines.push(JSON.stringify(data, null, 2));
-                }
-                logEl.textContent = lines.join('\n');
+                var lines = ['HTTP ' + res.status, data.message || '', data.module ? ('module: ' + data.module) : '', data.hint || ''];
+                if (data.scopes && data.scopes.length) lines.push('scopes: ' + data.scopes.join(', '));
+                logEl.textContent = lines.filter(Boolean).join('\n');
                 logEl.classList.toggle('text-green-300', !!data.success);
                 logEl.classList.toggle('text-red-300', !data.success);
-            } catch (err) {
-                logEl.textContent = 'Network error: ' + (err.message || err);
+            } catch (e) {
+                logEl.textContent = 'Ping failed: ' + (e.message || e);
                 logEl.classList.add('text-red-300');
             }
-            this.disabled = false;
+        });
+    }
+    var gsConfigBtn = document.getElementById('googleSecopsConfigBtn');
+    if (gsConfigBtn) {
+        gsConfigBtn.addEventListener('click', function() {
+            gsConfigBtn.disabled = true;
+            runGoogleSecopsTest({ config_only: true }).finally(function() { gsConfigBtn.disabled = false; });
+        });
+    }
+    var gsTestBtn = document.getElementById('googleSecopsTestBtn');
+    if (gsTestBtn) {
+        gsTestBtn.addEventListener('click', function() {
+            gsTestBtn.disabled = true;
+            runGoogleSecopsTest({}).finally(function() { gsTestBtn.disabled = false; });
         });
     }
 })();

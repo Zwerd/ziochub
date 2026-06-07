@@ -205,7 +205,7 @@ function _renderAdminInboxModal(data) {
             ${yara.length ? `<ul class="space-y-2 text-sm">` + yara.map(r => `
                 <li class="border border-white/10 rounded-lg p-3">
                     <div class="font-mono text-amber-200 break-all">${esc(r.display_name != null && r.display_name !== '' ? r.display_name : r.filename)}</div>
-                    <div class="text-secondary mt-1">By <span class="text-primary">${esc(r.analyst || '—')}</span> • ${esc((r.uploaded_at||'').slice(0,19).replace('T',' '))}</div>
+                    <div class="text-secondary mt-1">By <span class="text-primary">${esc(r.analyst || '—')}</span> • ${esc(typeof formatUtcToLocal === 'function' ? formatUtcToLocal(r.uploaded_at) : (r.uploaded_at||'').slice(0,19).replace('T',' '))}</div>
                     ${r.ticket_id ? `<div class="text-secondary">Ticket: <span class="text-primary font-mono">${esc(r.ticket_id)}</span></div>` : ``}
                     ${r.comment ? `<div class="text-secondary mt-1">${esc(r.comment)}</div>` : ``}
                 </li>
@@ -221,7 +221,7 @@ function _renderAdminInboxModal(data) {
             ${tags.length ? `<ul class="space-y-2 text-sm">` + tags.map(r => `
                 <li class="border border-white/10 rounded-lg p-3">
                     <div class="font-mono text-cyan-200">${esc(r.tag)}</div>
-                    <div class="text-secondary mt-1">By <span class="text-primary">${esc(r.suggested_by || '—')}</span> • ${esc((r.suggested_at||'').slice(0,19).replace('T',' '))}</div>
+                    <div class="text-secondary mt-1">By <span class="text-primary">${esc(r.suggested_by || '—')}</span> • ${esc(typeof formatUtcToLocal === 'function' ? formatUtcToLocal(r.suggested_at) : (r.suggested_at||'').slice(0,19).replace('T',' '))}</div>
                 </li>
             `).join('') + `</ul>` : `<div class="text-secondary text-sm">No pending tag suggestions.</div>`}
         </div>`;

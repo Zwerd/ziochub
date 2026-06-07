@@ -72,13 +72,29 @@
         });
     });
     var params = new URLSearchParams(window.location.search);
-    var tab = params.get('tab') || 'overview';
-    var legacy = { 'misp': 'import', 'taxii': 'import', 'feeds': 'export', 'ioc-push': 'push-ioc', 'yara-push': 'push-yara', 'opendxl': 'push-ioc', 'trellix-ex-nx': 'push-yara', 'cisco-esa': 'push-ioc', 'cortex-xdr': 'push-ioc', 'google-secops': 'push-ioc' };
-    if (legacy[tab]) tab = legacy[tab];
+    var rawTab = params.get('tab') || 'overview';
+    var sub = params.get('sub');
+    var tab = rawTab;
+    var pushIocSubTabs = ['cortex-xdr', 'google-secops', 'cisco-esa', 'ioc-push', 'misp-push', 'opendxl'];
+    var pushYaraSubTabs = ['trellix-ex-nx', 'yara-push'];
+    var importSubTabs = ['misp', 'taxii'];
+    if (pushIocSubTabs.indexOf(rawTab) >= 0) {
+        tab = 'push-ioc';
+        if (!sub) sub = rawTab;
+    } else if (pushYaraSubTabs.indexOf(rawTab) >= 0) {
+        tab = 'push-yara';
+        if (!sub) sub = rawTab;
+    } else if (importSubTabs.indexOf(rawTab) >= 0) {
+        tab = 'import';
+        if (!sub) sub = rawTab;
+    } else {
+        var legacy = { 'feeds': 'export', 'ioc-push': 'push-ioc', 'yara-push': 'push-yara', 'opendxl': 'push-ioc', 'trellix-ex-nx': 'push-yara' };
+        if (legacy[rawTab]) tab = legacy[rawTab];
+    }
     var topBtn = document.querySelector('.integ-top-tab-btn[data-integ-tab="' + tab + '"]');
     if (topBtn) topBtn.click();
     else showTopTab('overview');
-    var sub = params.get('sub');
     if (sub && tab === 'push-ioc') activatePushIocSub(sub);
     if (sub && tab === 'push-yara') activatePushYaraSub(sub);
+    if (sub && tab === 'import') activateImportSub(sub);
 })();

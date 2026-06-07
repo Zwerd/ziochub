@@ -120,6 +120,10 @@ if _config and getattr(_config, 'SESSION_COOKIE_SECURE', None) is not None:
 app.config['SESSION_COOKIE_SECURE'] = _session_secure
 db.init_app(app)
 
+from utils.jinja_datetime import register_jinja_datetime_filters
+
+register_jinja_datetime_filters(app)
+
 # --- Blueprints ---
 from routes.feeds import bp as feeds_bp
 from routes.taxii_server import bp as taxii2_bp
@@ -176,7 +180,9 @@ def load_user(user_id):
 @app.context_processor
 def _inject_auth_context():
     """Inject profile, display_name, avatar_url, version into all templates (for base_app, admin, etc.)."""
-    ctx = {'version': VERSION}
+    from utils.jinja_datetime import get_gui_display_timezone
+
+    ctx = {'version': VERSION, 'display_timezone': get_gui_display_timezone()}
     if not current_user.is_authenticated:
         ctx.update({'profile': None, 'display_name': None, 'avatar_url': None})
     else:

@@ -2299,6 +2299,64 @@ div:has(.tab-button)::after {
     color: #ffffff;
 }
 
+/* Admin Integrations — collapsible troubleshooting checklist (bottom of vendor panels) */
+.admin-troubleshoot-panel {
+    margin-top: 1rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+}
+
+.admin-troubleshoot-panel > summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 0.75rem 1rem;
+    list-style: none;
+}
+
+.admin-troubleshoot-panel > summary::-webkit-details-marker {
+    display: none;
+}
+
+.admin-troubleshoot-panel > summary:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.admin-troubleshoot-panel__body {
+    padding: 0.625rem 1rem 1rem 2rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.admin-troubleshoot-panel__list {
+    list-style-type: disc;
+    list-style-position: outside;
+    margin: 0;
+    padding-left: 1.125rem;
+}
+
+.admin-troubleshoot-panel__list > li {
+    margin-bottom: 0.625rem;
+    line-height: 1.55;
+}
+
+.admin-troubleshoot-panel__list > li:last-child {
+    margin-bottom: 0;
+}
+
+[data-theme="light"] .admin-troubleshoot-panel {
+    background: rgba(0, 0, 0, 0.04);
+    border-color: rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="light"] .admin-troubleshoot-panel__body {
+    border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="light"] .admin-troubleshoot-panel > summary:hover {
+    background: rgba(0, 0, 0, 0.04);
+}
+
 /* Custom Scrollbar - Modern Thin Style */
 ::-webkit-scrollbar {
     width: 8px;

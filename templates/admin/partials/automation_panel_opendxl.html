@@ -115,15 +115,17 @@
         </div>
         <div id="dxlTestSpinner" class="mt-2 hidden text-amber-400 text-sm">Testing DXL / TIE…</div>
 
-        <details class="mt-4 rounded-lg border border-white/10 bg-black/20 p-4 text-sm text-secondary">
-            <summary class="cursor-pointer font-semibold text-primary select-none">Troubleshooting Test connection</summary>
-            <ul class="mt-3 list-disc ml-5 space-y-2 text-xs text-primary/90">
-                <li><strong class="text-primary">DXL libraries fail</strong> — install <code class="px-0.5 rounded bg-white/10 text-xs">dxlclient</code> / <code class="px-0.5 rounded bg-white/10 text-xs">dxltieclient</code> in the same Python venv as Gunicorn, then restart ZIoCHub.</li>
-                <li><strong class="text-primary">Config file not found</strong> — path must be on the Linux host; use upload or copy files to <code class="px-0.5 rounded bg-white/10 text-xs">data/dxl/</code> and point to the absolute path.</li>
-                <li><strong class="text-primary">Connect to broker fail</strong> — check broker host/port in <code class="px-0.5 rounded bg-white/10 text-xs">[Brokers]</code>, firewall (TCP 8883), and that broker / client certificates match the ePO CA bundle.</li>
-                <li><strong class="text-primary">TIE set reputation fail</strong> (broker OK) — the DXL client is not authorized for TIE reputation writes in ePO; assign the correct OpenDXL permission group to this client’s certificate CN.</li>
-                <li><strong class="text-primary">Hash not appearing in TIE</strong> — confirm OpenDXL enabled is Yes after a successful test; only <strong class="text-primary">Hash</strong> type IOCs are pushed; check server logs and Feed Pulse → Connections for last DXL push telemetry.</li>
-            </ul>
+        <details class="admin-troubleshoot-panel text-sm text-secondary">
+            <summary class="text-primary">Troubleshooting Test connection</summary>
+            <div class="admin-troubleshoot-panel__body text-xs text-primary/90">
+                <ul class="admin-troubleshoot-panel__list">
+                    <li><strong class="text-primary">DXL libraries fail</strong> — install <code class="px-0.5 rounded bg-white/10 text-xs">dxlclient</code> / <code class="px-0.5 rounded bg-white/10 text-xs">dxltieclient</code> in the same Python venv as Gunicorn, then restart ZIoCHub.</li>
+                    <li><strong class="text-primary">Config file not found</strong> — path must be on the Linux host; use upload or copy files to <code class="px-0.5 rounded bg-white/10 text-xs">data/dxl/</code> and point to the absolute path.</li>
+                    <li><strong class="text-primary">Connect to broker fail</strong> — check broker host/port in <code class="px-0.5 rounded bg-white/10 text-xs">[Brokers]</code>, firewall (TCP 8883), and that broker / client certificates match the ePO CA bundle.</li>
+                    <li><strong class="text-primary">TIE set reputation fail</strong> (broker OK) — the DXL client is not authorized for TIE reputation writes in ePO; assign the correct OpenDXL permission group to this client’s certificate CN.</li>
+                    <li><strong class="text-primary">Hash not appearing in TIE</strong> — confirm OpenDXL enabled is Yes after a successful test; only <strong class="text-primary">Hash</strong> type IOCs are pushed; check server logs and Feed Pulse → Connections for last DXL push telemetry.</li>
+                </ul>
+            </div>
         </details>
     </div>
 </div>

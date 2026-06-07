@@ -82,6 +82,12 @@ _SECURITY_LEVEL_ADVANCED = 'advanced'
 _SECURITY_LEVEL_STANDARD = 'standard'
 _DEFAULT_SECURITY_LEVEL = _SECURITY_LEVEL_ADVANCED
 
+_COMMENT_MODE_FULL = 'full'
+_COMMENT_MODE_ATTRIBUTION = 'attribution'
+_COMMENT_MODE_ATTRIBUTION_META = 'attribution_meta'
+_DEFAULT_COMMENT_MODE = _COMMENT_MODE_FULL
+_RESYNC_COMMENT_SUFFIX = 're-synced by ZIoCHub'
+
 
 def _normalize_security_level(raw: Optional[str]) -> str:
     s = (raw or '').strip().lower()
@@ -118,6 +124,7 @@ def cortex_xdr_settings_dict() -> dict[str, str]:
         'cortex_xdr_verify_ssl',
         'cortex_xdr_hash_blocklist_enabled',
         'cortex_xdr_security_level',
+        'cortex_xdr_comment_mode',
     )
     return {k: _get_setting(k, '') for k in keys}
 
@@ -302,22 +309,64 @@ def _expiration_ms(expiration_iso: str) -> int:
         return -1
 
 
-def _tim_comment_from_context(ioc: dict[str, Any]) -> str:
-    parts: list[str] = []
+def normalize_cortex_xdr_comment_mode(raw: Optional[str]) -> str:
+    """Return a valid Cortex XDR IOC comment mode (admin save + form)."""
+    s = (raw or '').strip().lower()
+    if s in (_COMMENT_MODE_ATTRIBUTION, _COMMENT_MODE_ATTRIBUTION_META):
+        return s
+    return _COMMENT_MODE_FULL
+
+
+def _normalize_comment_mode(raw: Optional[str]) -> str:
+    return normalize_cortex_xdr_comment_mode(raw)
+
+
+def _attribution_label(settings: Optional[dict[str, str]] = None) -> str:
+    g = settings or cortex_xdr_settings_dict()
+    dn = (g.get('cortex_xdr_display_name') or '').strip()
+    return dn if dn else 'ZIoCHub IOC'
+
+
+def _append_resync_suffix(comment: str) -> str:
+    base = (comment or '').strip() or 'ZIoCHub IOC'
+    if _RESYNC_COMMENT_SUFFIX in base:
+        return base[:4000]
+    return f'{base} | {_RESYNC_COMMENT_SUFFIX}'[:4000]
+
+
+def _tim_comment_from_context(ioc: dict[str, Any], *, resynced: bool = False) -> str:
+    g = cortex_xdr_settings_dict()
+    mode = _normalize_comment_mode(g.get('cortex_xdr_comment_mode'))
+    label = _attribution_label(g)
     tid = (ioc.get('ticket_id') or '').strip()
-    if tid:
-        parts.append(f'ticket={tid}')
     an = (ioc.get('analyst') or '').strip()
-    if an:
-        parts.append(f'analyst={an}')
     cm = (ioc.get('comment') or '').strip()
-    if cm:
-        parts.append(cm)
-    out = ' | '.join(parts) if parts else 'ZIoCHub IOC'
+
+    if mode == _COMMENT_MODE_ATTRIBUTION:
+        out = label
+    elif mode == _COMMENT_MODE_ATTRIBUTION_META:
+        meta: list[str] = [label]
+        if tid:
+            meta.append(f'ticket={tid}')
+        if an:
+            meta.append(f'analyst={an}')
+        out = ' | '.join(meta)
+    else:
+        parts: list[str] = []
+        if tid:
+            parts.append(f'ticket={tid}')
+        if an:
+            parts.append(f'analyst={an}')
+        if cm:
+            parts.append(cm)
+        out = ' | '.join(parts) if parts else label
+
+    if resynced:
+        out = _append_resync_suffix(out)
     return out[:4000]
 
 
-def _ioc_to_tim_record(ioc: dict[str, Any]) -> Optional[dict[str, Any]]:
+def _ioc_to_tim_record(ioc: dict[str, Any], *, resynced: bool = False) -> Optional[dict[str, Any]]:
     zt = (ioc.get('type') or '').strip()
     x_type = _IOC_TYPE_MAP.get(zt)
     if not x_type:
@@ -330,7 +379,7 @@ def _ioc_to_tim_record(ioc: dict[str, Any]) -> Optional[dict[str, Any]]:
         'type': x_type,
         'severity': _normalize_severity(_get_setting('cortex_xdr_default_severity', '') or None),
         'reputation': _normalize_reputation(_get_setting('cortex_xdr_default_reputation', '') or None),
-        'comment': _tim_comment_from_context(ioc),
+        'comment': _tim_comment_from_context(ioc, resynced=resynced),
     }
     exp_ms = _expiration_ms(str(ioc.get('expiration_date') or ''))
     rec['expiration_date'] = exp_ms
@@ -495,8 +544,10 @@ def _push_insert_jsons(
     _delete_indicator_by_value(
         root, key_id, api_key, verify_ssl, value, security_level=security_level,
     )
+    rec_resync = dict(rec)
+    rec_resync['comment'] = _append_resync_suffix(str(rec.get('comment') or ''))
     ok2, msg2, _, _ = _attempt_insert_jsons(
-        root, key_id, api_key, verify_ssl, rec, security_level=security_level,
+        root, key_id, api_key, verify_ssl, rec_resync, security_level=security_level,
     )
     if ok2:
         return True, f'reinsert_ok ({msg2})'

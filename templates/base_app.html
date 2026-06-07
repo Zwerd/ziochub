@@ -178,6 +178,8 @@
         };
     })();
     </script>
+    <script>window.ZIOCHUB_DISPLAY_TZ = {{ display_timezone | tojson }};</script>
+    <script src="{{ url_for('static', filename='js/display-time.js') }}?v={{ version|urlencode }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

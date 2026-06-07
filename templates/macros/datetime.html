@@ -1,0 +1,8 @@
+{# Display UTC datetimes from the DB in Asia/Jerusalem (see utils/jinja_datetime.py). #}
+{% macro local_time(dt, fmt='%Y-%m-%d %H:%M:%S') -%}
+{{ dt | to_local_time(fmt) if dt else '—' }}
+{%- endmacro %}
+
+{% macro local_time_td(dt, fmt='%Y-%m-%d %H:%M:%S', extra_class='') -%}
+<td class="border border-white/10 px-4 py-2 text-sm {{ extra_class }}">{{ dt | to_local_time(fmt) if dt else '—' }}</td>
+{%- endmacro %}

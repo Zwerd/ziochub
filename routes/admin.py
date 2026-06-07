@@ -404,6 +404,7 @@ _SETTINGS_DEFAULTS = {
     # Session / security
     # Minutes of inactivity before auto-logoff. "0" means never.
     'session_inactivity_timeout_minutes': '15',
+    'gui_display_timezone': 'Asia/Jerusalem',
     'auth_mode': 'local_only',
     'ldap_enabled': 'false',
     'ldap_url': '',
@@ -510,9 +511,19 @@ _SETTINGS_DEFAULTS = {
     'cortex_xdr_hash_blocklist_enabled': 'true',
     'cortex_xdr_display_name': '',
     'cortex_xdr_security_level': 'advanced',
+    'cortex_xdr_comment_mode': 'full',
     'google_secops_enabled': 'false',
+    'google_secops_connection_mode': 'direct',
     'google_secops_base_url': '',
     'google_secops_chronicle_api_base': '',
+    'google_secops_gateway_base_url': '',
+    'google_secops_gateway_auth_method': 'api_key',
+    'google_secops_gateway_api_key_header': 'x-api-key',
+    'google_secops_gateway_api_key': '',
+    'google_secops_gateway_oauth_client_id': '',
+    'google_secops_gateway_oauth_client_secret': '',
+    'google_secops_gateway_oauth_token_url': '',
+    'google_secops_gateway_custom_headers': '[]',
     'google_secops_project_number': '',
     'google_secops_location': '',
     'google_secops_instance_id': '',
@@ -950,7 +961,7 @@ def save_settings():
         trellix_cms_keys = ('trellix_cms_enabled',)
         sanity_keys = ('sanity_check_mode',)
         feed_keys = ('feeds_public_enabled', 'feed_cache_enabled', 'feed_cache_ttl_seconds')
-        search_keys = ('search_comment_rtl_by_script',)
+        search_keys = ('search_comment_rtl_by_script', 'gui_display_timezone')
         tags_keys = ('allowed_tags', 'tags_restricted_enabled', 'tags_allow_suggest')
         ioc_push_keys = ('ioc_push_enabled', 'ioc_push_ignore_ssl', 'ioc_push_targets')
         esa_keys = (
@@ -967,10 +978,20 @@ def save_settings():
             'cortex_xdr_verify_ssl',
             'cortex_xdr_hash_blocklist_enabled',
             'cortex_xdr_security_level',
+            'cortex_xdr_comment_mode',
             'google_secops_enabled',
             'google_secops_display_name',
+            'google_secops_connection_mode',
             'google_secops_base_url',
             'google_secops_chronicle_api_base',
+            'google_secops_gateway_base_url',
+            'google_secops_gateway_auth_method',
+            'google_secops_gateway_api_key_header',
+            'google_secops_gateway_api_key',
+            'google_secops_gateway_oauth_client_id',
+            'google_secops_gateway_oauth_client_secret',
+            'google_secops_gateway_oauth_token_url',
+            'google_secops_gateway_custom_headers',
             'google_secops_project_number',
             'google_secops_location',
             'google_secops_instance_id',
@@ -1004,6 +1025,15 @@ def save_settings():
                 if key == 'cortex_xdr_api_key':
                     if isinstance(val, str) and val.strip():
                         _set_setting('cortex_xdr_api_key', val.strip())
+                        if 'Vendor IOC' not in sections:
+                            sections.append('Vendor IOC')
+                    continue
+                if key in (
+                    'google_secops_gateway_api_key',
+                    'google_secops_gateway_oauth_client_secret',
+                ):
+                    if isinstance(val, str) and val.strip():
+                        _set_setting(key, val.strip())
                         if 'Vendor IOC' not in sections:
                             sections.append('Vendor IOC')
                     continue
@@ -1068,8 +1098,23 @@ def save_settings():
                     elif key == 'cortex_xdr_security_level':
                         lvl = str(val or '').strip().lower()
                         _set_setting(key, 'standard' if lvl == 'standard' else 'advanced')
+                    elif key == 'cortex_xdr_comment_mode':
+                        from utils.cortex_xdr import normalize_cortex_xdr_comment_mode
+                        _set_setting(key, normalize_cortex_xdr_comment_mode(str(val or '')))
                     elif key == 'google_secops_credentials_json':
                         _set_setting(key, str(val) if val is not None else '')
+                    elif key == 'google_secops_connection_mode':
+                        from utils.google_secops import normalize_google_secops_connection_mode
+                        _set_setting(key, normalize_google_secops_connection_mode(val))
+                    elif key == 'google_secops_gateway_auth_method':
+                        from utils.google_secops import normalize_google_secops_gateway_auth_method
+                        _set_setting(key, normalize_google_secops_gateway_auth_method(val))
+                    elif key == 'google_secops_gateway_custom_headers':
+                        from utils.google_secops import normalize_google_secops_gateway_custom_headers
+                        try:
+                            _set_setting(key, normalize_google_secops_gateway_custom_headers(val))
+                        except ValueError as vgs:
+                            return jsonify({'success': False, 'message': str(vgs)}), 400
                     elif key == 'cortex_xdr_base_url':
                         from utils.cortex_xdr import sanitize_cortex_base_url
                         _set_setting(key, sanitize_cortex_base_url(str(val)))
@@ -1098,6 +1143,9 @@ def save_settings():
                     else:
                         allowed = []
                     _set_setting(key, json.dumps(allowed, ensure_ascii=False))
+                elif key == 'gui_display_timezone':
+                    from utils.jinja_datetime import normalize_gui_display_timezone
+                    _set_setting(key, normalize_gui_display_timezone(val))
                 elif key in ('tags_restricted_enabled', 'tags_allow_suggest'):
                     _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
                 elif key == 'misp_pull_interval':
@@ -1390,28 +1438,159 @@ def cortex_xdr_test():
         return _cortex_xdr_test_json_error(e)
 
 
+@bp.route('/google-secops/ping', methods=['GET'])
+@admin_required
+def google_secops_ping():
+    """Lightweight JSON check: admin auth + utils.google_secops import (no GCP HTTP call)."""
+    try:
+        from utils import google_secops as gs
+        return jsonify({
+            'success': True,
+            'module': getattr(gs, '__file__', '?'),
+            'message': 'google_secops module loaded',
+            'scopes': list(getattr(gs, '_SCOPES', ())),
+        }), 200
+    except Exception as e:
+        logging.exception('google_secops_ping failed')
+        return jsonify({
+            'success': False,
+            'message': str(e),
+            'error_type': type(e).__name__,
+            'hint': (
+                'Install google-auth and requests in the app venv. '
+                'Run: sudo -u ziochub /opt/ziochub/venv/bin/python /opt/ziochub/scripts/test_google_secops_setup.py'
+            ),
+        }), 200
+
+
+_GOOGLE_SECOPS_TEST_SETTING_KEYS = (
+    'google_secops_connection_mode',
+    'google_secops_base_url',
+    'google_secops_chronicle_api_base',
+    'google_secops_gateway_base_url',
+    'google_secops_gateway_auth_method',
+    'google_secops_gateway_api_key_header',
+    'google_secops_gateway_api_key',
+    'google_secops_gateway_oauth_client_id',
+    'google_secops_gateway_oauth_client_secret',
+    'google_secops_gateway_oauth_token_url',
+    'google_secops_gateway_custom_headers',
+    'google_secops_project_number',
+    'google_secops_location',
+    'google_secops_instance_id',
+    'google_secops_customer_id',
+    'google_secops_data_table_id',
+    'google_secops_credentials_json',
+    'google_secops_verify_ssl',
+)
+
+_GOOGLE_SECOPS_TEST_SECRET_KEYS = frozenset({
+    'google_secops_credentials_json',
+    'google_secops_gateway_api_key',
+    'google_secops_gateway_oauth_client_secret',
+})
+
+
+def _merge_google_secops_test_settings(saved: dict, override) -> dict:
+    """Merge optional form overrides into saved DB settings (empty credentials keeps saved JSON)."""
+    merged = dict(saved)
+    if not isinstance(override, dict):
+        return merged
+    for key in _GOOGLE_SECOPS_TEST_SETTING_KEYS:
+        if key not in override:
+            continue
+        val = override[key]
+        if val is None:
+            continue
+        s = str(val).strip() if key not in _GOOGLE_SECOPS_TEST_SECRET_KEYS else str(val)
+        if key in _GOOGLE_SECOPS_TEST_SECRET_KEYS and not s.strip():
+            continue
+        merged[key] = s
+    return merged
+
+
+def _google_secops_settings_from_db(_get_setting) -> dict:
+    keys = (
+        'google_secops_enabled',
+        'google_secops_connection_mode',
+        'google_secops_base_url',
+        'google_secops_chronicle_api_base',
+        'google_secops_gateway_base_url',
+        'google_secops_gateway_auth_method',
+        'google_secops_gateway_api_key_header',
+        'google_secops_gateway_api_key',
+        'google_secops_gateway_oauth_client_id',
+        'google_secops_gateway_oauth_client_secret',
+        'google_secops_gateway_oauth_token_url',
+        'google_secops_gateway_custom_headers',
+        'google_secops_project_number',
+        'google_secops_location',
+        'google_secops_instance_id',
+        'google_secops_customer_id',
+        'google_secops_data_table_id',
+        'google_secops_credentials_json',
+        'google_secops_verify_ssl',
+    )
+    return {k: _get_setting(k, '') for k in keys}
+
+
+def _google_secops_test_json_error(exc: Exception):
+    logging.exception('api_admin_google_secops_test failed')
+    err_msg = str(exc).strip() or type(exc).__name__
+    return jsonify({
+        'success': False,
+        'message': err_msg,
+        'error_type': type(exc).__name__,
+        'hint': (
+            'Run on server: sudo -u ziochub /opt/ziochub/venv/bin/python '
+            '/opt/ziochub/scripts/test_google_secops_setup.py --config-only'
+        ),
+        'steps': [{'step': 'server', 'status': 'fail', 'message': f'{type(exc).__name__}: {err_msg}'}],
+    }), 200
+
+
 @bp.route('/google-secops/test', methods=['POST'])
 @admin_required
 def google_secops_test():
-    """OAuth token + optional GET to saved Google SecOps base URL."""
-    audit_log, _api_error = _from_app('audit_log', '_api_error')
+    """OAuth + Data Table probe; optional bulkCreate/delete round-trip (troubleshooting)."""
     try:
-        from utils.google_secops import google_secops_settings_dict, google_secops_test_connection
+        _get_setting, = _from_app('_get_setting')
+        from utils.google_secops import google_secops_test_connection
 
         data = request.get_json(silent=True) or {}
         ignore_ssl = data.get('ignore_ssl')
-        settings = google_secops_settings_dict()
+        roundtrip = data.get('roundtrip') in (True, 'true', '1', 1, 'yes')
+        config_only = data.get('config_only') in (True, 'true', '1', 1, 'yes')
+        settings = _merge_google_secops_test_settings(
+            _google_secops_settings_from_db(_get_setting),
+            data.get('settings'),
+        )
         if ignore_ssl is not None:
             verify_ssl = not (str(ignore_ssl).lower() in ('true', '1', 'yes'))
         else:
             verify_ssl = (settings.get('google_secops_verify_ssl', 'true') or 'true').lower() in ('true', '1', 'yes')
 
-        result = google_secops_test_connection(settings, verify_ssl=verify_ssl)
-        audit_log('admin_google_secops_test', f'by={current_user.username} ok={result.get("success")}')
-        return jsonify({'success': True, **result})
+        result = google_secops_test_connection(
+            settings,
+            verify_ssl=verify_ssl,
+            roundtrip=roundtrip,
+            config_only=config_only,
+        )
+        if not isinstance(result, dict):
+            raise TypeError(f'google_secops_test_connection returned {type(result).__name__}, expected dict')
+
+        try:
+            audit_log, = _from_app('audit_log')
+            audit_log(
+                'admin_google_secops_test',
+                f'by={current_user.username} ok={result.get("success")} roundtrip={roundtrip} config_only={config_only}',
+            )
+        except Exception:
+            logging.exception('audit_log admin_google_secops_test failed (test result still returned)')
+
+        return jsonify({'success': bool(result.get('success')), **result}), 200
     except Exception as e:
-        logging.exception('api_admin_google_secops_test failed')
-        return _api_error(str(e), 500)
+        return _google_secops_test_json_error(e)
 
 
 @bp.route('/trellix-ex/test', methods=['POST'])
@@ -2237,8 +2416,11 @@ def _build_admin_settings_form_context():
     except ValueError:
         _ttl_raw = FEED_CACHE_TTL_DEFAULT
     _feed_ttl = str(normalize_feed_cache_ttl_seconds(_ttl_raw))
+    from utils.jinja_datetime import GUI_DISPLAY_TIMEZONE_CHOICES, get_gui_display_timezone
     return {
         'session_inactivity_timeout_minutes': _get_setting('session_inactivity_timeout_minutes', '15'),
+        'gui_display_timezone': get_gui_display_timezone(),
+        'gui_display_timezone_choices': GUI_DISPLAY_TIMEZONE_CHOICES,
         'auth_mode': _get_setting('auth_mode', 'local_only'),
         'feeds_public_enabled': _get_setting('feeds_public_enabled', 'true'),
         'feed_cache_enabled': _get_setting('feed_cache_enabled', 'true'),
@@ -2301,10 +2483,20 @@ def _build_admin_settings_form_context():
         'cortex_xdr_verify_ssl': _get_setting('cortex_xdr_verify_ssl', 'true'),
         'cortex_xdr_hash_blocklist_enabled': _get_setting('cortex_xdr_hash_blocklist_enabled', 'true'),
         'cortex_xdr_security_level': _get_setting('cortex_xdr_security_level', 'advanced'),
+        'cortex_xdr_comment_mode': _get_setting('cortex_xdr_comment_mode', 'full'),
         'google_secops_enabled': _get_setting('google_secops_enabled', 'false'),
         'google_secops_display_name': _get_setting('google_secops_display_name', ''),
+        'google_secops_connection_mode': _get_setting('google_secops_connection_mode', 'direct'),
         'google_secops_base_url': _get_setting('google_secops_base_url', ''),
         'google_secops_chronicle_api_base': _get_setting('google_secops_chronicle_api_base', ''),
+        'google_secops_gateway_base_url': _get_setting('google_secops_gateway_base_url', ''),
+        'google_secops_gateway_auth_method': _get_setting('google_secops_gateway_auth_method', 'api_key'),
+        'google_secops_gateway_api_key_header': _get_setting('google_secops_gateway_api_key_header', 'x-api-key'),
+        'google_secops_gateway_api_key': _get_setting('google_secops_gateway_api_key', ''),
+        'google_secops_gateway_oauth_client_id': _get_setting('google_secops_gateway_oauth_client_id', ''),
+        'google_secops_gateway_oauth_client_secret': _get_setting('google_secops_gateway_oauth_client_secret', ''),
+        'google_secops_gateway_oauth_token_url': _get_setting('google_secops_gateway_oauth_token_url', ''),
+        'google_secops_gateway_custom_headers': _get_setting('google_secops_gateway_custom_headers', '[]'),
         'google_secops_project_number': _get_setting('google_secops_project_number', ''),
         'google_secops_location': _get_setting('google_secops_location', ''),
         'google_secops_instance_id': _get_setting('google_secops_instance_id', ''),

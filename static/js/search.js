@@ -505,7 +505,7 @@
         row.innerHTML = `
             <td class="${typeCellClass}">${icon} ${result.file_type}${hintsHtml}</td>
             <td class="border border-white/10 px-4 py-2 font-mono" title="${iocAttr}"><span class="inline-flex items-center gap-1">${iocDisplay} <button type="button" class="copy-ioc-btn btn-cmd-neutral btn-cmd-sm ml-1 flex-shrink-0" data-ioc="${iocAttr}" title="${escapeAttr(copyLabel)}" aria-label="${escapeAttr(copyLabel)}">${escapeHtml(copyLabel)}</button></span></td>
-            <td class="border border-white/10 px-4 py-2 text-sm">${result.date || 'N/A'}</td>
+            <td class="border border-white/10 px-4 py-2 text-sm">${(typeof formatUtcToLocal === 'function' ? formatUtcToLocal(result.date) : (result.date || '')) || 'N/A'}</td>
             <td class="border border-white/10 px-4 py-2 text-sm" title="${escapeAttr(result.user || '')}">${userDisplay}</td>
             <td class="border border-white/10 px-4 py-2 text-sm font-mono" title="${escapeAttr(result.ref || '')}">${ticketDisplay || '<span class="text-secondary">-</span>'}</td>
             <td class="border border-white/10 px-4 py-2 text-sm${noteMatched ? ' search-row-comment-note-match' : ''}" title="${escapeAttr(result.comment || '')}" dir="${commentDir}">${commentDisplay}</td>
@@ -874,7 +874,9 @@
     let _noteIocValue = '';
 
     function _renderNoteHtml(note) {
-        const dateStr = note.created_at ? new Date(note.created_at).toLocaleString() : '';
+        const dateStr = note.created_at && typeof formatUtcToLocal === 'function'
+            ? formatUtcToLocal(note.created_at)
+            : (note.created_at ? new Date(note.created_at).toLocaleString() : '');
         const by = note.username ? escapeHtml(note.username) : '-';
         return '<div class="border border-amber-400/20 rounded px-3 py-2 bg-amber-950/20">'
             + '<div class="flex justify-between items-center mb-1">'
@@ -979,7 +981,9 @@
                 unexcluded: (typeof t === 'function' && t('history.unexcluded')) ? t('history.unexcluded') : 'Un-excluded'
             };
             iocHistoryList.innerHTML = events.map(ev => {
-                const atStr = ev.at ? new Date(ev.at).toLocaleString() : '';
+                const atStr = ev.at && typeof formatUtcToLocal === 'function'
+                    ? formatUtcToLocal(ev.at)
+                    : (ev.at ? new Date(ev.at).toLocaleString() : '');
                 const by = ev.username ? escapeHtml(ev.username) : '-';
                 let byLine = ((typeof t === 'function' && t('history.by')) ? t('history.by') : 'by') + ' ' + by;
                 if (ev.event_type === 'created' && ev.payload && ev.payload.entered_by != null && ev.payload.assigned_to != null) {

@@ -515,7 +515,17 @@ def _vendor_attempt_for_kind(_get, vendor_id: str, kind_u: str) -> dict:
 
 
 def _google_secops_push_display_address(_get) -> tuple[str, str]:
-    """Return (display_url_or_label, hostname) for Chronicle API."""
+    """Return (display_url_or_label, hostname) for Chronicle API or API Gateway."""
+    from utils.google_secops import CONNECTION_MODE_APIGEE, google_secops_connection_mode
+
+    mode = google_secops_connection_mode({
+        'google_secops_connection_mode': _get('google_secops_connection_mode') or 'direct',
+    })
+    if mode == CONNECTION_MODE_APIGEE:
+        raw_base = (_get('google_secops_gateway_base_url') or '').strip().rstrip('/')
+        if raw_base:
+            return raw_base, _host_from_url(raw_base)
+        return '', ''
     raw_base = (_get('google_secops_chronicle_api_base') or '').strip().rstrip('/')
     loc = (_get('google_secops_location') or '').strip()
     if raw_base:
@@ -528,13 +538,39 @@ def _google_secops_push_display_address(_get) -> tuple[str, str]:
 
 
 def _google_secops_is_configured(_get) -> bool:
+    from utils.google_secops import (
+        CONNECTION_MODE_APIGEE,
+        GATEWAY_AUTH_API_KEY,
+        GATEWAY_AUTH_OAUTH2,
+        google_secops_connection_mode,
+        google_secops_gateway_auth_method,
+    )
+
     proj = (_get('google_secops_project_number') or '').strip()
     loc = (_get('google_secops_location') or '').strip()
     inst = (_get('google_secops_instance_id') or '').strip() or (_get('google_secops_customer_id') or '').strip()
     tid = (_get('google_secops_data_table_id') or '').strip()
+    if not (proj and loc and inst and tid):
+        return False
+
+    g = {'google_secops_connection_mode': _get('google_secops_connection_mode') or 'direct'}
+    if google_secops_connection_mode(g) == CONNECTION_MODE_APIGEE:
+        if not (_get('google_secops_gateway_base_url') or '').strip():
+            return False
+        auth = google_secops_gateway_auth_method({
+            'google_secops_gateway_auth_method': _get('google_secops_gateway_auth_method') or GATEWAY_AUTH_API_KEY,
+        })
+        if auth == GATEWAY_AUTH_OAUTH2:
+            return bool(
+                (_get('google_secops_gateway_oauth_token_url') or '').strip()
+                and (_get('google_secops_gateway_oauth_client_id') or '').strip()
+                and (_get('google_secops_gateway_oauth_client_secret') or '').strip()
+            )
+        return bool((_get('google_secops_gateway_api_key') or '').strip())
+
     creds = (_get('google_secops_credentials_json') or '').strip()
     base_ok = bool((_get('google_secops_chronicle_api_base') or '').strip() or loc)
-    return bool(proj and loc and inst and tid and creds and base_ok)
+    return bool(creds and base_ok)
 
 
 def _build_integration_push_state_entries(_get):

@@ -121,7 +121,9 @@ async function loadUsers() {
         const tr = document.createElement('tr');
         const sourceClass = u.source === 'system' ? 'bg-orange-500/20 text-orange-300' : u.source === 'ldap' ? 'bg-purple-500/20 text-purple-300' : 'bg-green-500/20 text-green-400';
         const statusClass = u.is_active ? 'bg-green-500/20 text-green-400' : 'bg-slate-500/30 text-slate-400';
-        const lastLogin = u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'N/A';
+        const lastLogin = u.last_login_at && typeof formatUtcToLocal === 'function'
+            ? formatUtcToLocal(u.last_login_at)
+            : (u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'N/A');
         const avatarHtml = u.avatar_url ? `<img src="${escapeHtml(u.avatar_url)}" alt="" class="w-10 h-10 rounded-full object-cover border border-white/10">` : '<span class="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center text-lg text-secondary">👤</span>';
         tr.innerHTML = `
             <td class="border border-white/10 px-4 py-2">${avatarHtml}</td>

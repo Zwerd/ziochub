@@ -265,7 +265,7 @@
         };
         const by = (ev.username || '').trim();
         const byLine = (typeof t === 'function' && t('history.by') ? t('history.by') : 'by') + ' ' + (by || '—');
-        const atStr = (ev.at || '').replace('T', ' ').slice(0, 19);
+        const atStr = (typeof formatUtcToLocal === 'function' ? formatUtcToLocal(ev.at) : (ev.at || '').replace('T', ' ').slice(0, 19));
         let extra = '';
         const pl = ev.payload || {};
         if (ev.event_type === 'edited' && pl.changes && pl.changes.length) {
@@ -291,7 +291,9 @@
             return;
         }
         notesEl.innerHTML = notes.map(function(n) {
-            const when = (n.created_at || '').replace('T', ' ').slice(0, 19);
+            const when = typeof formatUtcToLocal === 'function'
+                ? formatUtcToLocal(n.created_at)
+                : (n.created_at || '').replace('T', ' ').slice(0, 19);
             const raw = n.content != null ? String(n.content) : '';
             const dir = typeof detectTextDir === 'function' ? detectTextDir(raw) : 'auto';
             const dirAttr = dir === 'rtl' ? 'rtl' : 'ltr';
@@ -379,7 +381,7 @@
                     [(typeof t === 'function' && t('search.col.user')) ? t('search.col.user') : 'Analyst', ioc.analyst || '—'],
                     [(typeof t === 'function' && t('search.col.ticket')) ? t('search.col.ticket') : 'Ticket', ioc.ticket_id || '—'],
                     [(typeof t === 'function' && t('edit.expiration')) ? t('edit.expiration') : 'Expiration', ioc.expiration || ((typeof t === 'function' && t('ttl.permanent')) ? t('ttl.permanent') : 'Permanent')],
-                    [(typeof t === 'function' && t('search.col.date')) ? t('search.col.date') : 'Created', (ioc.created_at || '').replace('T', ' ').slice(0, 19) || '—'],
+                    [(typeof t === 'function' && t('search.col.date')) ? t('search.col.date') : 'Created', (typeof formatUtcToLocal === 'function' ? formatUtcToLocal(ioc.created_at) : (ioc.created_at || '').replace('T', ' ').slice(0, 19)) || '—'],
                 ];
                 if (ioc.inactive_status || ioc.revoked) {
                     const inactiveKey = (ioc.inactive_status === 'Expired') ? 'search.col.expired' : 'search.col.deleted';

@@ -16,10 +16,20 @@
 <!-- Tab: Search (display options) -->
 <div id="settings-tab-search" class="settings-tab-pane">
     <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
-        <h3 class="text-lg font-semibold accent-blue mb-4">Search display</h3>
-        <p class="text-secondary text-sm mb-6">In Search &amp; Investigate results, the Comment column can be shown RTL when the text is mostly Hebrew or Arabic (e.g. comments from MISP sync). When disabled, comments always use the default direction (LTR).</p>
+        <h3 class="text-lg font-semibold accent-blue mb-4">Search &amp; GUI display</h3>
+        <p class="text-secondary text-sm mb-6">Presentation options for the main app (Search, IOC lists, Live Stats, YARA tables, etc.). IOC timestamps are stored in UTC in the database; only the display layer is converted.</p>
 
         <form id="searchForm" class="space-y-4">
+            <div class="p-4 rounded-lg border border-white/10 bg-black/20">
+                <h4 class="text-sm font-semibold text-primary mb-2">Date &amp; time display</h4>
+                <p class="text-secondary text-xs mb-3">IANA timezone used when showing IOC and activity timestamps in the GUI. APIs and exports remain UTC.</p>
+                <label for="gui_display_timezone" class="block text-sm font-semibold text-secondary mb-1">Display timezone</label>
+                <select id="gui_display_timezone" name="gui_display_timezone" class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm">
+                    {% for tz_id, tz_label in settings.gui_display_timezone_choices %}
+                    <option value="{{ tz_id }}" {% if settings.gui_display_timezone == tz_id %}selected{% endif %}>{{ tz_label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             <div>
                 <label class="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" id="search_comment_rtl_by_script" name="search_comment_rtl_by_script" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" {% if settings.search_comment_rtl_by_script != 'false' %}checked{% endif %}>
@@ -27,7 +37,7 @@
                 </label>
                 <p class="text-secondary text-xs mt-2">When enabled, comments with more Hebrew or Arabic letters than Latin are displayed right-to-left.</p>
             </div>
-            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Search Settings</button>
+            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save display settings</button>
         </form>
         <div id="searchMessage" class="mt-4 hidden text-sm"></div>
     </div>
@@ -581,6 +591,7 @@ document.getElementById('searchForm').addEventListener('submit', async function(
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
+                gui_display_timezone: document.getElementById('gui_display_timezone').value,
                 search_comment_rtl_by_script: document.getElementById('search_comment_rtl_by_script').checked ? 'true' : 'false'
             })
         });
@@ -589,7 +600,7 @@ document.getElementById('searchForm').addEventListener('submit', async function(
         if (data.success) {
             msgEl.classList.add('text-green-400');
             msgEl.classList.remove('text-red-400');
-            msgEl.textContent = 'Settings saved. Reload the main app page for the change to apply.';
+            msgEl.textContent = 'Settings saved. Reload the main app page (hard refresh) so timestamp display uses the new timezone.';
         } else {
             msgEl.classList.add('text-red-400');
             msgEl.classList.remove('text-green-400');

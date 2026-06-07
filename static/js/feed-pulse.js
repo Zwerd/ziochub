@@ -448,6 +448,7 @@
     }
     function fmtConnTs(iso) {
         if (!iso) return (typeof t === 'function' && t('feedpulse.connections_never')) ? t('feedpulse.connections_never') : 'Never';
+        if (typeof formatUtcToLocal === 'function') return formatUtcToLocal(iso);
         try {
             const d = new Date(iso);
             if (isNaN(d.getTime())) return iso;

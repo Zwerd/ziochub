@@ -242,7 +242,7 @@
                         <td class="border border-white/10 px-4 py-2 text-sm font-mono"${storeTitle}>${escapeHtml(displayName)}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm text-secondary truncate max-w-xs" title="${escapeHtml((f.comment || '').trim()).replace(/"/g, '&quot;')}" dir="${typeof detectTextDir==='function'?detectTextDir(f.comment||''):'auto'}">${escapeHtml(f.comment || '-')}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm">${f.size_kb} KB</td>
-                        <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.upload_date || '')}</td>
+                        <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(typeof formatUtcToLocal === 'function' ? formatUtcToLocal(f.upload_date) : (f.upload_date || ''))}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.user || '-')}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.ticket_id || '-')}</td>
                         <td class="border border-white/10 px-3 py-2">
@@ -759,7 +759,7 @@
                     return `<tr class="border border-white/10">
                         <td class="border border-white/10 px-4 py-2 text-sm font-mono"${storeTitlePend}><span class="inline-flex items-center gap-1 flex-wrap">${pendingBadge}${escapeHtml(displayPend)}</span></td>
                         <td class="border border-white/10 px-4 py-2 text-sm text-secondary truncate max-w-xs" title="${escapeAttr((f.comment || '').trim())}" dir="${typeof detectTextDir==='function'?detectTextDir(f.comment||''):'auto'}">${escapeHtml(f.comment || '-')}</td>
-                        <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.upload_date || '-')}</td>
+                        <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(typeof formatUtcToLocal === 'function' ? formatUtcToLocal(f.upload_date) : (f.upload_date || '-'))}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm">${analystCell}</td>
                         <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.ticket_id || '-')}</td>
                         <td class="border border-white/10 px-3 py-2"><div class="flex items-center gap-1.5">${actionsHtml}</div></td>

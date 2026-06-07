@@ -406,7 +406,7 @@ async function addSingleToStaging() {
         const tagsEsc = escapeHtml(tagsDisplay);
         const ticketEsc = escapeHtml(item.ticket_id || '');
         const analystEsc = escapeHtml(item.analyst || '');
-        const dateEsc = escapeHtml(item.date || '');
+        const dateEsc = escapeHtml((typeof formatUtcToLocal === 'function' ? formatUtcToLocal(item.date) : (item.date || '')) || '');
         const commentEsc = escapeHtml(item.comment || '');
         const expirationEsc = escapeHtml(item.expiration || 'Permanent');
         const permTip = conflict ? (item.existing_analyst || item.existing_comment ? 'Existing: ' + (item.existing_analyst || '').replace(/"/g, '') + ' | ' + (item.existing_comment || '').substring(0, 60).replace(/"/g, '') : 'Already in DB') : '';
@@ -824,7 +824,7 @@ document.getElementById('csvPreviewBtn').addEventListener('click', async () => {
                 const tags = escapeHtml(tagsDisplay);
                 const ticket = escapeHtml(item.ticket_id || '');
                 const analyst = escapeHtml(item.analyst || '');
-                const date = escapeHtml(item.date || '');
+                const date = escapeHtml((typeof formatUtcToLocal === 'function' ? formatUtcToLocal(item.date) : (item.date || '')) || '');
                 const comment = escapeHtml(item.comment || '');
                 const expiration = escapeHtml(item.expiration || 'Permanent');
                 const sanityCol = formatStagingSanityHtml(item.sanity_check || '');
@@ -987,7 +987,7 @@ document.getElementById('txtPreviewBtn').addEventListener('click', async () => {
                 const tags = escapeHtml(tagsDisplay);
                 const ticket = escapeHtml(item.ticket_id || '');
                 const analyst = escapeHtml(item.analyst || '');
-                const date = escapeHtml(item.date || '');
+                const date = escapeHtml((typeof formatUtcToLocal === 'function' ? formatUtcToLocal(item.date) : (item.date || '')) || '');
                 const comment = escapeHtml(item.comment || '');
                 const expiration = escapeHtml(item.expiration || 'Permanent');
                 const sanityCol = formatStagingSanityHtml(item.sanity_check || '');
@@ -1068,7 +1068,7 @@ document.getElementById('pastePreviewBtn').addEventListener('click', async () =>
                 const tags = escapeHtml(tagsDisplay);
                 const ticket = escapeHtml(item.ticket_id || '');
                 const analyst = escapeHtml(item.analyst || '');
-                const date = escapeHtml(item.date || '');
+                const date = escapeHtml((typeof formatUtcToLocal === 'function' ? formatUtcToLocal(item.date) : (item.date || '')) || '');
                 const comment = escapeHtml(item.comment || '');
                 const expiration = escapeHtml(item.expiration || 'Permanent');
                 const sanityCol = formatStagingSanityHtml(item.sanity_check || '');

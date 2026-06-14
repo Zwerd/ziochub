@@ -1,0 +1,341 @@
+{% extends "admin/base.html" %}
+{% block title %}Downstream Systems{% endblock %}
+
+{% block admin_content %}
+<div class="bg-tertiary rounded-xl border border-white/10 p-6">
+    <h3 class="text-lg font-semibold accent-blue mb-2">Downstream Systems (Distribution)</h3>
+    <p class="text-secondary text-sm mb-4">
+        Register security products in your organization that consume IOCs from ZIoCHub via <strong class="text-primary">Feed</strong>,
+        <strong class="text-primary">TAXII</strong>, or <strong class="text-primary">API push</strong> (Cortex XDR, Google SecOps, HTTP IOC push are tracked automatically when configured under Integrations).
+        Match consumers by <strong class="text-primary">client IP</strong> on feed/TAXII pulls. Search &amp; Investigate shows vendor icons when an IOC was likely distributed.
+    </p>
+
+    <div class="bg-black/20 border border-white/10 rounded-lg p-4 mb-4 text-sm text-secondary">
+        <h4 class="font-semibold text-primary mb-2">Vendor icons</h4>
+        <p class="mb-2">Place official logos in <code class="px-1 py-0.5 rounded bg-white/10 text-xs">static/img/vendors/</code> (production: <code class="px-1 py-0.5 rounded bg-white/10 text-xs">/opt/ziochub/static/img/vendors/</code>).</p>
+        <ul class="list-disc pl-5 space-y-1">
+            <li>Pick a vendor from the list — icon preview appears below the dropdown.</li>
+            <li>Or check <strong>Custom vendor</strong> to enter a name and upload an icon (stored in <code class="px-1 bg-white/10 rounded text-xs">static/img/vendors/custom/</code>).</li>
+            <li>For catalog vendors you may also pre-place files as <code class="px-1 bg-white/10 rounded text-xs">{vendor_id}.png</code> under <code class="px-1 bg-white/10 rounded text-xs">static/img/vendors/</code>.</li>
+            <li>Formats: SVG, PNG, WebP, JPG (not .ico).</li>
+        </ul>
+    </div>
+
+    <div class="flex flex-wrap gap-2 mb-4">
+        <button type="button" id="downstreamReloadBtn" class="btn-cmd-neutral">Reload</button>
+        <button type="button" id="downstreamAddBtn" class="btn-cmd-primary">Add system</button>
+        <span id="downstreamStatus" class="text-sm text-secondary ml-auto self-center"></span>
+    </div>
+
+    <div class="overflow-x-auto border border-white/10 rounded-lg">
+        <table class="w-full text-sm">
+            <thead class="bg-black/30">
+                <tr>
+                    <th class="border border-white/10 px-3 py-2 text-left">Icon</th>
+                    <th class="border border-white/10 px-3 py-2 text-left">Name</th>
+                    <th class="border border-white/10 px-3 py-2 text-left">Vendor</th>
+                    <th class="border border-white/10 px-3 py-2 text-left">Client IP</th>
+                    <th class="border border-white/10 px-3 py-2 text-left">Enabled</th>
+                    <th class="border border-white/10 px-3 py-2 text-left">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="downstreamTableBody">
+                <tr><td colspan="6" class="border border-white/10 px-3 py-4 text-secondary text-center">Loading…</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="downstreamModal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60 p-4">
+    <div class="bg-tertiary border border-white/10 rounded-xl max-w-lg w-full p-6 shadow-xl">
+        <h4 id="downstreamModalTitle" class="text-lg font-semibold accent-blue mb-4">Add system</h4>
+        <form id="downstreamForm" class="space-y-3">
+            <input type="hidden" id="downstreamFormId" value="">
+            <div>
+                <label class="block text-sm text-secondary mb-1" for="downstreamName">Display name</label>
+                <input type="text" id="downstreamName" class="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2" placeholder="e.g. Checkpoint DMZ EDL" required>
+            </div>
+            <div id="downstreamCatalogBlock">
+                <label class="block text-sm text-secondary mb-1" for="downstreamVendor">Vendor (from list)</label>
+                <select id="downstreamVendor" class="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2"></select>
+                <div class="flex justify-center mt-2 mb-1">
+                    <img id="downstreamVendorPreview" src="/static/img/vendors/generic.svg" alt="" class="downstream-vendor-icon downstream-vendor-icon--lg" />
+                </div>
+            </div>
+
+            <div class="border-t border-white/10 pt-3 mt-1">
+                <label class="flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="checkbox" id="downstreamUseCustom" class="rounded">
+                    <span>Custom vendor (not in list) — upload your own icon</span>
+                </label>
+                <div id="downstreamCustomPanel" class="hidden mt-3 space-y-2 pl-1">
+                    <div>
+                        <label class="block text-sm text-secondary mb-1" for="downstreamCustomLabel">Custom vendor name</label>
+                        <input type="text" id="downstreamCustomLabel" class="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2" placeholder="e.g. Internal SOC platform">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-secondary mb-1" for="downstreamCustomIcon">Vendor icon</label>
+                        <input type="file" id="downstreamCustomIcon" accept="image/svg+xml,image/png,image/webp,image/jpeg,.svg,.png,.webp,.jpg,.jpeg" class="w-full text-sm">
+                        <p class="text-xs text-secondary mt-1">SVG, PNG, WebP or JPG — max 512 KB.</p>
+                    </div>
+                    <div class="flex justify-center">
+                        <img id="downstreamCustomPreview" src="" alt="" class="downstream-vendor-icon downstream-vendor-icon--lg hidden" />
+                    </div>
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm text-secondary mb-1" for="downstreamIp">Client IP (Feed / TAXII)</label>
+                <input type="text" id="downstreamIp" class="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 font-mono" placeholder="10.0.0.50" required>
+                <p class="text-xs text-secondary mt-1">IP seen when this system pulls <code class="px-1 bg-white/10 rounded">/feed/*</code> or <code class="px-1 bg-white/10 rounded">/taxii2/*</code>.</p>
+            </div>
+            <div class="flex items-center gap-2">
+                <input type="checkbox" id="downstreamEnabled" class="rounded" checked>
+                <label for="downstreamEnabled" class="text-sm">Enabled</label>
+            </div>
+            <div class="flex flex-wrap gap-2 pt-2">
+                <button type="submit" class="btn-cmd-primary">Save</button>
+                <button type="button" id="downstreamModalCancel" class="btn-cmd-neutral">Cancel</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+(function() {
+    const tbody = document.getElementById('downstreamTableBody');
+    const statusEl = document.getElementById('downstreamStatus');
+    const modal = document.getElementById('downstreamModal');
+    const form = document.getElementById('downstreamForm');
+    const vendorSel = document.getElementById('downstreamVendor');
+    const vendorPreview = document.getElementById('downstreamVendorPreview');
+    const catalogBlock = document.getElementById('downstreamCatalogBlock');
+    const useCustomCb = document.getElementById('downstreamUseCustom');
+    const customPanel = document.getElementById('downstreamCustomPanel');
+    const customLabel = document.getElementById('downstreamCustomLabel');
+    const customIconInput = document.getElementById('downstreamCustomIcon');
+    const customPreview = document.getElementById('downstreamCustomPreview');
+    let vendors = [];
+    let systems = [];
+    let customIconFile = null;
+
+    function updateVendorPreview() {
+        if (!vendorSel || !vendorPreview || (useCustomCb && useCustomCb.checked)) return;
+        var vid = vendorSel.value;
+        var v = vendors.find(function(x) { return x.id === vid; });
+        vendorPreview.src = (v && v.icon_url ? v.icon_url : '/static/img/vendors/generic.svg') + '?t=' + Date.now();
+    }
+
+    function syncCustomMode() {
+        var custom = useCustomCb && useCustomCb.checked;
+        if (catalogBlock) catalogBlock.classList.toggle('opacity-50', custom);
+        if (vendorSel) vendorSel.disabled = custom;
+        if (customPanel) customPanel.classList.toggle('hidden', !custom);
+        if (custom) updateCustomPreview();
+        else updateVendorPreview();
+    }
+
+    function updateCustomPreview() {
+        if (!customPreview) return;
+        if (customIconFile) {
+            var reader = new FileReader();
+            reader.onload = function(e) {
+                customPreview.src = e.target.result;
+                customPreview.classList.remove('hidden');
+            };
+            reader.readAsDataURL(customIconFile);
+        } else if (customPreview.getAttribute('data-existing')) {
+            customPreview.src = customPreview.getAttribute('data-existing') + '?t=' + Date.now();
+            customPreview.classList.remove('hidden');
+        } else {
+            customPreview.classList.add('hidden');
+        }
+    }
+
+    function setStatus(msg, ok) {
+        if (!statusEl) return;
+        statusEl.textContent = msg || '';
+        statusEl.classList.toggle('text-green-400', !!ok);
+        statusEl.classList.toggle('text-red-400', ok === false);
+        statusEl.classList.toggle('text-secondary', ok == null);
+    }
+
+    function openModal(row) {
+        document.getElementById('downstreamModalTitle').textContent = row ? 'Edit system' : 'Add system';
+        document.getElementById('downstreamFormId').value = row ? String(row.id) : '';
+        document.getElementById('downstreamName').value = row ? row.name : '';
+        customIconFile = null;
+        if (customIconInput) customIconInput.value = '';
+        if (row && row.is_custom_vendor) {
+            if (useCustomCb) useCustomCb.checked = true;
+            if (customLabel) customLabel.value = row.custom_vendor_label || '';
+            if (customPreview) {
+                if (row.icon_url) customPreview.setAttribute('data-existing', row.icon_url);
+                else customPreview.removeAttribute('data-existing');
+            }
+        } else {
+            if (useCustomCb) useCustomCb.checked = false;
+            if (customLabel) customLabel.value = '';
+            if (customPreview) customPreview.removeAttribute('data-existing');
+            document.getElementById('downstreamVendor').value = row ? row.vendor_id : (vendors[0] ? vendors[0].id : 'generic');
+        }
+        syncCustomMode();
+        document.getElementById('downstreamIp').value = row ? row.client_ip : '';
+        document.getElementById('downstreamEnabled').checked = row ? !!row.enabled : true;
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+    }
+
+    function closeModal() {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+    }
+
+    function renderTable() {
+        if (!tbody) return;
+        if (!systems.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="border border-white/10 px-3 py-4 text-secondary text-center">No systems registered yet.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = systems.map(function(s) {
+            return '<tr>' +
+                '<td class="border border-white/10 px-3 py-2"><img src="' + (s.icon_url || '') + '" alt="" class="downstream-vendor-icon downstream-vendor-icon--md inline-block" /></td>' +
+                '<td class="border border-white/10 px-3 py-2">' + escapeHtml(s.name) + '</td>' +
+                '<td class="border border-white/10 px-3 py-2">' + escapeHtml(s.vendor_label || s.vendor_id) + '</td>' +
+                '<td class="border border-white/10 px-3 py-2 font-mono">' + escapeHtml(s.client_ip) + '</td>' +
+                '<td class="border border-white/10 px-3 py-2">' + (s.enabled ? 'Yes' : 'No') + '</td>' +
+                '<td class="border border-white/10 px-3 py-2">' +
+                    '<div class="flex flex-wrap items-center gap-1">' +
+                    '<button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="edit" data-id="' + s.id + '">Edit</button>' +
+                    '<button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="backfill" data-id="' + s.id + '" title="Correlate historical feed/TAXII pulls for this IP">Backfill</button>' +
+                    '<button type="button" class="btn-cmd-danger btn-cmd-sm" data-action="delete" data-id="' + s.id + '">Delete</button>' +
+                    '</div></td></tr>';
+        }).join('');
+        tbody.querySelectorAll('[data-action="edit"]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var id = parseInt(btn.getAttribute('data-id'), 10);
+                var row = systems.find(function(x) { return x.id === id; });
+                if (row) openModal(row);
+            });
+        });
+        tbody.querySelectorAll('[data-action="delete"]').forEach(function(btn) {
+            btn.addEventListener('click', async function() {
+                var id = btn.getAttribute('data-id');
+                var row = systems.find(function(x) { return String(x.id) === String(id); });
+                var name = row ? row.name : 'this system';
+                var ok = false;
+                if (typeof appConfirm === 'function') {
+                    ok = await appConfirm({
+                        title: 'Delete system',
+                        message: 'Delete "' + name + '"? All distribution history for this system will be removed. This cannot be undone.',
+                        okText: 'Delete',
+                        cancelText: 'Cancel'
+                    });
+                } else if (confirm('Delete this system?')) {
+                    ok = true;
+                }
+                if (!ok) return;
+                setStatus('Deleting…', null);
+                try {
+                    var res = await fetch('/api/admin/downstream-systems/' + id, { method: 'DELETE' });
+                    var data = await res.json();
+                    if (data.success) { setStatus('Deleted.', true); load(); }
+                    else setStatus(data.message || 'Delete failed.', false);
+                } catch (e) { setStatus('Network error.', false); }
+            });
+        });
+        tbody.querySelectorAll('[data-action="backfill"]').forEach(function(btn) {
+            btn.addEventListener('click', async function() {
+                var id = btn.getAttribute('data-id');
+                var row = systems.find(function(x) { return String(x.id) === String(id); });
+                var name = row ? row.name : 'this system';
+                var ok = false;
+                if (typeof appConfirm === 'function') {
+                    ok = await appConfirm({
+                        title: 'Backfill distribution',
+                        message: 'Correlate historical feed/TAXII pulls for "' + name + '" (IP ' + (row ? row.client_ip : '') + ')? This may take a while.',
+                        okText: 'Run backfill',
+                        cancelText: 'Cancel'
+                    });
+                } else if (confirm('Correlate historical feed/TAXII pulls for this IP? This may take a while.')) {
+                    ok = true;
+                }
+                if (!ok) return;
+                setStatus('Backfilling…', null);
+                try {
+                    var res = await fetch('/api/admin/downstream-systems/' + id + '/backfill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+                    var data = await res.json();
+                    if (data.success) setStatus(data.message || 'Backfill done.', true);
+                    else setStatus(data.message || 'Backfill failed.', false);
+                } catch (e) { setStatus('Network error.', false); }
+            });
+        });
+    }
+
+    function escapeHtml(s) {
+        return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    async function load() {
+        setStatus('Loading…', null);
+        try {
+            var res = await fetch('/api/admin/downstream-systems');
+            var data = await res.json();
+            if (!data.success) { setStatus(data.message || 'Load failed.', false); return; }
+            vendors = data.vendors || [];
+            systems = data.systems || [];
+            if (vendorSel) {
+                vendorSel.innerHTML = vendors.map(function(v) {
+                    return '<option value="' + escapeHtml(v.id) + '">' + escapeHtml(v.label) + '</option>';
+                }).join('');
+            }
+            renderTable();
+            setStatus('Loaded ' + systems.length + ' system(s).', true);
+            updateVendorPreview();
+        } catch (e) { setStatus('Network error.', false); }
+    }
+
+    if (vendorSel) vendorSel.addEventListener('change', updateVendorPreview);
+    if (useCustomCb) useCustomCb.addEventListener('change', syncCustomMode);
+    if (customIconInput) {
+        customIconInput.addEventListener('change', function() {
+            customIconFile = (customIconInput.files && customIconInput.files[0]) ? customIconInput.files[0] : null;
+            if (customPreview) customPreview.removeAttribute('data-existing');
+            updateCustomPreview();
+        });
+    }
+
+    document.getElementById('downstreamReloadBtn').addEventListener('click', load);
+    document.getElementById('downstreamAddBtn').addEventListener('click', function() { openModal(null); });
+    document.getElementById('downstreamModalCancel').addEventListener('click', closeModal);
+    form.addEventListener('submit', async function(ev) {
+        ev.preventDefault();
+        var id = document.getElementById('downstreamFormId').value;
+        var useCustom = useCustomCb && useCustomCb.checked;
+        var fd = new FormData();
+        fd.append('name', document.getElementById('downstreamName').value);
+        fd.append('client_ip', document.getElementById('downstreamIp').value);
+        fd.append('enabled', document.getElementById('downstreamEnabled').checked ? 'true' : 'false');
+        fd.append('use_custom_vendor', useCustom ? 'true' : 'false');
+        if (useCustom) {
+            fd.append('custom_vendor_label', customLabel ? customLabel.value : '');
+            if (customIconFile) fd.append('icon', customIconFile);
+        } else {
+            fd.append('vendor_id', document.getElementById('downstreamVendor').value);
+        }
+        setStatus('Saving…', null);
+        try {
+            var url = id ? ('/api/admin/downstream-systems/' + id) : '/api/admin/downstream-systems';
+            var res = await fetch(url, { method: id ? 'PUT' : 'POST', body: fd });
+            var data = await res.json();
+            if (data.success) {
+                setStatus(data.message || 'Saved.', true);
+                closeModal();
+                load();
+            } else setStatus(data.message || 'Save failed.', false);
+        } catch (e) { setStatus('Network error.', false); }
+    });
+
+    load();
+})();
+</script>
+{% endblock %}

@@ -20,6 +20,8 @@ import urllib.request
 import urllib.error
 import ssl
 
+from utils.http_identity import apply_user_agent_to_request
+
 # Cap response read to avoid huge bodies in memory / DB telemetry.
 _MAX_RESPONSE_BODY_BYTES = 256 * 1024
 # Stored in telemetry / UI per target
@@ -102,6 +104,13 @@ def _add_api_key_header(req: urllib.request.Request, app: dict) -> None:
     if not api_key:
         return
     req.add_header(_api_key_header_name(app), api_key)
+
+
+def _prepare_outbound_request(req: urllib.request.Request, app: dict | None = None) -> urllib.request.Request:
+    apply_user_agent_to_request(req)
+    if app is not None:
+        _add_api_key_header(req, app)
+    return req
 
 
 def _delete_http_method(app: dict) -> str:
@@ -247,7 +256,7 @@ def push_yara_to_appliances(
         try:
             req = urllib.request.Request(upload_url, data=content.encode('utf-8'), method='POST')
             req.add_header('Content-Type', 'text/plain; charset=utf-8')
-            _add_api_key_header(req, app)
+            _prepare_outbound_request(req, app)
             try:
                 with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
                     code = resp.getcode()
@@ -348,7 +357,7 @@ def delete_yara_from_appliances(
                 req = urllib.request.Request(delete_url, data=b'', method='POST')
             else:
                 req = urllib.request.Request(delete_url, method='DELETE')
-            _add_api_key_header(req, app)
+            _prepare_outbound_request(req, app)
             try:
                 with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
                     code = resp.getcode()

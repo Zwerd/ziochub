@@ -1,5 +1,8 @@
 <nav class="import-sub-tabs settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-4">
-    <button type="button" class="import-sub-tab-btn settings-tab-btn active" data-import-sub="misp">MISP pull</button>
+    <button type="button" class="import-sub-tab-btn settings-tab-btn active flex items-center gap-2" data-import-sub="misp">
+        <img src="{{ integration_icons.misp_pull }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+        <span>MISP pull</span>
+    </button>
     <button type="button" class="import-sub-tab-btn settings-tab-btn" data-import-sub="taxii">TAXII Pull</button>
 </nav>
 {% include 'admin/partials/integration_import_misp.html' %}

@@ -10,9 +10,73 @@
     let selectedYaraFile = null;
     let editingYaraFilename = null;
     let yaraEditOriginalContent = '';
+    let yaraRejectTargetFilename = null;
     const yaraDropZone = document.getElementById('yaraDropZone');
     const yaraFileInput = document.getElementById('yaraFileInput');
     const yaraSelectedFilename = document.getElementById('yaraSelectedFilename');
+
+    function clearYaraResubmitMode() {
+        global._yaraResubmitFilename = null;
+        const submitBtn = document.getElementById('yaraWriteSubmitBtn');
+        if (submitBtn) {
+            submitBtn.textContent = t('yara.write_submit_btn') || 'Submit written rule';
+        }
+        const wf = document.getElementById('yaraWriteFilename');
+        if (wf) wf.readOnly = false;
+    }
+
+    function setYaraResubmitMode(filename) {
+        global._yaraResubmitFilename = filename || null;
+        const submitBtn = document.getElementById('yaraWriteSubmitBtn');
+        if (submitBtn) {
+            submitBtn.textContent = t('yara.resubmit_btn') || 'Resubmit for approval';
+        }
+    }
+
+    function updateYaraRejectedBadge(unseen) {
+        const badge = document.getElementById('yaraRejectedBadge');
+        if (!badge) return;
+        const n = Number(unseen) || 0;
+        if (n > 0) {
+            badge.textContent = String(n > 9 ? '9+' : n);
+            badge.classList.remove('hidden');
+        } else {
+            badge.classList.add('hidden');
+        }
+    }
+
+    function showYaraRejectModal(filename) {
+        return new Promise((resolve) => {
+            const modal = document.getElementById('yaraAdminRejectModal');
+            const reasonEl = document.getElementById('yaraAdminRejectReason');
+            const submitBtn = document.getElementById('yaraAdminRejectSubmit');
+            const cancelBtn = document.getElementById('yaraAdminRejectCancel');
+            if (!modal || !submitBtn || !cancelBtn) {
+                resolve({ ok: false, reason: '' });
+                return;
+            }
+            yaraRejectTargetFilename = filename;
+            if (reasonEl) reasonEl.value = '';
+            modal.classList.remove('hidden');
+            function cleanup() {
+                submitBtn.removeEventListener('click', onConfirm);
+                cancelBtn.removeEventListener('click', onCancel);
+                modal.classList.add('hidden');
+                yaraRejectTargetFilename = null;
+            }
+            function onConfirm() {
+                const reason = reasonEl ? reasonEl.value.trim() : '';
+                cleanup();
+                resolve({ ok: true, reason: reason });
+            }
+            function onCancel() {
+                cleanup();
+                resolve({ ok: false, reason: '' });
+            }
+            submitBtn.addEventListener('click', onConfirm);
+            cancelBtn.addEventListener('click', onCancel);
+        });
+    }
 
     function showYaraConfirm(title, message, confirmLabel) {
         return new Promise((resolve) => {
@@ -641,7 +705,70 @@
         }
     }
 
+    async function handleYaraResubmit() {
+        const filename = global._yaraResubmitFilename;
+        if (!filename) return;
+        const ta = document.getElementById('yaraWriteSource');
+        const sourceRaw = ta ? ta.value : '';
+        const source = sourceRaw.trim();
+        if (!source) {
+            showToast(t('yara.write_error_empty_source'), 'error');
+            return;
+        }
+        if (yaraWriteValidatedSource !== sourceRaw) {
+            toastYaraSubmitBlocked();
+            return;
+        }
+        const ticketEl = document.getElementById('yaraWriteTicketId');
+        const commentEl = document.getElementById('yaraWriteComment');
+        const campaignEl = document.getElementById('yaraWriteCampaignSelect');
+        const payload = {
+            filename: filename,
+            content: sourceRaw,
+            ticket_id: (ticketEl && ticketEl.value ? ticketEl.value : '').trim(),
+            comment: (commentEl && commentEl.value ? commentEl.value : '').trim(),
+            campaign_name: (campaignEl && campaignEl.value ? campaignEl.value : '').trim(),
+        };
+        try {
+            const response = await fetch('/api/yara/resubmit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const result = await response.json().catch(() => ({}));
+            if (response.status === 409) {
+                showToast((result && result.message) ? result.message : t('toast.duplicate_entry'), 'error');
+                return;
+            }
+            if (result.success) {
+                showToast(result.message, 'success');
+                clearYaraResubmitMode();
+                const ws = document.getElementById('yaraWriteSource');
+                const wf = document.getElementById('yaraWriteFilename');
+                if (ws) ws.value = '';
+                if (wf) wf.value = '';
+                refreshYaraWriteHighlight();
+                clearYaraSyntaxResult();
+                invalidateYaraWriteValidation();
+                await loadYaraRejected();
+                const pendingSec = document.getElementById('yaraPendingSection');
+                if (pendingSec) pendingSec.classList.remove('hidden');
+                await loadYaraPending();
+                setYaraMode('status');
+                setTimeout(function () { pendingSec && pendingSec.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 100);
+            } else {
+                showToast(result.message || 'Resubmit failed', 'error');
+            }
+        } catch (error) {
+            showToast((t('toast.error_upload_yara') || 'Error') + ': ' + error.message, 'error');
+        }
+    }
+
     async function handleYaraWriteSubmit() {
+        if (global._yaraResubmitFilename) {
+            await handleYaraResubmit();
+            return;
+        }
         const rawName = (document.getElementById('yaraWriteFilename') && document.getElementById('yaraWriteFilename').value || '').trim();
         const ta = document.getElementById('yaraWriteSource');
         const sourceRaw = ta ? ta.value : '';
@@ -727,9 +854,182 @@
             clearYaraSyntaxBanner('yaraUploadSyntaxResult');
         }
 
+        if (isWrite && prevYaraMode === 'write' && mode !== 'write') {
+            clearYaraResubmitMode();
+        }
+
         if (isStatus && !skipReload) {
             loadYaraRules();
-            if (authState.authenticated) loadYaraPending();
+            if (authState.authenticated) {
+                loadYaraPending();
+                loadYaraRejected();
+            }
+        }
+    }
+
+    async function loadYaraRejected(showToastIfUnseen) {
+        const section = document.getElementById('yaraRejectedSection');
+        const tbody = document.getElementById('yaraRejectedTableBody');
+        const auth = (typeof window !== 'undefined' && window.authState) || (typeof global !== 'undefined' && global.authState);
+        const isAdmin = auth && auth.is_admin;
+        if (isAdmin) {
+            if (section) section.classList.add('hidden');
+            updateYaraRejectedBadge(0);
+            return;
+        }
+        if (!tbody) return;
+        if (section) section.classList.remove('hidden');
+        try {
+            const response = await fetch('/api/yara/my-rejected?_=' + Date.now());
+            const result = await response.json();
+            const unseen = (result && result.unseen_count != null) ? Number(result.unseen_count) : 0;
+            updateYaraRejectedBadge(unseen);
+            if (showToastIfUnseen && unseen > 0) {
+                const key = 'yara_rejection_toast_' + unseen;
+                try {
+                    if (!sessionStorage.getItem(key)) {
+                        const msg = unseen === 1
+                            ? (t('yara.rejection_toast_one') || 'One YARA rule was rejected by an administrator.')
+                            : (t('yara.rejection_toast_many') || '').replace('{n}', String(unseen)) || (unseen + ' YARA rules were rejected.');
+                        showToast(msg, 'warning');
+                        sessionStorage.setItem(key, '1');
+                    }
+                } catch (e) {
+                    showToast(t('yara.rejection_toast_one') || 'A YARA rule was rejected by an administrator.', 'warning');
+                }
+            }
+            if (result.success && result.files && result.files.length > 0) {
+                tbody.innerHTML = result.files.map(f => {
+                    const reason = (f.rejection_reason || '').trim() || '—';
+                    const rejectedAt = typeof formatUtcToLocal === 'function' ? formatUtcToLocal(f.rejected_at) : (f.rejected_at || '-');
+                    const unseenDot = f.seen ? '' : '<span class="inline-block w-2 h-2 rounded-full bg-red-400 flex-shrink-0" title="New"></span>';
+                    const rejectedBadge = '<span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-red-500/20 text-red-300 border border-red-500/40 mr-2 flex-shrink-0">Rejected</span>';
+                    const displayRej = (f.display_name != null && f.display_name !== '') ? f.display_name : f.filename;
+                    return `<tr class="border border-white/10">
+                        <td class="border border-white/10 px-4 py-2 text-sm font-mono"><span class="inline-flex items-center gap-1 flex-wrap">${unseenDot}${rejectedBadge}${escapeHtml(displayRej)}</span></td>
+                        <td class="border border-white/10 px-4 py-2 text-sm text-secondary truncate max-w-xs" title="${escapeAttr(reason)}" dir="${typeof detectTextDir==='function'?detectTextDir(reason):'auto'}">${escapeHtml(reason)}</td>
+                        <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(rejectedAt)}</td>
+                        <td class="border border-white/10 px-4 py-2 text-sm">${escapeHtml(f.rejected_by || '-')}</td>
+                        <td class="border border-white/10 px-3 py-2"><div class="flex items-center gap-1.5 flex-wrap">
+                            <button type="button" class="btn-cmd-primary btn-cmd-sm view-rejected-yara-btn" data-filename="${escapeAttr(f.filename)}">${t('actions.view')}</button>
+                            <button type="button" class="btn-cmd-primary btn-cmd-sm resubmit-rejected-yara-btn" data-filename="${escapeAttr(f.filename)}">${t('yara.resubmit_btn') || 'Resubmit'}</button>
+                        </div></td>
+                    </tr>`;
+                }).join('');
+                tbody.querySelectorAll('.view-rejected-yara-btn').forEach(btn => {
+                    btn.addEventListener('click', () => viewRejectedYaraRule(btn.getAttribute('data-filename')));
+                });
+                tbody.querySelectorAll('.resubmit-rejected-yara-btn').forEach(btn => {
+                    btn.addEventListener('click', () => editAndResubmitRejectedRule(btn.getAttribute('data-filename')));
+                });
+            } else {
+                tbody.innerHTML = '<tr><td colspan="5" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">' + (t('yara.no_rejected') || 'No rejected rules') + '</td></tr>';
+            }
+        } catch (error) {
+            console.error('Error loading rejected YARA:', error);
+            tbody.innerHTML = '<tr><td colspan="5" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">Error loading rejected</td></tr>';
+        }
+    }
+
+    async function markYaraRejectionSeen(filename) {
+        try {
+            await fetch('/api/yara/mark-rejection-seen', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(filename ? { filename: filename } : { all: true }),
+            });
+            await loadYaraRejected();
+        } catch (e) {
+            console.warn('mark-rejection-seen failed', e);
+        }
+    }
+
+    async function viewRejectedYaraRule(filename) {
+        if (!filename) return;
+        await markYaraRejectionSeen(filename);
+        const modal = document.getElementById('yaraPreviewModal');
+        const titleEl = document.getElementById('yaraPreviewTitle');
+        const contentEl = document.getElementById('yaraPreviewContent');
+        if (!modal || !titleEl || !contentEl) return;
+        titleEl.textContent = 'Rejected: ' + filename;
+        contentEl.innerHTML = '<code class="language-clike">Loading...</code>';
+        modal.classList.remove('hidden');
+        try {
+            const response = await fetch('/api/yara/rejected-content/' + encodeURIComponent(filename));
+            const result = await response.json();
+            if (result.success) {
+                const reason = (result.rejection_reason || '').trim();
+                const reasonHtml = reason
+                    ? '<p class="text-sm text-red-300 mb-3 border border-red-500/30 rounded-lg px-3 py-2 bg-red-950/30"><strong>Reason:</strong> ' + escapeHtml(reason) + '</p>'
+                    : '';
+                const raw = result.content || '(empty file)';
+                contentEl.innerHTML = reasonHtml + '<code class="language-clike">' + escapeHtml(raw) + '</code>';
+                const codeEl = contentEl.querySelector('code');
+                if (typeof Prism !== 'undefined' && codeEl) Prism.highlightElement(codeEl);
+            } else {
+                contentEl.innerHTML = '<code class="language-clike">Error: ' + escapeHtml(result.message || 'Failed to load') + '</code>';
+            }
+        } catch (error) {
+            contentEl.innerHTML = '<code class="language-clike">Error: ' + escapeHtml(error.message) + '</code>';
+        }
+    }
+
+    async function editAndResubmitRejectedRule(filename) {
+        if (!filename) return;
+        try {
+            const response = await fetch('/api/yara/rejected-content/' + encodeURIComponent(filename));
+            const result = await response.json();
+            if (!result.success) {
+                showToast(result.message || 'Failed to load rule', 'error');
+                return;
+            }
+            await markYaraRejectionSeen(filename);
+            const wf = document.getElementById('yaraWriteFilename');
+            const ws = document.getElementById('yaraWriteSource');
+            const ticketEl = document.getElementById('yaraWriteTicketId');
+            const commentEl = document.getElementById('yaraWriteComment');
+            const campaignEl = document.getElementById('yaraWriteCampaignSelect');
+            if (wf) {
+                wf.value = result.filename || filename;
+                wf.readOnly = true;
+            }
+            if (ws) ws.value = result.content || '';
+            if (ticketEl) ticketEl.value = result.ticket_id || '';
+            if (commentEl) {
+                commentEl.value = result.comment || '';
+                if (typeof detectTextDir === 'function') commentEl.dir = detectTextDir(commentEl.value);
+            }
+            yaraWriteValidatedSource = null;
+            invalidateYaraWriteValidation();
+            refreshYaraWriteHighlight();
+            clearYaraSyntaxResult();
+            if (campaignEl) {
+                const campRes = await fetch('/api/campaigns');
+                const campData = await campRes.json();
+                campaignEl.innerHTML = '<option value="">-- None --</option>';
+                let selectedName = '';
+                if (campData.success && campData.campaigns) {
+                    campData.campaigns.forEach(c => {
+                        const opt = document.createElement('option');
+                        opt.value = c.name;
+                        opt.textContent = c.name;
+                        if (result.campaign_id && c.id === result.campaign_id) {
+                            opt.selected = true;
+                            selectedName = c.name;
+                        }
+                        campaignEl.appendChild(opt);
+                    });
+                }
+                if (!selectedName && result.campaign_id) {
+                    campaignEl.value = '';
+                }
+            }
+            setYaraResubmitMode(result.filename || filename);
+            setYaraMode('status', { skipReload: true });
+            setYaraMode('write');
+            showToast(t('yara.resubmit_edit_hint') || 'Edit the rule and click Resubmit for approval.', 'info');
+        } catch (error) {
+            showToast('Failed to load rule: ' + error.message, 'error');
         }
     }
 
@@ -860,13 +1160,13 @@
 
     async function rejectPendingYaraRule(filename) {
         if (!filename) return;
-        const ok = await showYaraConfirm('Reject YARA Rule', `Are you sure you want to reject "${filename}"? The file will be permanently removed.`, 'Reject');
-        if (!ok) return;
+        const modalResult = await showYaraRejectModal(filename);
+        if (!modalResult.ok) return;
         try {
             const response = await fetch('/api/yara/reject', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filename: filename })
+                body: JSON.stringify({ filename: filename, reason: modalResult.reason || '' })
             });
             const result = await response.json();
             if (result.success) {
@@ -955,6 +1255,10 @@
     document.getElementById('yaraWriteSubmitBtn')?.addEventListener('click', () => { handleYaraWriteSubmit(); });
     document.getElementById('yaraWriteCheckSyntaxBtn')?.addEventListener('click', () => { handleYaraSyntaxCheck(); });
     document.getElementById('yaraUploadCheckSyntaxBtn')?.addEventListener('click', () => { handleYaraUploadSyntaxCheck(); });
+    document.getElementById('yaraWriteFilename')?.addEventListener('focus', function () {
+        if (!global._yaraResubmitFilename) this.readOnly = false;
+    });
+
     document.getElementById('yaraWriteSource')?.addEventListener('input', function () {
         clearYaraSyntaxResult();
         invalidateYaraWriteValidation();
@@ -963,6 +1267,7 @@
 
     global.loadYaraRules = loadYaraRules;
     global.loadYaraPending = loadYaraPending;
+    global.loadYaraRejected = loadYaraRejected;
     global.openYaraMetaEditModal = openYaraMetaEditModal;
     global.setYaraMode = setYaraMode;
     setYaraMode('upload');

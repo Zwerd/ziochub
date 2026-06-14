@@ -31,6 +31,9 @@ def schedule_auxiliary_vendor_integrations(
     ``contexts`` items match ``ioc_context_from_submission`` (``type``, ``value``, ``action``, …).
     Skips rows whose analyst is the MISP sync user (same loop-avoidance as IOC HTTP push).
     Independent of ``ioc_push_enabled`` / configured HTTP targets.
+
+    Bulk submissions (Approve All / CSV / TXT) use batched vendor API calls; single-IOC
+    events use the same batch path with one item.
     """
     if not contexts:
         return
@@ -58,21 +61,28 @@ def schedule_auxiliary_vendor_integrations(
 
     def _worker() -> None:
         with app_obj.app_context():
-            for ctx in filtered:
-                try:
-                    from utils.cortex_xdr import cortex_xdr_push_ioc_from_context
+            try:
+                from utils.cortex_xdr import cortex_xdr_push_contexts_batch
 
-                    cortex_xdr_push_ioc_from_context(ctx)
-                except Exception:
-                    logger.exception('Cortex XDR auxiliary IOC push failed')
-                try:
-                    from utils.google_secops import google_secops_push_ioc_from_context
+                summary = cortex_xdr_push_contexts_batch(filtered)
+                if summary.get('failed'):
+                    logger.warning(
+                        'Cortex XDR batch push: succeeded=%s failed=%s total=%s',
+                        summary.get('succeeded'), summary.get('failed'), summary.get('processed'),
+                    )
+            except Exception:
+                logger.exception('Cortex XDR auxiliary IOC batch push failed')
+            try:
+                from utils.google_secops import google_secops_push_contexts_batch
 
-                    google_secops_push_ioc_from_context(ctx)
-                except Exception:
-                    logger.exception('Google SecOps auxiliary IOC push failed')
-                if delay_sec > 0:
-                    time.sleep(delay_sec)
+                summary_g = google_secops_push_contexts_batch(filtered)
+                if summary_g.get('failed'):
+                    logger.warning(
+                        'Google SecOps batch push: succeeded=%s failed=%s total=%s',
+                        summary_g.get('succeeded'), summary_g.get('failed'), summary_g.get('processed'),
+                    )
+            except Exception:
+                logger.exception('Google SecOps auxiliary IOC batch push failed')
 
     t = threading.Thread(target=_worker, daemon=True)
     t.start()

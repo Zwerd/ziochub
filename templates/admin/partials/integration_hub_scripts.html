@@ -102,11 +102,11 @@
             e.preventDefault();
             try {
                 var res = await fetch('/api/admin/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
+                    body: JSON.stringify(Object.assign({
                         misp_push_enabled: document.getElementById('misp_push_enabled').value,
                         misp_push_include_comment: document.getElementById('misp_push_include_comment').value,
                         misp_push_default_event_id: (document.getElementById('misp_push_default_event_id').value || '').trim()
-                    }) });
+                    }, window.integRetryFields('misp_push'))) });
                 var data = await res.json();
                 var el = document.getElementById('mispPushMessage');
                 el.classList.remove('hidden');

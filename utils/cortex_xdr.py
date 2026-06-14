@@ -9,9 +9,8 @@ was merged into core XDR and modern tenants reject ``tim_insert_jsons`` with HTT
 ``"Invalid API"``):
 
 - Insert:  ``POST /public_api/v1/indicators/insert_jsons`` - body ``{"request_data": [{...}], "validate": true}``.
-  Supported types: ``HASH``, ``IP``, ``DOMAIN_NAME``, ``FILENAME``. URL/PATH is NOT supported by
-  this endpoint - it is only supported by ``indicators/insert`` which requires Instance Administrator
-  permissions. ZIoCHub skips URL (and Email) pushes for now.
+  Core types: ``HASH``, ``IP``, ``DOMAIN_NAME``, ``FILENAME``. ZIoCHub also maps **URL** → ``URL`` and
+  **Email** → ``EMAIL_ADDRESS`` (tenant-dependent; verify with ``scripts/cortex_xdr_ioc_probe.py``).
 - Remove:  ``POST /public_api/v1/indicators/delete`` - body
   ``{"request_data": {"filters": [{"field": "indicator", "operator": "EQ", "value": ["..."]}]}}``.
 - List:    ``POST /public_api/v1/indicators/get`` - also used by the Admin "Test connection" probe.
@@ -31,7 +30,8 @@ send ``Authorization`` as the raw key; Advanced keys send ``Authorization`` as
 ``SHA256(api_key + nonce + timestamp)`` plus ``x-xdr-nonce`` and ``x-xdr-timestamp``. The IOC insert
 call also sends ``x-iocs-source``; other calls use standard signing only.
 
-``cortex_xdr_push_ioc_from_context`` is invoked from ``utils.outbound_ioc.schedule_auxiliary_vendor_integrations``.
+``cortex_xdr_push_contexts_batch`` (bulk) and ``cortex_xdr_push_ioc_from_context`` (single / retry queue)
+are invoked from ``utils.outbound_ioc.schedule_auxiliary_vendor_integrations``.
 """
 from __future__ import annotations
 
@@ -41,11 +41,14 @@ import logging
 import secrets
 import string
 import ssl
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from typing import Any, Optional
+
+from utils.http_identity import apply_user_agent_to_request
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,33 @@ REQUEST_TIMEOUT_SEC = 45
 # Shorter outbound timeout for Admin "Test connection" so Gunicorn (default 30s worker limit) returns JSON in time.
 REQUEST_TIMEOUT_TEST_SEC = 15
 _NONCE_LEN = 64
+# Immediate retries for transient DNS/TLS/connection failures before queueing for scheduled retry.
+# Count comes from Admin ``cortex_xdr_retry_max_attempts`` (see ``_cortex_immediate_retries``).
+_HTTP_TRANSIENT_RETRY_DELAY_SEC = 2.0
+# Bulk outbound (Approve All / CSV / TXT): multiple IOCs per API call where supported.
+CORTEX_INSERT_BATCH_SIZE = 50
+CORTEX_DELETE_BATCH_SIZE = 50
+CORTEX_HASH_BLOCKLIST_BATCH_SIZE = 50
+BATCH_INTER_CHUNK_DELAY_SEC = 0.15
+_TRANSIENT_ERROR_MARKERS = (
+    'temporary failure in name resolution',
+    'name or service not known',
+    'nodename nor servname provided',
+    'network is unreachable',
+    'connection timed out',
+    'timed out',
+    'connection reset',
+    'connection refused',
+    'tls error',
+    'ssl:',
+    'network error',
+    'missing reply object',
+    'empty or non-json response',
+    'waf_blocked',
+    'waf_or_gateway_blocked',
+    'gateway_error',
+    'rate_limited',
+)
 
 # Test-connection probe: ``indicators/get`` is the same documented IOC API that production
 # uses for ``indicators/insert_jsons`` / ``indicators/delete``, so a 200 here proves real
@@ -61,13 +91,12 @@ _NONCE_LEN = 64
 _CORTEX_TEST_PROBE_SUBPATH = 'indicators/get'
 
 # ZIoCHub IOC type -> Cortex ``type`` for /public_api/v1/indicators/insert_jsons.
-# Note: URL is intentionally NOT mapped. The insert_jsons endpoint only supports
-# HASH/IP/DOMAIN_NAME/FILENAME; PATH (URLs) requires the /indicators/insert endpoint which needs
-# Instance Administrator permissions. URL pushes are skipped (logged as skip_unsupported_type_URL).
 _IOC_TYPE_MAP: dict[str, str] = {
     'Domain': 'DOMAIN_NAME',
     'IP': 'IP',
     'Hash': 'HASH',
+    'URL': 'URL',
+    'Email': 'EMAIL_ADDRESS',
 }
 
 _DEFAULT_SEVERITY = 'HIGH'
@@ -232,7 +261,38 @@ def _sign_headers(
     return h
 
 
-def _http_json_post(
+def _cortex_immediate_retries() -> int:
+    """Immediate HTTP retry count (Admin: cortex_xdr_retry_max_attempts, default 3)."""
+    try:
+        import app as _app
+        from utils.integration_retry import integration_retry_max_attempts
+
+        return integration_retry_max_attempts('cortex_xdr', _app._get_setting)
+    except Exception:
+        return 3
+
+
+def _is_transient_http_failure(code: int, raw: str) -> bool:
+    """True for DNS blips, timeouts, TLS handshake issues, and ambiguous empty replies."""
+    if code == 0:
+        return True
+    blob = (raw or '').lower()
+    return any(marker in blob for marker in _TRANSIENT_ERROR_MARKERS)
+
+
+def cortex_xdr_is_retriable_failure(message: str) -> bool:
+    """Whether a failed Cortex push should stay in the scheduled retry queue."""
+    m = (message or '').strip().lower()
+    if not m or m == 'disabled':
+        return False
+    if m.startswith('skip_') or m.startswith('skip_action_'):
+        return False
+    if m in ('missing_config', 'invalid_context', 'remove_missing_value'):
+        return False
+    return any(marker in m for marker in _TRANSIENT_ERROR_MARKERS) or m.startswith('indicators/delete http 0')
+
+
+def _http_json_post_once(
     url: str,
     body: dict[str, Any],
     headers: dict[str, str],
@@ -242,6 +302,7 @@ def _http_json_post(
 ) -> tuple[int, Optional[dict[str, Any]], str]:
     raw = json.dumps(body, ensure_ascii=False).encode('utf-8')
     req = urllib.request.Request(url, data=raw, method='POST')
+    apply_user_agent_to_request(req)
     for k, v in headers.items():
         req.add_header(k, v)
     ctx = _ssl_context(verify_ssl)
@@ -273,6 +334,34 @@ def _http_json_post(
         if isinstance(reason, ssl.SSLError):
             return 0, None, f'TLS error: {reason}'.strip()[:500]
         return 0, None, f'Network error: {reason or e}'.strip()[:500]
+
+
+def _http_json_post(
+    url: str,
+    body: dict[str, Any],
+    headers: dict[str, str],
+    verify_ssl: bool,
+    *,
+    timeout_sec: Optional[float] = None,
+    transient_retries: Optional[int] = None,
+) -> tuple[int, Optional[dict[str, Any]], str]:
+    """POST JSON with immediate retries on transient network/DNS failures."""
+    attempts = max(1, int(transient_retries if transient_retries is not None else _cortex_immediate_retries()))
+    last: tuple[int, Optional[dict[str, Any]], str] = (0, None, 'no attempt')
+    for attempt in range(attempts):
+        code, data, raw = _http_json_post_once(
+            url, body, headers, verify_ssl, timeout_sec=timeout_sec,
+        )
+        last = (code, data, raw)
+        if not _is_transient_http_failure(code, raw):
+            return last
+        if attempt + 1 < attempts:
+            logger.warning(
+                'Cortex XDR transient HTTP failure (attempt %s/%s): HTTP %s %s',
+                attempt + 1, attempts, code, (raw or '')[:200],
+            )
+            time.sleep(_HTTP_TRANSIENT_RETRY_DELAY_SEC * (attempt + 1))
+    return last
 
 
 def _normalize_severity(raw: Optional[str]) -> str:
@@ -410,6 +499,58 @@ def _interpret_tim_reply(data: Optional[dict[str, Any]], *, op: str) -> tuple[bo
     return False, f'{op}: success=false'
 
 
+def _parse_get_indicator_objects(data: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not isinstance(data, dict):
+        return []
+    objs = data.get('objects')
+    if isinstance(objs, list):
+        return [o for o in objs if isinstance(o, dict)]
+    rep = data.get('reply')
+    if isinstance(rep, dict):
+        inner = rep.get('objects')
+        if isinstance(inner, list):
+            return [o for o in inner if isinstance(o, dict)]
+    return []
+
+
+def _indicator_exists_by_value(
+    root: str,
+    key_id: str,
+    api_key: str,
+    verify_ssl: bool,
+    value: str,
+    *,
+    security_level: str = _DEFAULT_SECURITY_LEVEL,
+) -> tuple[bool, str]:
+    """Return (exists, detail) via ``indicators/get`` EQ filter on indicator value."""
+    val = (value or '').strip()
+    if not val:
+        return False, 'verify_empty_value'
+    body = {
+        'request_data': {
+            'filters': [
+                {'field': 'indicator', 'operator': 'EQ', 'value': [val]},
+            ],
+            'search_from': 0,
+            'search_to': 10,
+        },
+    }
+    code, data, raw = _post_indicators(
+        root, key_id, api_key, verify_ssl, 'get',
+        body, security_level=security_level, iocs_source=False,
+    )
+    if code is None or not (200 <= code < 300):
+        return False, f'verify_get HTTP {code}: {raw[:120]}'
+    for obj in _parse_get_indicator_objects(data):
+        ind = (obj.get('indicator') or '').strip()
+        if ind.lower() == val.lower():
+            return True, 'verify_present'
+    count = data.get('objects_count') if isinstance(data, dict) else None
+    if isinstance(count, int) and count > 0:
+        return True, 'verify_present_count'
+    return False, 'verify_absent'
+
+
 def _looks_like_indicator_already_exists(data: Optional[dict[str, Any]], raw: str) -> bool:
     """True if Cortex response suggests the indicator row already exists (may be stale after our delete)."""
     parts: list[str] = [(raw or '').lower()]
@@ -455,9 +596,34 @@ def _delete_indicator_by_value(
     if code is not None and not (200 <= code < 300):
         return False, f'indicators/delete HTTP {code}: {raw[:240]}'
     ok, msg = _interpret_tim_reply(data, op='indicators/delete')
-    if not ok:
-        logger.warning('Cortex XDR indicators/delete failed: %s', msg)
-    return ok, msg
+    max_attempts = _cortex_immediate_retries()
+    attempt = 1
+    while not ok and 'missing reply object' in (msg or '').lower() and attempt < max_attempts:
+        logger.warning(
+            'Cortex XDR indicators/delete empty reply; retrying %s/%s',
+            attempt, max_attempts,
+        )
+        time.sleep(_HTTP_TRANSIENT_RETRY_DELAY_SEC * attempt)
+        attempt += 1
+        code, data, raw = _post_indicators(
+            root, key_id, api_key, verify_ssl, 'delete',
+            delete_body, security_level=security_level, iocs_source=False,
+        )
+        if code is not None and not (200 <= code < 300):
+            return False, f'indicators/delete HTTP {code}: {raw[:240]}'
+        ok, msg = _interpret_tim_reply(data, op='indicators/delete')
+    exists, verify_msg = _indicator_exists_by_value(
+        root, key_id, api_key, verify_ssl, value, security_level=security_level,
+    )
+    if not exists:
+        if ok:
+            return True, f'{msg}; verified_absent'
+        return True, f'removed_verified_absent (api: {msg})'
+    if ok:
+        logger.warning('Cortex XDR indicators/delete reported ok but verify still present: %s', verify_msg)
+        return False, f'{msg}; verify_still_present'
+    logger.warning('Cortex XDR indicators/delete failed: %s (%s)', msg, verify_msg)
+    return False, msg
 
 
 def _normalize_hash_value(value: str) -> str:
@@ -484,23 +650,47 @@ def _interpret_hash_exception_reply(data: Optional[dict[str, Any]], op: str) -> 
     return False, f'{op}: unexpected reply'
 
 
-def _attempt_insert_jsons(
+def _chunked(items: list[Any], size: int):
+    n = max(1, int(size or 1))
+    for i in range(0, len(items), n):
+        yield items[i:i + n]
+
+
+def _validation_error_indicators(data: Optional[dict[str, Any]]) -> set[str]:
+    """Return indicator values that failed validation in a Cortex TIM reply."""
+    out: set[str] = set()
+    if not isinstance(data, dict):
+        return out
+    rep = data.get('reply')
+    if not isinstance(rep, dict):
+        return out
+    for err in rep.get('validation_errors') or []:
+        if isinstance(err, dict):
+            ind = (err.get('indicator') or '').strip()
+            if ind:
+                out.add(ind)
+    return out
+
+
+def _attempt_insert_jsons_records(
     root: str,
     key_id: str,
     api_key: str,
     verify_ssl: bool,
-    rec: dict[str, Any],
+    records: list[dict[str, Any]],
     *,
     security_level: str = _DEFAULT_SECURITY_LEVEL,
 ) -> tuple[bool, str, Optional[dict[str, Any]], str]:
-    """Single ``insert_jsons`` call. Returns (ok, message, parsed_json, raw_text)."""
+    """``insert_jsons`` for one or more records. Returns (ok, message, parsed_json, raw_text)."""
+    if not records:
+        return True, 'insert_jsons_empty', {}, ''
     code, data, raw = _post_indicators(
         root,
         key_id,
         api_key,
         verify_ssl,
         'insert_jsons',
-        {'request_data': [rec], 'validate': True},
+        {'request_data': records, 'validate': True},
         security_level=security_level,
         iocs_source=True,
     )
@@ -510,6 +700,21 @@ def _attempt_insert_jsons(
     if ok and _looks_like_indicator_already_exists(data, raw):
         return False, f'insert_jsons duplicate: {msg}', data, raw
     return ok, msg, data, raw
+
+
+def _attempt_insert_jsons(
+    root: str,
+    key_id: str,
+    api_key: str,
+    verify_ssl: bool,
+    rec: dict[str, Any],
+    *,
+    security_level: str = _DEFAULT_SECURITY_LEVEL,
+) -> tuple[bool, str, Optional[dict[str, Any]], str]:
+    """Single-record ``insert_jsons`` (wrapper)."""
+    return _attempt_insert_jsons_records(
+        root, key_id, api_key, verify_ssl, [rec], security_level=security_level,
+    )
 
 
 def _push_insert_jsons(
@@ -532,7 +737,12 @@ def _push_insert_jsons(
         root, key_id, api_key, verify_ssl, rec, security_level=security_level,
     )
     if ok:
-        return True, msg
+        exists, verify_msg = _indicator_exists_by_value(
+            root, key_id, api_key, verify_ssl, value, security_level=security_level,
+        )
+        if exists:
+            return True, f'{msg}; verified_present'
+        return False, f'{msg}; verify_not_found ({verify_msg})'
     if not _looks_like_indicator_already_exists(data, raw):
         logger.warning('Cortex XDR insert_jsons failed: %s', msg)
         return False, msg
@@ -550,25 +760,32 @@ def _push_insert_jsons(
         root, key_id, api_key, verify_ssl, rec_resync, security_level=security_level,
     )
     if ok2:
-        return True, f'reinsert_ok ({msg2})'
+        exists, verify_msg = _indicator_exists_by_value(
+            root, key_id, api_key, verify_ssl, value, security_level=security_level,
+        )
+        if exists:
+            return True, f'reinsert_ok ({msg2}); verified_present'
+        return False, f'reinsert_ok ({msg2}); verify_not_found ({verify_msg})'
     logger.warning('Cortex XDR re-insert after duplicate failed: %s', msg2)
     return False, f'reinsert_after_duplicate: {msg2}'
 
 
-def _hash_blocklist_add(
+def _hash_blocklist_add_many(
     root: str,
     key_id: str,
     api_key: str,
     verify_ssl: bool,
-    ioc: dict[str, Any],
-    hash_value: str,
+    hash_values: list[str],
     *,
+    comment: str = '',
     security_level: str = _DEFAULT_SECURITY_LEVEL,
 ) -> tuple[bool, str]:
-    cm = _tim_comment_from_context(ioc)
-    inner: dict[str, Any] = {'hash_list': [_normalize_hash_value(hash_value)]}
-    if cm:
-        inner['comment'] = cm
+    hashes = [_normalize_hash_value(h) for h in hash_values if (h or '').strip()]
+    if not hashes:
+        return True, 'hash_blocklist_empty'
+    inner: dict[str, Any] = {'hash_list': hashes}
+    if comment:
+        inner['comment'] = comment[:4000]
     code, data, raw = _post_v1(
         root,
         key_id,
@@ -583,16 +800,36 @@ def _hash_blocklist_add(
     return _interpret_hash_exception_reply(data, 'hash_blocklist')
 
 
-def _hash_blocklist_remove(
+def _hash_blocklist_add(
     root: str,
     key_id: str,
     api_key: str,
     verify_ssl: bool,
+    ioc: dict[str, Any],
     hash_value: str,
     *,
     security_level: str = _DEFAULT_SECURITY_LEVEL,
 ) -> tuple[bool, str]:
-    inner = {'hash_list': [_normalize_hash_value(hash_value)]}
+    return _hash_blocklist_add_many(
+        root, key_id, api_key, verify_ssl, [hash_value],
+        comment=_tim_comment_from_context(ioc),
+        security_level=security_level,
+    )
+
+
+def _hash_blocklist_remove_many(
+    root: str,
+    key_id: str,
+    api_key: str,
+    verify_ssl: bool,
+    hash_values: list[str],
+    *,
+    security_level: str = _DEFAULT_SECURITY_LEVEL,
+) -> tuple[bool, str]:
+    hashes = [_normalize_hash_value(h) for h in hash_values if (h or '').strip()]
+    if not hashes:
+        return True, 'hash_blocklist_remove_empty'
+    inner = {'hash_list': hashes}
     code, data, raw = _post_v1(
         root,
         key_id,
@@ -607,13 +844,400 @@ def _hash_blocklist_remove(
     return _interpret_hash_exception_reply(data, 'hash_blocklist_remove')
 
 
-def cortex_xdr_push_ioc_from_context(ioc: dict[str, Any]) -> tuple[bool, str]:
+def _hash_blocklist_remove(
+    root: str,
+    key_id: str,
+    api_key: str,
+    verify_ssl: bool,
+    hash_value: str,
+    *,
+    security_level: str = _DEFAULT_SECURITY_LEVEL,
+) -> tuple[bool, str]:
+    return _hash_blocklist_remove_many(
+        root, key_id, api_key, verify_ssl, [hash_value], security_level=security_level,
+    )
+
+
+def _delete_indicators_by_values(
+    root: str,
+    key_id: str,
+    api_key: str,
+    verify_ssl: bool,
+    values: list[str],
+    *,
+    security_level: str = _DEFAULT_SECURITY_LEVEL,
+) -> tuple[bool, str]:
+    """Delete indicators via ``indicators/delete`` (one or many values in EQ filter)."""
+    vals = [(v or '').strip() for v in values if (v or '').strip()]
+    if not vals:
+        return True, 'indicators/delete_empty'
+    if len(vals) == 1:
+        return _delete_indicator_by_value(
+            root, key_id, api_key, verify_ssl, vals[0], security_level=security_level,
+        )
+    delete_body = {
+        'request_data': {
+            'filters': [
+                {'field': 'indicator', 'operator': 'EQ', 'value': vals},
+            ],
+        },
+    }
+    code, data, raw = _post_indicators(
+        root, key_id, api_key, verify_ssl, 'delete',
+        delete_body, security_level=security_level, iocs_source=False,
+    )
+    if code is not None and not (200 <= code < 300):
+        return False, f'indicators/delete HTTP {code}: {raw[:240]}'
+    ok, msg = _interpret_tim_reply(data, op='indicators/delete')
+    still_present: list[str] = []
+    for val in vals:
+        exists, _ = _indicator_exists_by_value(
+            root, key_id, api_key, verify_ssl, val, security_level=security_level,
+        )
+        if exists:
+            still_present.append(val)
+    if not still_present:
+        if ok:
+            return True, f'{msg}; verified_absent'
+        return True, f'removed_verified_absent (api: {msg})'
+    if ok:
+        detail = ', '.join(still_present[:3])[:120]
+        return False, f'{msg}; verify_still_present: {detail}'
+    logger.warning('Cortex XDR batch indicators/delete failed: %s', msg)
+    return False, msg
+
+
+def _downstream_record_cortex_successes(ctxs: list[dict[str, Any]]) -> None:
+    if not ctxs:
+        return
+    try:
+        name = (_get_setting('cortex_xdr_display_name') or '').strip() or 'Cortex XDR'
+        from utils.downstream import record_api_distribution_events
+
+        record_api_distribution_events(
+            ctxs, vendor_id='cortex', display_name=name, api_source='cortex_xdr',
+        )
+    except Exception:
+        logger.debug('Cortex downstream distribution record failed', exc_info=True)
+
+
+def _cortex_push_create_chunk(
+    chunk: list[dict[str, Any]],
+    *,
+    root: str,
+    key_id: str,
+    api_key: str,
+    verify_ssl: bool,
+    security_level: str,
+    hash_blocklist: bool,
+) -> tuple[int, int, list[tuple[dict[str, Any], str]]]:
+    """
+    Push a chunk of create contexts. Returns (ok_count, fail_count, [(ctx, err_msg), ...]).
+    Falls back to per-IOC push when the batch call fails.
+    """
+    pairs: list[tuple[dict[str, Any], dict[str, Any], str]] = []
+    skipped = 0
+    for ctx in chunk:
+        rec = _ioc_to_tim_record(ctx)
+        if rec is None:
+            skipped += 1
+            continue
+        pairs.append((ctx, rec, (ctx.get('value') or '').strip()))
+
+    if not pairs:
+        return 0, 0, []
+
+    records = [p[1] for p in pairs]
+    ok, msg, data, raw = _attempt_insert_jsons_records(
+        root, key_id, api_key, verify_ssl, records, security_level=security_level,
+    )
+
+    failed: list[tuple[dict[str, Any], str]] = []
+    err_inds = _validation_error_indicators(data) if ok else set()
+
+    if ok and not err_inds:
+        succeeded_ctx = [p[0] for p in pairs]
+        for ctx, _rec, value in pairs:
+            if not value:
+                continue
+            exists, verify_msg = _indicator_exists_by_value(
+                root, key_id, api_key, verify_ssl, value, security_level=security_level,
+            )
+            if not exists:
+                failed.append((ctx, f'verify_not_found ({verify_msg})'))
+        if hash_blocklist:
+            hash_ctxs = [c for c in succeeded_ctx if (c.get('type') or '').strip() == 'Hash']
+            for hb_chunk in _chunked(hash_ctxs, CORTEX_HASH_BLOCKLIST_BATCH_SIZE):
+                hashes = [(c.get('value') or '').strip() for c in hb_chunk]
+                comment = _attribution_label()
+                hb_ok, hb_msg = _hash_blocklist_add_many(
+                    root, key_id, api_key, verify_ssl, hashes, comment=comment,
+                    security_level=security_level,
+                )
+                if not hb_ok:
+                    for c in hb_chunk:
+                        failed.append((c, f'hash_blocklist: {hb_msg}'))
+        failed_ids = {id(c) for c, _ in failed}
+        ok_n = sum(1 for c in succeeded_ctx if id(c) not in failed_ids)
+        _downstream_record_cortex_successes([c for c in succeeded_ctx if id(c) not in failed_ids])
+        return ok_n, len(failed), failed
+
+    if ok and err_inds:
+        retry_pairs = [p for p in pairs if p[2] in err_inds]
+        ok_pairs = [p for p in pairs if p[2] not in err_inds]
+        ok_n = len(ok_pairs)
+        for ctx, rec, value in retry_pairs:
+            one_ok, one_msg = _push_insert_jsons(
+                root, key_id, api_key, verify_ssl, rec, value, security_level=security_level,
+            )
+            if one_ok:
+                ok_n += 1
+                if hash_blocklist and (ctx.get('type') or '').strip() == 'Hash':
+                    hb_ok, hb_msg = _hash_blocklist_add(
+                        root, key_id, api_key, verify_ssl, ctx, value, security_level=security_level,
+                    )
+                    if not hb_ok:
+                        failed.append((ctx, f'hash_blocklist: {hb_msg}'))
+            else:
+                failed.append((ctx, one_msg))
+        if hash_blocklist:
+            hash_ctxs = [p[0] for p in ok_pairs if (p[0].get('type') or '').strip() == 'Hash']
+            for hb_chunk in _chunked(hash_ctxs, CORTEX_HASH_BLOCKLIST_BATCH_SIZE):
+                hashes = [(c.get('value') or '').strip() for c in hb_chunk]
+                comment = _attribution_label()
+                hb_ok, hb_msg = _hash_blocklist_add_many(
+                    root, key_id, api_key, verify_ssl, hashes, comment=comment,
+                    security_level=security_level,
+                )
+                if not hb_ok:
+                    for c in hb_chunk:
+                        if id(c) not in {id(x) for x, _ in failed}:
+                            failed.append((c, f'hash_blocklist: {hb_msg}'))
+                            ok_n -= 1
+        failed_ids = {id(c) for c, _ in failed}
+        ok_ctxs: list[dict[str, Any]] = []
+        seen_ok: set[int] = set()
+        for p in ok_pairs:
+            if id(p[0]) not in failed_ids and id(p[0]) not in seen_ok:
+                seen_ok.add(id(p[0]))
+                ok_ctxs.append(p[0])
+        for ctx, _rec, _val in retry_pairs:
+            if id(ctx) not in failed_ids and id(ctx) not in seen_ok:
+                seen_ok.add(id(ctx))
+                ok_ctxs.append(ctx)
+        _downstream_record_cortex_successes(ok_ctxs)
+        return ok_n, len(failed), failed
+
+    # Batch failed — fall back per-IOC (handles duplicates via delete+reinsert).
+    logger.info(
+        'Cortex XDR batch insert_jsons failed (%s); falling back to per-IOC for %s item(s)',
+        msg, len(pairs),
+    )
+    ok_n = 0
+    for ctx, rec, value in pairs:
+        one_ok, one_msg = _push_insert_jsons(
+            root, key_id, api_key, verify_ssl, rec, value, security_level=security_level,
+        )
+        if one_ok:
+            ok_n += 1
+            if hash_blocklist and (ctx.get('type') or '').strip() == 'Hash':
+                hb_ok, hb_msg = _hash_blocklist_add(
+                    root, key_id, api_key, verify_ssl, ctx, value, security_level=security_level,
+                )
+                if not hb_ok:
+                    failed.append((ctx, f'hash_blocklist: {hb_msg}'))
+        else:
+            failed.append((ctx, one_msg))
+    ok_ctxs = [ctx for ctx, _rec, _val in pairs if id(ctx) not in {id(c) for c, _ in failed}]
+    _downstream_record_cortex_successes(ok_ctxs)
+    return ok_n, len(failed), failed
+
+
+def _cortex_push_remove_chunk(
+    chunk: list[dict[str, Any]],
+    *,
+    root: str,
+    key_id: str,
+    api_key: str,
+    verify_ssl: bool,
+    security_level: str,
+    hash_blocklist: bool,
+) -> tuple[int, int, list[tuple[dict[str, Any], str]]]:
+    """Push a chunk of remove contexts."""
+    failed: list[tuple[dict[str, Any], str]] = []
+    values: list[str] = []
+    hash_values: list[str] = []
+    valid: list[dict[str, Any]] = []
+    for ctx in chunk:
+        value = (str(ctx.get('value') or '')).strip()
+        if not value:
+            failed.append((ctx, 'remove_missing_value'))
+            continue
+        valid.append(ctx)
+        values.append(value)
+        if hash_blocklist and (ctx.get('type') or '').strip() == 'Hash':
+            hash_values.append(value)
+
+    if not values:
+        return 0, len(failed), failed
+
+    ok, msg = _delete_indicators_by_values(
+        root, key_id, api_key, verify_ssl, values, security_level=security_level,
+    )
+    if not ok:
+        ok_n = 0
+        for ctx in valid:
+            one_ok, one_msg = _cortex_xdr_push_ioc_from_context_inner(ctx)
+            if one_ok:
+                ok_n += 1
+            else:
+                failed.append((ctx, one_msg))
+        return ok_n, len(failed), failed
+
+    for ctx in valid:
+        val = (ctx.get('value') or '').strip()
+        if not val:
+            continue
+        exists, verify_msg = _indicator_exists_by_value(
+            root, key_id, api_key, verify_ssl, val, security_level=security_level,
+        )
+        if exists:
+            failed.append((ctx, f'verify_still_present ({verify_msg})'))
+
+    if hash_blocklist and hash_values:
+        hb_set = set(hash_values)
+        for hb_chunk in _chunked(hash_values, CORTEX_HASH_BLOCKLIST_BATCH_SIZE):
+            hb_ok, hb_msg = _hash_blocklist_remove_many(
+                root, key_id, api_key, verify_ssl, hb_chunk, security_level=security_level,
+            )
+            if not hb_ok:
+                for ctx in valid:
+                    val = (ctx.get('value') or '').strip()
+                    if val in hb_chunk and val in hb_set:
+                        failed.append((ctx, f'hash_blocklist_remove: {hb_msg}'))
+    failed_ids = {id(c) for c, _ in failed}
+    ok_n = sum(1 for c in valid if id(c) not in failed_ids)
+    ok_ctxs = [c for c in valid if id(c) not in failed_ids]
+    if ok_ctxs:
+        try:
+            name = (_get_setting('cortex_xdr_display_name') or '').strip() or 'Cortex XDR'
+            from utils.downstream import mark_api_distribution_removed
+            mark_api_distribution_removed(
+                ok_ctxs, vendor_id='cortex', display_name=name, api_source='cortex_xdr',
+            )
+        except Exception:
+            logger.debug('Cortex downstream distribution remove mark failed', exc_info=True)
+    return ok_n, len(failed), failed
+
+
+def cortex_xdr_push_contexts_batch(
+    contexts: list[dict[str, Any]],
+    *,
+    from_retry: bool = False,
+) -> dict[str, Any]:
+    """
+    Push many IOC lifecycle events to Cortex XDR using batched API calls.
+
+    Create: ``indicators/insert_jsons`` with up to ``CORTEX_INSERT_BATCH_SIZE`` records.
+    Remove: ``indicators/delete`` with multiple indicator values per request.
+    Hash blocklist: batched ``hash_list`` where enabled.
+    """
+    if not contexts:
+        return {'success': True, 'processed': 0, 'succeeded': 0, 'failed': 0}
+    if not cortex_xdr_enabled():
+        return {'success': True, 'processed': 0, 'succeeded': 0, 'failed': 0, 'message': 'disabled'}
+
+    g = cortex_xdr_settings_dict()
+    base = sanitize_cortex_base_url(g.get('cortex_xdr_base_url') or '')
+    key_id = (g.get('cortex_xdr_api_key_id') or '').strip()
+    api_key = (g.get('cortex_xdr_api_key') or '').strip()
+    verify_ssl = (g.get('cortex_xdr_verify_ssl', 'true') or 'true').strip().lower() in ('true', '1', 'yes')
+    security_level = _normalize_security_level(g.get('cortex_xdr_security_level'))
+    if not base or not key_id or not api_key:
+        return {'success': False, 'processed': len(contexts), 'succeeded': 0, 'failed': len(contexts), 'message': 'missing_config'}
+
+    root = _public_api_v1_root(base)
+    hash_bl = _hash_blocklist_enabled(g)
+    creates: list[dict[str, Any]] = []
+    removes: list[dict[str, Any]] = []
+    for ctx in contexts:
+        if not isinstance(ctx, dict):
+            continue
+        action = (str(ctx.get('action') or 'create')).strip().lower()
+        if action == 'remove':
+            removes.append(ctx)
+        elif action == 'create':
+            creates.append(ctx)
+
+    all_failed: list[tuple[dict[str, Any], str]] = []
+    succeeded = 0
+    kw = dict(
+        root=root, key_id=key_id, api_key=api_key, verify_ssl=verify_ssl,
+        security_level=security_level, hash_blocklist=hash_bl,
+    )
+
+    for chunk in _chunked(creates, CORTEX_INSERT_BATCH_SIZE):
+        ok_n, fail_n, failed = _cortex_push_create_chunk(chunk, **kw)
+        succeeded += ok_n
+        all_failed.extend(failed)
+        if BATCH_INTER_CHUNK_DELAY_SEC > 0:
+            time.sleep(BATCH_INTER_CHUNK_DELAY_SEC)
+
+    for chunk in _chunked(removes, CORTEX_DELETE_BATCH_SIZE):
+        ok_n, fail_n, failed = _cortex_push_remove_chunk(chunk, **kw)
+        succeeded += ok_n
+        all_failed.extend(failed)
+        if BATCH_INTER_CHUNK_DELAY_SEC > 0:
+            time.sleep(BATCH_INTER_CHUNK_DELAY_SEC)
+
+    failed = len(all_failed)
+    processed = len(creates) + len(removes)
+    overall_ok = failed == 0
+    summary_msg = f'batch ok={succeeded} fail={failed} total={processed}'
+    try:
+        from utils.integration_telemetry import (
+            record_vendor_push_attempt,
+            record_vendor_push_if_applicable,
+            vendor_batch_summary_message,
+        )
+
+        summary_msg = vendor_batch_summary_message(succeeded, failed, processed, all_failed)
+        record_vendor_push_attempt(
+            'cortex_xdr', data_kind='IOC', ok=overall_ok, message=summary_msg, count=processed,
+        )
+        if overall_ok:
+            record_vendor_push_if_applicable('cortex_xdr', True, summary_msg)
+    except Exception:
+        summary_msg = f'batch ok={succeeded} fail={failed} total={processed}'
+
+    if not from_retry and all_failed:
+        try:
+            from utils.cortex_xdr_retry import enqueue_cortex_xdr_retries
+
+            enqueue_cortex_xdr_retries(all_failed, get_setting=_get_setting)
+        except Exception:
+            logger.exception('Cortex XDR batch enqueue retry failed')
+
+    return {
+        'success': overall_ok,
+        'processed': processed,
+        'succeeded': succeeded,
+        'failed': failed,
+        'message': summary_msg,
+    }
+
+
+def cortex_xdr_push_ioc_from_context(
+    ioc: dict[str, Any],
+    *,
+    from_retry: bool = False,
+) -> tuple[bool, str]:
     """
     Push one IOC event using the documented IOC endpoints: ``indicators/insert_jsons`` on create
     and ``indicators/delete`` (filter-based) on revoke. For **Hash** IOCs only we additionally call
     Action Center ``hash_exceptions/blocklist`` (and ``.../remove`` on revoke).
 
-    ``Email`` and ``URL`` IOCs are skipped (no supported type on ``insert_jsons`` for these).
+    Supported ZIoCHub types: Domain, IP, Hash, URL, Email (mapped via ``_IOC_TYPE_MAP``).
     """
     ok, msg = _cortex_xdr_push_ioc_from_context_inner(ioc)
     try:
@@ -623,6 +1247,28 @@ def cortex_xdr_push_ioc_from_context(ioc: dict[str, Any]) -> tuple[bool, str]:
         record_vendor_push_if_applicable('cortex_xdr', ok, msg)
     except Exception:
         pass
+    if ok:
+        try:
+            name = (_get_setting('cortex_xdr_display_name') or '').strip() or 'Cortex XDR'
+            from utils.downstream import mark_api_distribution_removed, record_api_distribution_events
+            action = (str(ioc.get('action') or 'create')).strip().lower()
+            if action in ('remove', 'delete', 'revoke', 'expire_remove', 'delete_remove'):
+                mark_api_distribution_removed(
+                    [ioc], vendor_id='cortex', display_name=name, api_source='cortex_xdr',
+                )
+            else:
+                record_api_distribution_events(
+                    [ioc], vendor_id='cortex', display_name=name, api_source='cortex_xdr',
+                )
+        except Exception:
+            pass
+    if not ok and not from_retry and cortex_xdr_is_retriable_failure(msg):
+        try:
+            from utils.cortex_xdr_retry import enqueue_cortex_xdr_retry
+
+            enqueue_cortex_xdr_retry(ioc, msg, get_setting=_get_setting)
+        except Exception:
+            logger.exception('Cortex XDR enqueue retry failed')
     return ok, msg
 
 

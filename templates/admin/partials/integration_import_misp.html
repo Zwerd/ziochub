@@ -1,6 +1,7 @@
+{% from 'admin/partials/integration_form_macros.html' import integ_brand_heading %}
 <div id="import-sub-misp" class="import-sub-pane">
     <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
-        <h3 class="text-lg font-semibold accent-blue mb-4">MISP pull</h3>
+        {{ integ_brand_heading(integration_icons.misp_pull, 'MISP pull') }}
         <p class="text-secondary text-sm mb-6">Pull threat indicators from MISP into ZIoCHub. MISP push on IOC submit is under <strong class="text-primary">Push IOC → MISP push</strong>.</p>
 
         <form id="mispForm" class="space-y-4">

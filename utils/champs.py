@@ -231,70 +231,74 @@ def compute_ioc_points_by_method(
 
 
 SMART_COMMENT_MIN_LEN = 10
-SMART_DUPLICATE_THRESHOLD = 3
+SMART_BULK_METHODS = ('csv', 'txt', 'paste', 'import')
+
+
+def _smart_comment_bonus(comment: str) -> int:
+    """Return Smart Effort comment bonus by length (0 if too short)."""
+    comment = (comment or '').strip()
+    if not comment:
+        return 0
+    length = len(comment)
+    if length < SMART_COMMENT_MIN_LEN:
+        return 0
+    if length < 100:
+        return 1
+    if length < 300:
+        return 2
+    return 3
+
+
+def _normalize_campaign_id(campaign_id) -> str:
+    if campaign_id is None:
+        return ''
+    return str(campaign_id).strip()
 
 
 def _compute_smart_ioc_points(method, comment, campaign_id, analyst_key, day, comment_counts, tag_count=0, skip_tag_bonus=False):
     """
-    Smart Effort (#8) IOC scoring.
-    Single submit: 2 base. Bulk: 1 base.
-    Comment bonus (if not duplicated 3+ times in same batch/day):
-      - <10 chars: 0
-      - 10-99 chars: +1
-      - 100-299 chars: +2
-      - >=300 chars: +3
+    Smart Effort (#8) IOC scoring for single submissions.
+    Single submit: 2 base.
+    Comment bonus by length: 10-99 +1, 100-299 +2, 300+ +3.
     +1 for campaign link.
-    Tag bonus: for single submit, per-row (2 tags +1, 3+ +2). For bulk, tag bonus is applied
-    once per batch per (analyst, day) as distinct-tag count in compute_analyst_scores, so skip here when skip_tag_bonus.
-    Range: 1 (lazy bulk) up to ~8 (single + long comment + campaign + tags).
+    Tag bonus per row: 2 tags +1, 3+ +2.
+    Range: 2 up to ~8.
     """
-    is_bulk = method in ('csv', 'txt', 'paste', 'import')
-    pts = 1 if is_bulk else IOC_DEFAULT
-    comment = (comment or '').strip()
-    if comment:
-        length = len(comment)
-        is_dup = False
-        if is_bulk and day:
-            key = analyst_key + '|' + str(day)
-            is_dup = comment_counts.get(key, {}).get(comment, 0) >= SMART_DUPLICATE_THRESHOLD
-        if not is_dup:
-            bonus = 0
-            if length >= SMART_COMMENT_MIN_LEN:
-                if length < 100:
-                    bonus = 1
-                elif length < 300:
-                    bonus = 2
-                else:
-                    bonus = 3
-            pts += bonus
-    if campaign_id:
+    pts = IOC_DEFAULT
+    pts += _smart_comment_bonus(comment)
+    if _normalize_campaign_id(campaign_id):
         pts += 1
     if not skip_tag_bonus:
         if tag_count >= 3:
             pts += 2
         elif tag_count >= 2:
             pts += 1
-    # Per doc: minimum 1, maximum ~8; never 0 for any IOC submit
     return max(1, min(8, pts))
 
 
-def _build_smart_comment_counts(ioc_rows):
+def _smart_bulk_group_key(r):
+    """Group bulk IOC rows by analyst+day+metadata so identical effort scores once."""
+    analyst = (r.get('analyst') or 'unknown').lower()
+    d = _to_date(r['created_at'])
+    comment = (r.get('comment') or '').strip()
+    tags = tuple(sorted(_tags_set_from_row(r)))
+    campaign = _normalize_campaign_id(r.get('campaign_id'))
+    return (analyst, d, comment, tags, campaign)
+
+
+def _compute_smart_bulk_group_points(comment, campaign_id, tags_set):
     """
-    Pre-scan IOC rows to count comment occurrences per analyst+day for bulk submissions.
-    Returns nested dict: { 'analyst|date': { comment_text: count } }.
-    ioc_rows: iterable of dicts with keys 'analyst', 'created_at', 'comment', 'submission_method'.
+    Smart Effort (#8) scoring for one bulk metadata group (many IOCs, same comment/tags/campaign).
+    Base 1 per group; comment bonus once; +1 campaign; +1 per distinct tag in the group.
+    Example: 500 IOCs, one comment, two tags -> 1 + 1 + 2 = 4 (not 500+).
     """
-    counts = defaultdict(lambda: defaultdict(int))
-    for r in ioc_rows:
-        method = r.get('submission_method') or 'single'
-        if method == 'single':
-            continue
-        d = _to_date(r['created_at'])
-        c = (r.get('comment') or '').strip()
-        if d and c:
-            a = (r.get('analyst') or 'unknown').lower()
-            counts[a + '|' + str(d)][c] += 1
-    return counts
+    pts = 1
+    pts += _smart_comment_bonus(comment)
+    if _normalize_campaign_id(campaign_id):
+        pts += 1
+    if tags_set:
+        pts += len(tags_set)
+    return max(1, min(8, pts))
 
 
 def _tag_count_from_row(r):
@@ -332,23 +336,14 @@ def _tags_set_from_row(r):
 def _score_ioc_rows(ioc_rows, scoring_method, comment_counts=None):
     """
     Score a list of IOC row dicts. Returns list of (analyst, date, points, user_id) tuples.
-    For Smart Effort: bulk rows get no per-row tag bonus (distinct-tag bonus added in compute_analyst_scores).
+    Smart Effort (#8): bulk rows with identical metadata (comment/tags/campaign) score once per group.
     """
     smart = scoring_method == SCORING_SMART
-    results = []
-    for r in ioc_rows:
-        analyst = (r.get('analyst') or 'unknown').lower()
-        d = _to_date(r['created_at'])
-        if smart:
-            comment = (r.get('comment') or '').strip()
-            method = r.get('submission_method') or 'single'
-            tag_count = _tag_count_from_row(r)
-            skip_tag_bonus = method in ('csv', 'txt', 'paste', 'import')
-            pts = _compute_smart_ioc_points(
-                method, comment, r.get('campaign_id'), analyst, d, comment_counts or {},
-                tag_count=tag_count, skip_tag_bonus=skip_tag_bonus,
-            )
-        else:
+    if not smart:
+        results = []
+        for r in ioc_rows:
+            analyst = (r.get('analyst') or 'unknown').lower()
+            d = _to_date(r['created_at'])
             pts = compute_ioc_points_by_method(
                 scoring_method,
                 r.get('type'),
@@ -357,7 +352,31 @@ def _score_ioc_rows(ioc_rows, scoring_method, comment_counts=None):
                 tags=r.get('tags'),
                 ticket_id=r.get('ticket_id'),
             )
+            results.append((analyst, d, pts, r.get('user_id')))
+        return results
+
+    results = []
+    bulk_groups = {}
+    for r in ioc_rows:
+        method = (r.get('submission_method') or 'single').lower()
+        if method in SMART_BULK_METHODS:
+            key = _smart_bulk_group_key(r)
+            if key not in bulk_groups:
+                bulk_groups[key] = r
+            continue
+        analyst = (r.get('analyst') or 'unknown').lower()
+        d = _to_date(r['created_at'])
+        tag_count = _tag_count_from_row(r)
+        pts = _compute_smart_ioc_points(
+            method, r.get('comment'), r.get('campaign_id'), analyst, d, comment_counts or {},
+            tag_count=tag_count, skip_tag_bonus=False,
+        )
         results.append((analyst, d, pts, r.get('user_id')))
+
+    for key, sample in bulk_groups.items():
+        analyst, d, comment, tags, campaign = key
+        pts = _compute_smart_bulk_group_points(comment, campaign, set(tags))
+        results.append((analyst, d, pts, sample.get('user_id')))
     return results
 
 
@@ -883,8 +902,7 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
         rd['analyst'] = a
         rd['user_id'] = username_to_id.get(a.lower())
 
-    comment_counts = _build_smart_comment_counts(ioc_dicts) if smart else {}
-    scored = _score_ioc_rows(ioc_dicts, scoring_method, comment_counts)
+    scored = _score_ioc_rows(ioc_dicts, scoring_method)
 
     streak_ref = end_dt.date() if end_dt else today
     def _apply_decay(day_key, points) -> int:
@@ -910,31 +928,17 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
             pts = 10 if matches else 1
             scored.append((analyst, d, pts, r.get('user_id')))
 
+    for rd in ioc_dicts:
+        a = (rd.get('analyst') or 'unknown').lower()
+        analyst_iocs[a] += 1
+
     for analyst, d, pts, uid in scored:
         # Normalize to date (SQLite may return string); fallback to today so points always count
         day_key = (_ensure_date(d) if d is not None else None) or today
         analyst_daily[analyst][day_key] = analyst_daily[analyst].get(day_key, 0) + _apply_decay(day_key, pts)
         analyst_last[analyst] = max(analyst_last.get(analyst, day_key), day_key) if analyst_last.get(analyst) else day_key
-        analyst_iocs[analyst] += 1
         if uid:
             analyst_user_id[analyst] = uid
-
-    # Smart (#8) bulk: 1 point per distinct tag across the batch (analyst+day), not per row
-    if smart and ioc_dicts:
-        bulk_methods = ('csv', 'txt', 'paste', 'import')
-        batch_distinct_tags = defaultdict(lambda: set())
-        for r in ioc_dicts:
-            method = (r.get('submission_method') or 'single').lower()
-            if method not in bulk_methods:
-                continue
-            a = (r.get('analyst') or 'unknown').lower()
-            d = _to_date(r['created_at'])
-            day_key = (_ensure_date(d) if d is not None else None) or today
-            batch_distinct_tags[(a, day_key)].update(_tags_set_from_row(r))
-        for (a, day_key), tags_set in batch_distinct_tags.items():
-            if tags_set:
-                analyst_daily[a][day_key] = analyst_daily[a].get(day_key, 0) + len(tags_set)
-                analyst_last[a] = max(analyst_last.get(a, day_key), day_key) if analyst_last.get(a) else day_key
 
     # YARA points (per-rule quality 10-50, or YARA_DEFAULT if not set)
     yara_q = db.session.query(YaraRule.analyst, YaraRule.uploaded_at, YaraRule.quality_points, YaraRule.status, YaraRule.campaign_id)
@@ -1541,17 +1545,16 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
 
     if smart:
         # Smart: need comment/submission_method - load only last 30 days for this analyst
-        ioc_detail_cols = [IOC.created_at, IOC.type, IOC.campaign_id, IOC.comment, IOC.submission_method]
+        ioc_detail_cols = [IOC.created_at, IOC.type, IOC.campaign_id, IOC.comment, IOC.submission_method, IOC.tags]
         raw_rows = db.session.query(*ioc_detail_cols).filter(
             func.lower(IOC.analyst) == analyst_lower,
             IOC.created_at >= start_dt
         ).all()
-        col_names = ['created_at', 'type', 'campaign_id', 'comment', 'submission_method']
+        col_names = ['created_at', 'type', 'campaign_id', 'comment', 'submission_method', 'tags']
         ioc_dicts = [dict(zip(col_names, r)) for r in raw_rows]
         for rd in ioc_dicts:
             rd['analyst'] = analyst_lower
-        comment_counts = _build_smart_comment_counts(ioc_dicts)
-        scored = _score_ioc_rows(ioc_dicts, scoring_method, comment_counts)
+        scored = _score_ioc_rows(ioc_dicts, scoring_method)
         for _a, d, pts, _uid in scored:
             day_key = _ensure_date(d)
             if day_key:

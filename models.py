@@ -175,6 +175,53 @@ class SanityExclusion(db.Model):
     __table_args__ = (UniqueConstraint('value', 'ioc_type', 'anomaly_type', name='u_sanity_excl_key'),)
 
 
+class DownstreamSystem(db.Model):
+    """Admin-defined downstream consumer (firewall, SIEM, etc.) identified by client IP on feed/TAXII pulls."""
+    __tablename__ = 'downstream_systems'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(255), nullable=False)
+    vendor_id = db.Column(db.String(64), nullable=False, default='generic')
+    client_ip = db.Column(db.String(45), nullable=False)
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+    last_feed_correlated_at = db.Column(db.DateTime, nullable=True)
+    last_taxii_correlated_at = db.Column(db.DateTime, nullable=True)
+    is_custom_vendor = db.Column(db.Boolean, nullable=False, default=False)
+    custom_vendor_label = db.Column(db.String(255), nullable=True)
+    custom_icon_path = db.Column(db.String(512), nullable=True)  # under static/img/vendors/
+    created_at = db.Column(db.DateTime, default=_utcnow)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
+    __table_args__ = (
+        Index('ix_downstream_systems_client_ip', 'client_ip'),
+        Index('ix_downstream_systems_enabled', 'enabled'),
+    )
+
+
+class IocDownstreamEvent(db.Model):
+    """Per-IOC downstream coverage: feed/TAXII pull inference or confirmed API push."""
+    __tablename__ = 'ioc_downstream_events'
+    id = db.Column(db.Integer, primary_key=True)
+    ioc_type = db.Column(db.String(50), nullable=False)
+    ioc_value = db.Column(db.String(1024), nullable=False)
+    downstream_system_id = db.Column(db.Integer, db.ForeignKey('downstream_systems.id'), nullable=True)
+    channel = db.Column(db.String(16), nullable=False)  # feed | taxii | api
+    vendor_id = db.Column(db.String(64), nullable=False, default='generic')
+    display_name = db.Column(db.String(255), nullable=False)
+    api_source = db.Column(db.String(64), nullable=True)  # cortex_xdr | google_secops | ioc_push
+    feed_path = db.Column(db.String(512), nullable=True)
+    event_at = db.Column(db.DateTime, nullable=False, default=_utcnow)
+    # True = IOC likely still on downstream product; False = removed (feed/TAXII re-pull or API delete ok).
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=_utcnow)
+    downstream_system = db.relationship('DownstreamSystem', backref='events', lazy=True)
+    __table_args__ = (
+        Index('ix_ioc_downstream_events_type_value', 'ioc_type', 'ioc_value'),
+        UniqueConstraint(
+            'ioc_type', 'ioc_value', 'channel', 'downstream_system_id', 'api_source', 'display_name',
+            name='u_ioc_downstream_event_key',
+        ),
+    )
+
+
 class FeedSourceLastSeen(db.Model):
     """Last HTTP GET to /feed/* per client IP + path (for Connections panel)."""
     __tablename__ = 'feed_source_last_seen'
@@ -211,6 +258,10 @@ class YaraRule(db.Model):
     campaign_id = db.Column(db.Integer, db.ForeignKey('campaigns.id'), nullable=True)
     quality_points = db.Column(db.Integer, nullable=True)  # Champs: 10-50 by rule quality
     status = db.Column(db.String(32), nullable=False, default='approved')  # pending | approved | rejected
+    rejected_at = db.Column(db.DateTime, nullable=True)
+    rejected_by = db.Column(db.String(255), nullable=True)
+    rejection_reason = db.Column(db.Text, nullable=True)
+    rejection_seen_at = db.Column(db.DateTime, nullable=True)
     # SHA-256 of UTF-8 rule body; used to block duplicate uploads under different filenames
     content_sha256 = db.Column(db.String(64), nullable=True)
     __table_args__ = (

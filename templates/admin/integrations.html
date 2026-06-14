@@ -27,91 +27,106 @@
 </div>
 
 <div id="integ-tab-push-ioc" class="integ-top-pane hidden">
+{% from 'admin/partials/integration_form_macros.html' import integ_section, integ_yes_no, integ_verify_tls, integ_retry_panel, integ_callout_warn, integ_brand_heading %}
 <nav class="push-ioc-sub-tabs settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-4">
-    <button type="button" class="push-ioc-sub-btn settings-tab-btn active" data-tab="cortex-xdr">Cortex XDR</button>
-    <button type="button" class="push-ioc-sub-btn settings-tab-btn" data-tab="google-secops">Google SecOps</button>
-    <button type="button" class="push-ioc-sub-btn settings-tab-btn" data-tab="cisco-esa">Cisco ESA</button>
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn active flex items-center gap-2" data-tab="cortex-xdr">
+        <img src="{{ integration_icons.cortex_xdr }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+        <span>Cortex XDR</span>
+    </button>
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn flex items-center gap-2" data-tab="google-secops">
+        <img src="{{ integration_icons.google_secops }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+        <span>Google SecOps</span>
+    </button>
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn flex items-center gap-2" data-tab="cisco-esa">
+        <img src="{{ integration_icons.cisco_esa }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+        <span>Cisco ESA</span>
+    </button>
     <button type="button" class="push-ioc-sub-btn settings-tab-btn" data-tab="ioc-push">HTTP IOC push</button>
-    <button type="button" class="push-ioc-sub-btn settings-tab-btn" data-tab="misp-push">MISP push</button>
-    <button type="button" class="push-ioc-sub-btn settings-tab-btn" data-tab="opendxl">OpenDXL</button>
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn flex items-center gap-2" data-tab="misp-push">
+        <img src="{{ integration_icons.misp_push }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+        <span>MISP push</span>
+    </button>
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn flex items-center gap-2" data-tab="opendxl">
+        <img src="{{ integration_icons.opendxl }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+        <span>OpenDXL</span>
+    </button>
 </nav>
 
 <!-- Tab: Cisco ESA -->
 <div id="settings-tab-cisco-esa" class="settings-tab-pane hidden">
-    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
-        <h3 class="text-lg font-semibold accent-blue mb-4">Cisco ESA  -  content dictionary sync</h3>
-        <p class="text-secondary text-sm mb-4">ZIoCHub logs in to the appliance, then adds or removes dictionary words automatically when analysts submit or revoke IOCs (and on expiry if enabled). You only set the API URL, credentials, TLS option, and which dictionary on the ESA maps to which IOC type.</p>
-        <p class="text-secondary text-xs mb-6">Supported IOC types for ESA: <strong class="text-primary">Email</strong>, <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">URL</strong>  -  each row is one dictionary name (exactly as shown on the ESA) and one type. Other IOC types (e.g. Hash) are not sent to ESA.</p>
+    <div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+        <h3 class="text-lg font-semibold accent-blue mb-2 flex items-center gap-2">
+            <img src="{{ integration_icons.cisco_esa }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+            <span>Cisco ESA — content dictionary sync</span>
+        </h3>
+        <p class="text-secondary text-sm mb-4">ZIoCHub logs in to the appliance, then adds or removes dictionary words automatically when analysts submit or revoke IOCs (and on expiry if enabled).</p>
+        <p class="text-secondary text-xs mb-4">Supported IOC types: <strong class="text-primary">Email</strong>, <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">URL</strong>. Hash and other types are not sent to ESA.</p>
 
-        <form id="esaForm" class="space-y-4">
-            <div>
-                <label for="esa_enabled" class="block text-sm font-semibold text-secondary mb-1">Enable ESA dictionary sync</label>
-                <select id="esa_enabled" name="esa_enabled" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                    <option value="false" {% if settings.esa_enabled == 'false' %}selected{% endif %}>No</option>
-                    <option value="true" {% if settings.esa_enabled != 'false' %}selected{% endif %}>Yes</option>
-                </select>
+        <form id="esaForm" class="space-y-0">
+            {% call integ_section('General') %}
+            <div class="integ-form-grid integ-form-grid--2">
+                {{ integ_yes_no('esa_enabled', 'Enable outbound push', settings.esa_enabled, 'Sync dictionary words on IOC submit, revoke, and optional expiry cleanup.', default_on=true) }}
+                {{ integ_verify_tls('esa_verify_ssl', settings.esa_verify_ssl) }}
             </div>
-            <div>
-                <label for="esa_base_url" class="block text-sm font-semibold text-secondary mb-1">API base URL</label>
-                <input type="text" id="esa_base_url" name="esa_base_url" placeholder="https://esa.example.com:6080/esa/api/v2.0" value="{{ settings.esa_base_url }}"
-                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                <p class="text-secondary text-xs mt-1">No trailing slash. Must include <code class="px-0.5 rounded bg-white/10">/esa/api/v2.0</code> (or your appliance’s API root).</p>
+            {% endcall %}
+
+            {% call integ_section('Connection') %}
+            <div class="integ-field">
+                <label for="esa_base_url" class="integ-label">API base URL</label>
+                <input type="text" id="esa_base_url" name="esa_base_url" placeholder="https://esa.example.com:6080/esa/api/v2.0" value="{{ settings.esa_base_url }}" class="integ-input">
+                <p class="integ-hint">No trailing slash. Must include <code class="px-0.5 rounded bg-white/10">/esa/api/v2.0</code> (or your appliance’s API root).</p>
             </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                    <label for="esa_username" class="block text-sm font-semibold text-secondary mb-1">Username</label>
-                    <input type="text" id="esa_username" name="esa_username" autocomplete="off" value="{{ settings.esa_username }}"
-                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            <div class="integ-form-grid integ-form-grid--2">
+                <div class="integ-field">
+                    <label for="esa_username" class="integ-label">Username</label>
+                    <input type="text" id="esa_username" name="esa_username" autocomplete="off" value="{{ settings.esa_username }}" class="integ-input">
                 </div>
-                <div>
-                    <label for="esa_passphrase" class="block text-sm font-semibold text-secondary mb-1">Passphrase</label>
-                    <input type="password" id="esa_passphrase" name="esa_passphrase" placeholder="{% if settings.esa_passphrase %}••••••••{% endif %}" autocomplete="new-password"
-                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <div class="integ-field">
+                    <label for="esa_passphrase" class="integ-label">Passphrase</label>
+                    <input type="password" id="esa_passphrase" name="esa_passphrase" placeholder="{% if settings.esa_passphrase %}••••••••{% endif %}" autocomplete="new-password" class="integ-input">
                 </div>
             </div>
-            <div>
-                <label for="esa_verify_ssl" class="block text-sm font-semibold text-secondary mb-1">Verify TLS certificate</label>
-                <select id="esa_verify_ssl" name="esa_verify_ssl" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                    <option value="true" {% if settings.esa_verify_ssl != 'false' %}selected{% endif %}>Yes</option>
-                    <option value="false" {% if settings.esa_verify_ssl == 'false' %}selected{% endif %}>No</option>
-                </select>
-            </div>
-            <div>
-                <label for="esa_deployment_mode" class="block text-sm font-semibold text-secondary mb-1">API deployment level (Cisco cluster modes)</label>
-                <select id="esa_deployment_mode" name="esa_deployment_mode" class="w-full max-w-xl px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            <div class="integ-field">
+                <label for="esa_deployment_mode" class="integ-label">API deployment level (Cisco cluster modes)</label>
+                <select id="esa_deployment_mode" name="esa_deployment_mode" class="integ-select max-w-xl">
                     <option value="standalone" {% if settings.esa_deployment_mode == 'standalone' %}selected{% endif %}>Standalone  -  <code class="text-xs">device_type=esa</code> only</option>
                     <option value="cluster" {% if settings.esa_deployment_mode == 'cluster' %}selected{% endif %}>Cluster  -  add <code class="text-xs">mode=cluster</code></option>
                     <option value="group" {% if settings.esa_deployment_mode == 'group' %}selected{% endif %}>Group  -  <code class="text-xs">mode=group</code> + group name</option>
                     <option value="machine" {% if settings.esa_deployment_mode == 'machine' %}selected{% endif %}>Machine  -  <code class="text-xs">mode=machine</code> + host name</option>
                 </select>
-                <p class="text-secondary text-xs mt-1">Must match the Secure Email API Guide for your deployment. Dictionary add/remove and “Test connection” use the same query string.</p>
+                <p class="integ-hint">Must match the Secure Email API Guide for your deployment.</p>
             </div>
-            <div id="esaGroupNameWrap" class="{% if settings.esa_deployment_mode != 'group' %}hidden{% endif %}">
-                <label for="esa_group_name" class="block text-sm font-semibold text-secondary mb-1">Group name</label>
+            <div id="esaGroupNameWrap" class="integ-field{% if settings.esa_deployment_mode != 'group' %} hidden{% endif %}">
+                <label for="esa_group_name" class="integ-label">Group name</label>
                 <input type="text" id="esa_group_name" name="esa_group_name" value="{{ settings.esa_group_name }}"
                        class="w-full max-w-xl px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="As defined on the ESA for API group scope" autocomplete="off">
                 <p class="text-secondary text-xs mt-1">Required for <strong class="text-primary">Group</strong> mode (<code class="px-0.5 rounded bg-white/10 text-xs">group_name</code> query parameter).</p>
             </div>
-            <div id="esaHostNameWrap" class="{% if settings.esa_deployment_mode != 'machine' %}hidden{% endif %}">
-                <label for="esa_host_name" class="block text-sm font-semibold text-secondary mb-1">Host name</label>
+            <div id="esaHostNameWrap" class="integ-field{% if settings.esa_deployment_mode != 'machine' %} hidden{% endif %}">
+                <label for="esa_host_name" class="integ-label">Host name</label>
                 <input type="text" id="esa_host_name" name="esa_host_name" value="{{ settings.esa_host_name }}"
                        class="w-full max-w-xl px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="Target appliance hostname for API" autocomplete="off">
                 <p class="text-secondary text-xs mt-1">Required for <strong class="text-primary">Machine</strong> mode (<code class="px-0.5 rounded bg-white/10 text-xs">host_name</code> query parameter).</p>
             </div>
-            <div>
-                <label for="esa_skip_misp_sync" class="block text-sm font-semibold text-secondary mb-1">Skip IOCs submitted by MISP sync user</label>
-                <select id="esa_skip_misp_sync" name="esa_skip_misp_sync" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                    <option value="true" {% if settings.esa_skip_misp_sync != 'false' %}selected{% endif %}>Yes (recommended)</option>
-                    <option value="false" {% if settings.esa_skip_misp_sync == 'false' %}selected{% endif %}>No</option>
-                </select>
-            </div>
-            <div>
-                <label for="esa_cleanup_on_expire" class="block text-sm font-semibold text-secondary mb-1">Remove from ESA when IOC expires (cleaner)</label>
-                <select id="esa_cleanup_on_expire" name="esa_cleanup_on_expire" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                    <option value="true" {% if settings.esa_cleanup_on_expire != 'false' %}selected{% endif %}>Yes</option>
-                    <option value="false" {% if settings.esa_cleanup_on_expire == 'false' %}selected{% endif %}>No</option>
-                </select>
-                <p class="text-secondary text-xs mt-1">Requires <code class="px-0.5 rounded bg-white/10">cleaner.py</code> / systemd timer against the same database. If removal fails, the IOC is still deleted locally; check logs.</p>
+            {% endcall %}
+
+            {% call integ_section('Push options') %}
+            <div class="integ-form-grid integ-form-grid--2">
+                <div class="integ-field integ-field--compact">
+                    <label for="esa_skip_misp_sync" class="integ-label">Skip IOCs from MISP sync user</label>
+                    <select id="esa_skip_misp_sync" name="esa_skip_misp_sync" class="integ-select">
+                        <option value="true" {% if settings.esa_skip_misp_sync != 'false' %}selected{% endif %}>Yes (recommended)</option>
+                        <option value="false" {% if settings.esa_skip_misp_sync == 'false' %}selected{% endif %}>No</option>
+                    </select>
+                </div>
+                <div class="integ-field integ-field--compact">
+                    <label for="esa_cleanup_on_expire" class="integ-label">Remove from ESA when IOC expires</label>
+                    <select id="esa_cleanup_on_expire" name="esa_cleanup_on_expire" class="integ-select">
+                        <option value="true" {% if settings.esa_cleanup_on_expire != 'false' %}selected{% endif %}>Yes</option>
+                        <option value="false" {% if settings.esa_cleanup_on_expire == 'false' %}selected{% endif %}>No</option>
+                    </select>
+                    <p class="integ-hint">Requires <code class="px-0.5 rounded bg-white/10">cleaner.py</code> / systemd timer.</p>
+                </div>
             </div>
             <div>
                 <div class="flex items-center justify-between mb-2">
@@ -140,21 +155,52 @@
                     {% endfor %}
                 </div>
             </div>
-            <div class="flex flex-wrap gap-2 items-center">
-                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save ESA settings</button>
-                <button type="button" id="esaTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test connection</button>
+            {% endcall %}
+
+            {% call integ_section('Retry on failure') %}
+            {{ integ_retry_panel(
+                'Retry on failure',
+                'Re-queue failed dictionary add/remove after login or API transient errors.',
+                'esa',
+                'esa_retry_enabled', settings.esa_retry_enabled,
+                'esa_retry_interval_minutes', settings.esa_retry_interval_minutes or '15',
+                'esa_retry_max_attempts', settings.esa_retry_max_attempts or '3'
+            ) }}
+            {% endcall %}
+
+            <div class="integ-form-actions">
+                <button type="submit" class="integ-btn integ-btn--save">Save ESA settings</button>
+                <button type="button" id="esaTestBtn" class="integ-btn integ-btn--test">Test connection</button>
             </div>
         </form>
-        <div id="esaMessage" class="mt-4 hidden text-sm"></div>
-        <div id="esaTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto max-h-48"></div>
+        <div id="esaMessage" class="integ-message mt-4 hidden text-sm"></div>
+        <div id="esaTestLog" class="integ-test-log mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto max-h-48"></div>
     </div>
 </div>
 
-<!-- Tab: Cortex XDR (IOC API  -  planned wiring) -->
+<!-- Tab: Cortex XDR (IOC API) -->
 <div id="settings-tab-cortex-xdr" class="settings-tab-pane">
-    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
-        <h3 class="text-lg font-semibold accent-blue mb-2">Cortex XDR</h3>
-        <p class="text-secondary text-sm mb-4">Uses the documented Cortex XDR <strong class="text-primary">Platform API</strong> (same host as <code class="px-0.5 rounded bg-white/10 text-xs">https://api-…paloaltonetworks.com</code>): IOC management via <code class="px-0.5 rounded bg-white/10 text-xs">indicators/insert_jsons</code> (push) and <code class="px-0.5 rounded bg-white/10 text-xs">indicators/delete</code> (revoke), and for <strong class="text-primary">Hash</strong> IOCs only, optional Action Center <strong class="text-primary">file block list</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>). When <strong class="text-primary">Enable</strong> is Yes, outbound IOC events call <code class="px-0.5 rounded bg-white/10 text-xs">cortex_xdr_push_ioc_from_context</code> in the background. Supported types on push: <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">Hash</strong> (URL/Email are skipped).</p>
+    <div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+        <h3 class="text-lg font-semibold accent-blue mb-2 flex items-center gap-2">
+            <img src="{{ integration_icons.cortex_xdr }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+            <span>Cortex XDR</span>
+        </h3>
+        <p class="text-secondary text-sm mb-4">Uses the documented Cortex XDR <strong class="text-primary">Platform API</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">https://api-…paloaltonetworks.com</code>): <code class="px-0.5 rounded bg-white/10 text-xs">indicators/insert_jsons</code> (push) and <code class="px-0.5 rounded bg-white/10 text-xs">indicators/delete</code> (revoke). Optional <strong class="text-primary">Hash</strong> file block list via <code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>. When <strong class="text-primary">Enable</strong> is Yes, outbound IOC events run in the background.</p>
+
+        {{ integ_callout_warn('Supported IOC types — XDR console vs ZIoCHub API', '
+        <p>ZIoCHub pushes via <code class="px-0.5 rounded bg-white/10 text-xs">POST /public_api/v1/indicators/insert_jsons</code>. Palo Alto&apos;s published enum lists <code class="px-0.5 rounded bg-white/10 text-xs">HASH</code>, <code class="px-0.5 rounded bg-white/10 text-xs">IP</code>, <code class="px-0.5 rounded bg-white/10 text-xs">DOMAIN_NAME</code>, and <code class="px-0.5 rounded bg-white/10 text-xs">FILENAME</code>; many tenants also accept <code class="px-0.5 rounded bg-white/10 text-xs">URL</code> and <code class="px-0.5 rounded bg-white/10 text-xs">EMAIL_ADDRESS</code> (verify with <code class="px-0.5 rounded bg-white/10 text-xs">scripts/cortex_xdr_ioc_probe.py</code>).</p>
+        <table class="integ-supported-types">
+            <thead><tr><th>ZIoCHub type</th><th>XDR console label</th><th>ZIoCHub push</th><th>API type</th></tr></thead>
+            <tbody class="text-primary/90">
+                <tr><td>Domain</td><td>Domain</td><td><strong class="text-emerald-400">Yes</strong></td><td><code class="px-0.5 rounded bg-white/10 text-xs">DOMAIN_NAME</code></td></tr>
+                <tr><td>IP</td><td>Destination IP</td><td><strong class="text-emerald-400">Yes</strong></td><td><code class="px-0.5 rounded bg-white/10 text-xs">IP</code></td></tr>
+                <tr><td>Hash</td><td>MD5 / SHA256</td><td><strong class="text-emerald-400">Yes</strong></td><td><code class="px-0.5 rounded bg-white/10 text-xs">HASH</code> (+ optional block list)</td></tr>
+                <tr><td>URL</td><td>URL</td><td><strong class="text-emerald-400">Yes</strong></td><td><code class="px-0.5 rounded bg-white/10 text-xs">URL</code></td></tr>
+                <tr><td>Email</td><td>Email Address</td><td><strong class="text-emerald-400">Yes</strong></td><td><code class="px-0.5 rounded bg-white/10 text-xs">EMAIL_ADDRESS</code></td></tr>
+            </tbody>
+        </table>
+        <p class="mt-2 text-xs">If push fails with validation errors for URL/Email, your tenant may require different API types — use <code class="px-0.5 rounded bg-white/10 text-xs">indicators/get</code> on a manually created rule to see the stored <code class="px-0.5 rounded bg-white/10 text-xs">type</code> value. References: <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-Platform-APIs/Get-Indicators-IOCs" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Get Indicators</a> · <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-REST-API/Insert-Simple-Indicators-JSON" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">insert_jsons</a>.</p>
+        ') }}
 
         <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary open:border-cyan-500/50">
             <summary class="cursor-pointer font-semibold text-cyan-300 select-none list-none [&amp;::-webkit-details-marker]:hidden flex items-center gap-2">
@@ -174,70 +220,80 @@
             <p class="mt-2 text-xs text-amber-200/90">If Test shows <strong>HTML 500</strong> (not JSON): usually <strong class="text-primary">Gunicorn worker timeout</strong> while waiting for Cortex (fix: <code class="px-0.5 rounded bg-white/10 text-xs">start.sh --timeout 120</code>, <code class="px-0.5 rounded bg-white/10 text-xs">systemctl restart ziochub</code>, Ctrl+F5). Use <strong class="text-primary">Check module</strong> first — must return JSON. Also fix <strong class="text-primary">API base URL</strong>: no spaces (e.g. not <code class="px-0.5 rounded bg-white/10 text-xs">https:// api-…</code>).</p>
         </details>
 
-        <form id="cortexXdrForm" class="space-y-4">
-            <div>
-                <label for="cortex_xdr_enabled" class="block text-sm font-semibold text-secondary mb-1">Enable Cortex XDR IOC outbound</label>
-                <select id="cortex_xdr_enabled" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                    <option value="false" {% if settings.cortex_xdr_enabled == 'false' %}selected{% endif %}>No</option>
-                    <option value="true" {% if settings.cortex_xdr_enabled == 'true' %}selected{% endif %}>Yes</option>
-                </select>
+        <form id="cortexXdrForm" class="space-y-0">
+            {% call integ_section('General') %}
+            <div class="integ-form-grid integ-form-grid--2">
+                {{ integ_yes_no('cortex_xdr_enabled', 'Enable outbound push', settings.cortex_xdr_enabled, 'When Yes, new and revoked IOCs are sent to Cortex XDR in the background.') }}
+                {{ integ_verify_tls('cortex_xdr_verify_ssl', settings.cortex_xdr_verify_ssl) }}
             </div>
-            <div>
-                <label for="cortex_xdr_display_name" class="block text-sm font-semibold text-secondary mb-1">Display name (Feed Pulse)</label>
-                <input type="text" id="cortex_xdr_display_name" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="Cortex XDR" value="{{ settings.cortex_xdr_display_name or '' }}" autocomplete="off">
-                <p class="text-secondary text-xs mt-1">Shown in <strong class="text-primary">Feed Pulse → Connections → Push state</strong>. Leave empty for default label.</p>
+            <div class="integ-field">
+                <label for="cortex_xdr_display_name" class="integ-label">Display name (Feed Pulse)</label>
+                <input type="text" id="cortex_xdr_display_name" class="integ-input" placeholder="Cortex XDR" value="{{ settings.cortex_xdr_display_name or '' }}" autocomplete="off">
+                <p class="integ-hint">Shown in <strong class="text-primary">Feed Pulse → Connections → Push state</strong>. Leave empty for default label.</p>
             </div>
-            <div>
-                <label for="cortex_xdr_base_url" class="block text-sm font-semibold text-secondary mb-1">API base URL</label>
-                <input type="text" id="cortex_xdr_base_url" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="https://api-xx.paloaltonetworks.com" value="{{ settings.cortex_xdr_base_url }}" autocomplete="off">
-                <p class="text-secondary text-xs mt-1">HTTPS FQDN only (from API Keys screen), <strong class="text-primary">no spaces</strong>. ZIoCHub appends <code class="px-0.5 rounded bg-white/10 text-xs">/public_api/v1</code> automatically.</p>
+            {% endcall %}
+
+            {% call integ_section('Connection') %}
+            <div class="integ-field">
+                <label for="cortex_xdr_base_url" class="integ-label">API base URL</label>
+                <input type="text" id="cortex_xdr_base_url" class="integ-input" placeholder="https://api-xx.paloaltonetworks.com" value="{{ settings.cortex_xdr_base_url }}" autocomplete="off">
+                <p class="integ-hint">HTTPS FQDN only (from API Keys screen), <strong class="text-primary">no spaces</strong>. ZIoCHub appends <code class="px-0.5 rounded bg-white/10 text-xs">/public_api/v1</code> automatically.</p>
             </div>
-            <div>
-                <label for="cortex_xdr_api_key_id" class="block text-sm font-semibold text-secondary mb-1">API key ID</label>
-                <input type="text" id="cortex_xdr_api_key_id" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" value="{{ settings.cortex_xdr_api_key_id }}" autocomplete="off">
-                <p class="text-secondary text-xs mt-1">Numeric/string ID from Cortex → API Keys (pairs with the secret below).</p>
+            <div class="integ-field">
+                <label for="cortex_xdr_api_key_id" class="integ-label">API key ID</label>
+                <input type="text" id="cortex_xdr_api_key_id" class="integ-input" value="{{ settings.cortex_xdr_api_key_id }}" autocomplete="off">
+                <p class="integ-hint">Numeric/string ID from Cortex → API Keys (pairs with the secret below).</p>
             </div>
-            <div>
-                <label for="cortex_xdr_api_key" class="block text-sm font-semibold text-secondary mb-1">API key secret</label>
-                <input type="password" id="cortex_xdr_api_key" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="{% if settings.cortex_xdr_api_key %}••••••••{% endif %}" autocomplete="new-password">
-                <p class="text-secondary text-xs mt-1">API key secret (shown once when the key is created). Leave blank on Save to keep the stored secret.</p>
+            <div class="integ-field">
+                <label for="cortex_xdr_api_key" class="integ-label">API key secret</label>
+                <input type="password" id="cortex_xdr_api_key" class="integ-input" placeholder="{% if settings.cortex_xdr_api_key %}••••••••{% endif %}" autocomplete="new-password">
+                <p class="integ-hint">Shown once when the key is created. Leave blank on Save to keep the stored secret.</p>
             </div>
-            <div>
-                <label for="cortex_xdr_security_level" class="block text-sm font-semibold text-secondary mb-1">Security level</label>
-                <select id="cortex_xdr_security_level" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            <div class="integ-field integ-field--compact">
+                <label for="cortex_xdr_security_level" class="integ-label">Security level</label>
+                <select id="cortex_xdr_security_level" class="integ-select">
                     <option value="advanced" {% if settings.cortex_xdr_security_level != 'standard' %}selected{% endif %}>Advanced (signed: nonce + timestamp + SHA256)</option>
                     <option value="standard" {% if settings.cortex_xdr_security_level == 'standard' %}selected{% endif %}>Standard (raw key in Authorization)</option>
                 </select>
-                <p class="text-secondary text-xs mt-1"><strong class="text-primary">Must match</strong> the value chosen for this API key in Cortex (Settings → Configurations → API Keys → Security Level). A mismatch returns HTTP 401 even if the ID + secret are correct. Advanced also requires the server clock to be within ~30s of UTC.</p>
+                <p class="integ-hint"><strong class="text-primary">Must match</strong> the API key in Cortex. Mismatch → HTTP 401. Advanced requires server clock within ~30s of UTC.</p>
             </div>
-            <div>
-                <label for="cortex_xdr_verify_ssl" class="block text-sm font-semibold text-secondary mb-1">Verify TLS</label>
-                <select id="cortex_xdr_verify_ssl" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                    <option value="true" {% if settings.cortex_xdr_verify_ssl != 'false' %}selected{% endif %}>Yes</option>
-                    <option value="false" {% if settings.cortex_xdr_verify_ssl == 'false' %}selected{% endif %}>No</option>
-                </select>
-            </div>
-            <div>
-                <label for="cortex_xdr_comment_mode" class="block text-sm font-semibold text-secondary mb-1">IOC comment in Cortex XDR</label>
-                <select id="cortex_xdr_comment_mode" class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            {% endcall %}
+
+            {% call integ_section('Push options') %}
+            <div class="integ-field">
+                <label for="cortex_xdr_comment_mode" class="integ-label">IOC comment in Cortex XDR</label>
+                <select id="cortex_xdr_comment_mode" class="integ-select max-w-md">
                     <option value="full" {% if settings.cortex_xdr_comment_mode != 'attribution' and settings.cortex_xdr_comment_mode != 'attribution_meta' %}selected{% endif %}>Full context (ticket, analyst, submission comment)</option>
                     <option value="attribution" {% if settings.cortex_xdr_comment_mode == 'attribution' %}selected{% endif %}>Attribution only (display name or ZIoCHub IOC)</option>
                     <option value="attribution_meta" {% if settings.cortex_xdr_comment_mode == 'attribution_meta' %}selected{% endif %}>Attribution + ticket/analyst (no submission comment)</option>
                 </select>
-                <p class="text-secondary text-xs mt-1">Sent with each IOC push and hash blocklist entry. After delete-and-re-insert (reactivation), <code class="px-0.5 rounded bg-white/10 text-xs">re-synced by ZIoCHub</code> is appended automatically.</p>
+                <p class="integ-hint">Sent with each IOC push and hash blocklist entry. After reactivation, <code class="px-0.5 rounded bg-white/10 text-xs">re-synced by ZIoCHub</code> is appended automatically.</p>
             </div>
             <div class="flex items-start gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-3">
                 <input type="checkbox" id="cortex_xdr_hash_blocklist_enabled" class="mt-1 h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600 focus:ring-cyan-500"
                        {% if settings.cortex_xdr_hash_blocklist_enabled != 'false' %}checked{% endif %}>
                 <div>
                     <label for="cortex_xdr_hash_blocklist_enabled" class="block text-sm font-semibold text-primary cursor-pointer">Send every Hash IOC to the Cortex XDR file block list</label>
-                    <p class="text-secondary text-xs mt-1">Requires Cortex outbound enabled. Adds to block list after TIM succeeds; removes on revoke. Public API path <code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>.</p>
+                    <p class="integ-hint">Adds to block list after TIM succeeds; removes on revoke. API path <code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>.</p>
                 </div>
             </div>
-            <div class="flex flex-wrap items-center gap-3">
-                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Cortex XDR settings</button>
-                <button type="button" id="cortexXdrPingBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-cyan-400 text-cyan-300 transition" title="Check ZIoCHub module load only (no Cortex call)">Check module</button>
-                <button type="button" id="cortexXdrTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test connection</button>
+            {% endcall %}
+
+            {% call integ_section('Retry on failure') %}
+            {{ integ_retry_panel(
+                'Retry on failure',
+                'Transient errors (e.g. <code class="px-0.5 rounded bg-white/10 text-xs">Temporary failure in name resolution</code>, <code class="px-0.5 rounded bg-white/10 text-xs">missing reply object</code>) are retried immediately up to <strong class="text-primary">Max retry attempts</strong>, then queued for automatic retry on the same limit.',
+                'cortex_xdr',
+                'cortex_xdr_retry_enabled', settings.cortex_xdr_retry_enabled,
+                'cortex_xdr_retry_interval_minutes', settings.cortex_xdr_retry_interval_minutes or '15',
+                'cortex_xdr_retry_max_attempts', settings.cortex_xdr_retry_max_attempts or '3'
+            ) }}
+            {% endcall %}
+
+            <div class="integ-form-actions">
+                <button type="submit" class="integ-btn integ-btn--save">Save Cortex XDR settings</button>
+                <button type="button" id="cortexXdrPingBtn" class="integ-btn integ-btn--secondary" title="Check ZIoCHub module load only (no Cortex call)">Check module</button>
+                <button type="button" id="cortexXdrTestBtn" class="integ-btn integ-btn--test">Test connection</button>
                 <label class="flex items-center gap-2 text-sm text-secondary cursor-pointer">
                     <input type="checkbox" id="cortexXdrTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
                     Ignore TLS for this test
@@ -252,8 +308,8 @@
 
 <!-- Tab: Google SecOps / Chronicle (Data Table IOC push + optional Ingestion probe) -->
 <div id="settings-tab-google-secops" class="settings-tab-pane hidden">
-    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
-        <h3 class="text-lg font-semibold accent-blue mb-2">Google SecOps (Chronicle SIEM)</h3>
+    <div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+        {{ integ_brand_heading(integration_icons.google_secops, 'Google SecOps (Chronicle SIEM)') }}
         <p class="text-secondary text-sm mb-4">Pushes outbound IOCs into a Google SecOps <strong class="text-primary">Data Table</strong> via the documented Chronicle REST API (<code class="px-0.5 rounded bg-white/10 text-xs">v1beta</code>): <code class="px-0.5 rounded bg-white/10 text-xs">dataTableRows:bulkCreate</code> on submit/reactivation, and <code class="px-0.5 rounded bg-white/10 text-xs">dataTableRows.list</code> + <code class="px-0.5 rounded bg-white/10 text-xs">delete</code> when an analyst revokes or deletes an IOC in ZIoCHub. When <strong class="text-primary">Enable</strong> is Yes, lifecycle events call <code class="px-0.5 rounded bg-white/10 text-xs">google_secops_push_ioc_from_context</code> in the background (same hook as Cortex XDR). Supported types: <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">URL</strong>, <strong class="text-primary">Hash</strong>, <strong class="text-primary">Email</strong>, <strong class="text-primary">YARA</strong>.</p>
 
         <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary open:border-cyan-500/50">
@@ -338,21 +394,22 @@
             <p class="mt-3 text-xs text-secondary">API references: <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest/v1beta/projects.locations.instances.dataTables.dataTableRows/bulkCreate" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">bulkCreate rows</a> · <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest/v1beta/projects.locations.instances.dataTables.dataTableRows/list" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">list rows</a> · <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest#rest_endpoints" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">REST endpoints by region</a>.</p>
         </details>
 
-        <form id="googleSecopsForm" class="space-y-4">
-            <div>
-                <label for="google_secops_enabled" class="block text-sm font-semibold text-secondary mb-1">Enable Google SecOps outbound</label>
-                <select id="google_secops_enabled" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                    <option value="false" {% if settings.google_secops_enabled == 'false' %}selected{% endif %}>No</option>
-                    <option value="true" {% if settings.google_secops_enabled == 'true' %}selected{% endif %}>Yes</option>
-                </select>
+        <form id="googleSecopsForm" class="space-y-0">
+            {% call integ_section('General') %}
+            <div class="integ-form-grid integ-form-grid--2">
+                {{ integ_yes_no('google_secops_enabled', 'Enable outbound push', settings.google_secops_enabled, 'When Yes, IOC lifecycle events write rows to the SecOps Data Table.') }}
+                {{ integ_verify_tls('google_secops_verify_ssl', settings.google_secops_verify_ssl) }}
             </div>
-            <div>
-                <label for="google_secops_display_name" class="block text-sm font-semibold text-secondary mb-1">Display name (Feed Pulse)</label>
-                <input type="text" id="google_secops_display_name" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="Google SecOps" value="{{ settings.google_secops_display_name or '' }}" autocomplete="off">
-                <p class="text-secondary text-xs mt-1">Shown in <strong class="text-primary">Feed Pulse → Connections → Push state</strong>. Leave empty for default label.</p>
+            <div class="integ-field">
+                <label for="google_secops_display_name" class="integ-label">Display name (Feed Pulse)</label>
+                <input type="text" id="google_secops_display_name" class="integ-input" placeholder="Google SecOps" value="{{ settings.google_secops_display_name or '' }}" autocomplete="off">
+                <p class="integ-hint">Shown in <strong class="text-primary">Feed Pulse → Connections → Push state</strong>. Leave empty for default label.</p>
             </div>
+            {% endcall %}
+
+            {% call integ_section('Connection') %}
             <div>
-                <span class="block text-sm font-semibold text-secondary mb-2">Connection mode</span>
+                <span class="integ-label">Connection mode</span>
                 <div class="flex flex-wrap gap-4 text-sm text-primary">
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input type="radio" name="google_secops_connection_mode" id="google_secops_connection_mode_direct" value="direct" class="h-4 w-4" {% if (settings.google_secops_connection_mode or 'direct') != 'apigee' %}checked{% endif %}>
@@ -365,9 +422,10 @@
                 </div>
                 <p class="text-secondary text-xs mt-1">Direct mode uses a service account JSON key against the native Chronicle host. Apigee mode routes the same Data Table API paths through your internal gateway.</p>
             </div>
-            <div>
-                <label for="google_secops_project_number" class="block text-sm font-semibold text-secondary mb-1">GCP project number</label>
-                <input type="text" id="google_secops_project_number" class="w-full max-w-xl px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="620593221632" value="{{ settings.google_secops_project_number }}" autocomplete="off">
+            <div class="integ-field">
+                <label for="google_secops_project_number" class="integ-label">GCP project number</label>
+                <input type="text" id="google_secops_project_number" class="integ-input max-w-xl font-mono text-sm" placeholder="123456789123" value="{{ settings.google_secops_project_number or '' }}" autocomplete="off" inputmode="numeric">
+                <p class="integ-hint">Numeric project number from GCP (not Project ID). Gray text above is an example only.</p>
             </div>
             <div>
                 <label for="google_secops_location" class="block text-sm font-semibold text-secondary mb-1">Location (region)</label>
@@ -451,18 +509,24 @@
                     <p class="text-secondary text-xs mt-1">Applied to Data Table and token requests (e.g. routing headers).</p>
                 </div>
             </div>
-            <div>
-                <label for="google_secops_verify_ssl" class="block text-sm font-semibold text-secondary mb-1">Verify TLS</label>
-                <select id="google_secops_verify_ssl" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                    <option value="true" {% if settings.google_secops_verify_ssl != 'false' %}selected{% endif %}>Yes</option>
-                    <option value="false" {% if settings.google_secops_verify_ssl == 'false' %}selected{% endif %}>No</option>
-                </select>
-            </div>
-            <div class="flex flex-wrap items-center gap-3">
-                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Google SecOps settings</button>
-                <button type="button" id="googleSecopsPingBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-cyan-400 text-cyan-300 transition" title="Import check only (no GCP call)">Check module</button>
-                <button type="button" id="googleSecopsConfigBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-cyan-400 text-cyan-300 transition" title="Validate saved + form fields locally">Check config</button>
-                <button type="button" id="googleSecopsTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test connection</button>
+            {% endcall %}
+
+            {% call integ_section('Retry on failure') %}
+            {{ integ_retry_panel(
+                'Retry on failure',
+                'Re-queue failed Data Table push/remove operations after transient network or auth errors.',
+                'google_secops',
+                'google_secops_retry_enabled', settings.google_secops_retry_enabled,
+                'google_secops_retry_interval_minutes', settings.google_secops_retry_interval_minutes or '15',
+                'google_secops_retry_max_attempts', settings.google_secops_retry_max_attempts or '3'
+            ) }}
+            {% endcall %}
+
+            <div class="integ-form-actions">
+                <button type="submit" class="integ-btn integ-btn--save">Save Google SecOps settings</button>
+                <button type="button" id="googleSecopsPingBtn" class="integ-btn integ-btn--secondary" title="Import check only (no GCP call)">Check module</button>
+                <button type="button" id="googleSecopsConfigBtn" class="integ-btn integ-btn--secondary" title="Validate saved + form fields locally">Check config</button>
+                <button type="button" id="googleSecopsTestBtn" class="integ-btn integ-btn--test">Test connection</button>
                 <label class="flex items-center gap-2 text-sm text-secondary cursor-pointer">
                     <input type="checkbox" id="googleSecopsTestRoundtrip" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
                     Include push/remove test row
@@ -498,13 +562,17 @@
 
 <div id="integ-tab-push-yara" class="integ-top-pane hidden">
 <nav class="push-yara-sub-tabs settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-4">
-    <button type="button" class="push-yara-sub-btn settings-tab-btn active" data-tab="trellix-ex-nx">Trellix EX/NX</button>
+    <button type="button" class="push-yara-sub-btn settings-tab-btn active flex items-center gap-2" data-tab="trellix-ex-nx">
+        <img src="{{ integration_icons.trellix }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+        <span>Trellix EX / CMS / NX</span>
+    </button>
     <button type="button" class="push-yara-sub-btn settings-tab-btn" data-tab="yara-push">HTTP YARA push</button>
 </nav>
 {% include 'admin/partials/integration_trellix.html' %}
 {% include 'admin/partials/automation_panel_yara_push.html' %}
 </div>
 
+<script src="{{ url_for('static', filename='js/admin-integration-retry.js') }}"></script>
 {% include 'admin/partials/integration_hub_scripts.html' %}
 {% include 'admin/partials/automation_panel_scripts.html' %}
 <script src="{{ url_for('static', filename='js/admin-integrations-hub.js') }}"></script>
@@ -542,7 +610,10 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                 cortex_xdr_verify_ssl: document.getElementById('cortex_xdr_verify_ssl').value,
                 cortex_xdr_hash_blocklist_enabled: document.getElementById('cortex_xdr_hash_blocklist_enabled').checked ? 'true' : 'false',
                 cortex_xdr_security_level: (document.getElementById('cortex_xdr_security_level') || {}).value || 'advanced',
-                cortex_xdr_comment_mode: (document.getElementById('cortex_xdr_comment_mode') || {}).value || 'full'
+                cortex_xdr_comment_mode: (document.getElementById('cortex_xdr_comment_mode') || {}).value || 'full',
+                cortex_xdr_retry_enabled: (document.getElementById('cortex_xdr_retry_enabled') || {}).value || 'true',
+                cortex_xdr_retry_interval_minutes: (document.getElementById('cortex_xdr_retry_interval_minutes') || {}).value || '15',
+                cortex_xdr_retry_max_attempts: (document.getElementById('cortex_xdr_retry_max_attempts') || {}).value || '3'
             };
             if (keyEl && keyEl.value && keyEl.value.length > 0) payload.cortex_xdr_api_key = keyEl.value;
             try {
@@ -848,6 +919,7 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             var msgEl = document.getElementById('googleSecopsMessage');
             msgEl.classList.add('hidden');
             var payload = googleSecopsSettingsFromForm();
+            Object.assign(payload, window.integRetryFields('google_secops'));
             payload.google_secops_enabled = document.getElementById('google_secops_enabled').value;
             payload.google_secops_display_name = document.getElementById('google_secops_display_name').value.trim();
             payload.google_secops_chronicle_api_base = (document.getElementById('google_secops_chronicle_api_base') || {}).value.trim();
@@ -1106,10 +1178,10 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
         e.preventDefault();
         var msgEl = document.getElementById('trellixExMessage');
         msgEl.classList.add('hidden');
-        var payload = {
+        var payload = Object.assign({
             trellix_ex_enabled: document.getElementById('trellix_ex_enabled').value,
             trellix_ex_targets: collectTrellixEx()
-        };
+        }, window.integRetryFields('trellix_ex'));
         try {
             var res = await fetch('/api/admin/settings', {
                 method: 'POST',
@@ -1458,10 +1530,10 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             var res = await fetch('/api/admin/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                body: JSON.stringify(Object.assign({
                     trellix_cms_enabled: document.getElementById('trellix_cms_enabled').value,
                     trellix_cms_targets: collectTrellixCms()
-                })
+                }, window.integRetryFields('trellix_cms')))
             });
             var data = await res.json();
             msgEl.classList.remove('hidden');
@@ -1818,11 +1890,11 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             var res = await fetch('/api/admin/settings', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
+                body: JSON.stringify(Object.assign({
                     automation_trellix_nx_enabled: document.getElementById('automation_trellix_nx_enabled').value,
                     automation_trellix_nx_targets: collectTrellixNx(),
-                    automation_fireeye_ignore_ssl: document.getElementById('automation_fireeye_ignore_ssl').checked ? 'true' : 'false'
-                })
+                    automation_fireeye_ignore_ssl: (document.getElementById('automation_fireeye_verify_ssl') || {}).value === 'true' ? 'false' : 'true'
+                }, window.integRetryFields('trellix_nx')))
             });
             var data = await res.json();
             msgEl.classList.remove('hidden');
@@ -1951,7 +2023,7 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
                     credentials: 'same-origin',
                     body: JSON.stringify({
                         appliances: appliances,
-                        ignore_ssl: document.getElementById('automation_fireeye_ignore_ssl').checked
+                        ignore_ssl: (document.getElementById('automation_fireeye_verify_ssl') || {}).value !== 'true'
                     })
                 });
                 var data = await res.json().catch(function() { return {}; });
@@ -2051,6 +2123,7 @@ function esaToggleDeploymentFields() {
             esa_cleanup_on_expire: document.getElementById('esa_cleanup_on_expire').value,
             esa_mappings: mappings
         };
+        Object.assign(payload, window.integRetryFields('esa'));
         if (passEl.value && passEl.value.length > 0) {
             payload.esa_passphrase = passEl.value;
         }

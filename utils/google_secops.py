@@ -31,9 +31,14 @@ import secrets
 import time
 from typing import Any, Optional
 
+from utils.http_identity import configure_requests_session, ensure_user_agent
+
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SEC = 90
+# Bulk outbound: multiple rows per dataTableRows:bulkCreate request.
+GOOGLE_SECOPS_BULK_CREATE_BATCH_SIZE = 100
+BATCH_INTER_CHUNK_DELAY_SEC = 0.15
 
 MALACHITE_INGESTION_SCOPE = 'https://www.googleapis.com/auth/malachite-ingestion'
 CHRONICLE_SCOPE = 'https://www.googleapis.com/auth/chronicle'
@@ -231,6 +236,7 @@ def _load_credentials(
         raise ValueError('Credentials JSON must be an object')
     creds = service_account.Credentials.from_service_account_info(info, scopes=_SCOPES)
     session = requests.Session()
+    configure_requests_session(session)
     session.verify = verify_ssl
     creds.refresh(Request(session=session))
     return creds, session
@@ -293,13 +299,14 @@ def _merge_custom_headers(base: dict[str, str], g: dict[str, str]) -> dict[str, 
     merged = dict(parse_google_secops_gateway_custom_headers(g))
     for key, value in base.items():
         merged[key] = value
-    return merged
+    return ensure_user_agent(merged)
 
 
 def _build_request_session_and_headers(g: dict[str, str], verify_ssl: bool) -> tuple[Any, dict[str, str]]:
     import requests
 
     session = requests.Session()
+    configure_requests_session(session)
     session.verify = verify_ssl
     mode = google_secops_connection_mode(g)
 
@@ -328,20 +335,194 @@ def _api_url(base: str, *path_segments: str) -> str:
     return base.rstrip('/') + '/' + '/'.join(path_segments)
 
 
-def google_secops_push_ioc_from_context(ioc: dict[str, Any]) -> tuple[bool, str]:
+def google_secops_push_contexts_batch(
+    contexts: list[dict[str, Any]],
+    *,
+    from_retry: bool = False,
+) -> dict[str, Any]:
+    """
+    Push many IOC events to Google SecOps using batched ``dataTableRows:bulkCreate``.
+
+    Removes still run per-IOC (list + delete). Creates are chunked (default 100 rows/request).
+    On batch failure, falls back to per-row create for that chunk.
+    """
+    if not contexts:
+        return {'success': True, 'processed': 0, 'succeeded': 0, 'failed': 0}
+    if not google_secops_enabled():
+        return {'success': True, 'processed': 0, 'succeeded': 0, 'failed': 0, 'message': 'disabled'}
+
+    g = google_secops_settings_dict()
+    parent = _data_table_parent(g)
+    base = _api_rest_base(g)
+    if not parent or not base:
+        return {
+            'success': True,
+            'processed': len(contexts),
+            'succeeded': 0,
+            'failed': 0,
+            'message': 'skipped_incomplete_data_table_config',
+        }
+
+    verify_ssl = (g.get('google_secops_verify_ssl', 'true') or 'true').strip().lower() in ('true', '1', 'yes')
+    try:
+        session, headers = _build_request_session_and_headers(g, verify_ssl)
+    except Exception as e:
+        return {'success': False, 'processed': len(contexts), 'succeeded': 0, 'failed': len(contexts), 'message': str(e)[:240]}
+
+    creates: list[tuple[dict[str, Any], str, str]] = []
+    removes: list[dict[str, Any]] = []
+    for ctx in contexts:
+        if not isinstance(ctx, dict):
+            continue
+        action = (str(ctx.get('action') or 'create')).strip().lower()
+        ioc_type = (str(ctx.get('type') or '')).strip()
+        value = (str(ctx.get('value') or '')).strip()
+        if not value or not ioc_type:
+            continue
+        if action == 'remove':
+            removes.append(ctx)
+        elif action == 'create':
+            creates.append((ctx, _ioc_type_slug(ioc_type), value))
+
+    failed = 0
+    succeeded = 0
+    all_failed: list[tuple[dict[str, Any], str]] = []
+
+    for chunk in _chunked(creates, GOOGLE_SECOPS_BULK_CREATE_BATCH_SIZE):
+        rows = [(slug, val) for _ctx, slug, val in chunk]
+        ok, msg = _create_ioc_rows(session, base, parent, headers, rows)
+        if ok:
+            for ctx, slug, value in chunk:
+                list_ok, found, list_err = _list_matching_ioc_rows(
+                    session, base, parent, headers, slug, value,
+                )
+                if not list_ok:
+                    failed += 1
+                    all_failed.append((ctx, f'verify_list_failed: {list_err}'))
+                elif found:
+                    succeeded += 1
+                    try:
+                        from utils.downstream import record_api_distribution_events
+                        gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
+                        record_api_distribution_events(
+                            [ctx], vendor_id='google', display_name=gs_name, api_source='google_secops',
+                        )
+                    except Exception:
+                        pass
+                else:
+                    failed += 1
+                    all_failed.append((ctx, f'{msg}; verify_not_found'))
+        else:
+            logger.info(
+                'Google SecOps batch bulkCreate failed (%s); per-row fallback for %s item(s)',
+                msg, len(chunk),
+            )
+            for ctx, slug, value in chunk:
+                one_ok, one_msg = _create_ioc_row(session, base, parent, headers, slug, value)
+                if one_ok:
+                    succeeded += 1
+                    try:
+                        from utils.downstream import record_api_distribution_events
+                        gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
+                        record_api_distribution_events(
+                            [ctx], vendor_id='google', display_name=gs_name, api_source='google_secops',
+                        )
+                    except Exception:
+                        pass
+                else:
+                    failed += 1
+                    all_failed.append((ctx, one_msg))
+                    logger.warning('Google SecOps row create failed for %s: %s', value[:80], one_msg)
+        if BATCH_INTER_CHUNK_DELAY_SEC > 0:
+            time.sleep(BATCH_INTER_CHUNK_DELAY_SEC)
+
+    for ctx in removes:
+        ok, rm_msg = _google_secops_push_ioc_from_context_inner(ctx)
+        if ok:
+            succeeded += 1
+            try:
+                from utils.downstream import mark_api_distribution_removed
+                gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
+                mark_api_distribution_removed(
+                    [ctx], vendor_id='google', display_name=gs_name, api_source='google_secops',
+                )
+            except Exception:
+                pass
+        else:
+            failed += 1
+            all_failed.append((ctx, rm_msg))
+
+    processed = len(creates) + len(removes)
+    overall_ok = failed == 0
+    summary_msg = f'batch ok={succeeded} fail={failed} total={processed}'
+    try:
+        from utils.integration_telemetry import (
+            record_vendor_push_attempt,
+            record_vendor_push_if_applicable,
+            vendor_batch_summary_message,
+        )
+
+        summary_msg = vendor_batch_summary_message(succeeded, failed, processed, all_failed)
+        record_vendor_push_attempt(
+            'google_secops', data_kind='IOC', ok=overall_ok, message=summary_msg, count=processed,
+        )
+        if overall_ok:
+            record_vendor_push_if_applicable('google_secops', True, summary_msg)
+    except Exception:
+        pass
+
+    if not from_retry and all_failed:
+        try:
+            from utils.integration_retry import enqueue_integration_retries
+
+            enqueue_integration_retries('google_secops', all_failed, get_setting=_get_setting)
+        except Exception:
+            logger.exception('Google SecOps batch enqueue retry failed')
+
+    return {
+        'success': overall_ok,
+        'processed': processed,
+        'succeeded': succeeded,
+        'failed': failed,
+        'message': summary_msg,
+    }
+
+
+def google_secops_push_ioc_from_context(
+    ioc: dict[str, Any],
+    *,
+    from_retry: bool = False,
+) -> tuple[bool, str]:
     """
     Sync one IOC lifecycle event to Google SecOps Data Table (when configured).
 
     ``ioc`` is from ``ioc_context_from_submission``. Rows are two columns: type slug, value.
     """
     ok, msg = _google_secops_push_ioc_from_context_inner(ioc)
-    try:
-        from utils.integration_telemetry import record_vendor_push_attempt, record_vendor_push_if_applicable
+    if not ok and not from_retry:
+        try:
+            from utils.integration_retry import enqueue_integration_retry, integration_is_retriable_failure
 
-        record_vendor_push_attempt('google_secops', data_kind='IOC', ok=ok, message=msg, count=1)
-        record_vendor_push_if_applicable('google_secops', ok, msg)
-    except Exception:
-        pass
+            if integration_is_retriable_failure(msg):
+                enqueue_integration_retry('google_secops', ioc, msg, get_setting=_get_setting)
+        except Exception:
+            logger.exception('Google SecOps enqueue retry failed')
+    if ok:
+        try:
+            g = google_secops_settings_dict()
+            from utils.downstream import mark_api_distribution_removed, record_api_distribution_events
+            gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
+            action = (str(ioc.get('action') or 'create')).strip().lower()
+            if action in ('remove', 'delete', 'revoke', 'expire_remove', 'delete_remove'):
+                mark_api_distribution_removed(
+                    [ioc], vendor_id='google', display_name=gs_name, api_source='google_secops',
+                )
+            else:
+                record_api_distribution_events(
+                    [ioc], vendor_id='google', display_name=gs_name, api_source='google_secops',
+                )
+        except Exception:
+            pass
     return ok, msg
 
 
@@ -382,37 +563,22 @@ def _google_secops_push_ioc_from_context_inner(ioc: dict[str, Any]) -> tuple[boo
     return _create_ioc_row(session, base, parent, headers, slug, value)
 
 
-def _create_ioc_row(session, base: str, parent: str, headers: dict[str, str], slug: str, value: str) -> tuple[bool, str]:
-    url = _api_url(base, API_VERSION, parent, 'dataTableRows:bulkCreate')
-    body = {
-        'requests': [
-            {
-                'parent': parent,
-                'dataTableRow': {
-                    'values': [slug, value],
-                },
-            },
-        ],
-    }
-    try:
-        r = session.post(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT_SEC)
-        msg = f'HTTP {r.status_code} bulkCreate'
-        if r.status_code in (200, 201):
-            return True, 'ok'
-        try:
-            detail = r.text[:500]
-        except Exception:
-            detail = ''
-        logger.warning('Google SecOps bulkCreate failed: %s %s', msg, detail)
-        return False, f'{msg} {detail}'.strip()
-    except Exception as e:
-        logger.exception('Google SecOps bulkCreate request failed')
-        return False, str(e)[:240]
+def _chunked(items: list, size: int):
+    n = max(1, int(size or 1))
+    for i in range(0, len(items), n):
+        yield items[i:i + n]
 
 
-def _delete_ioc_rows(session, base: str, parent: str, headers: dict[str, str], slug: str, value: str) -> tuple[bool, str]:
-    """List rows with filter on value, delete those matching type slug + value."""
-    to_delete: list[str] = []
+def _list_matching_ioc_rows(
+    session,
+    base: str,
+    parent: str,
+    headers: dict[str, str],
+    slug: str,
+    value: str,
+) -> tuple[bool, list[dict[str, Any]], str]:
+    """List Data Table rows matching type slug + value. Returns (list_ok, rows, error_message)."""
+    matches: list[dict[str, Any]] = []
     page_token: Optional[str] = None
     list_root = _api_url(base, API_VERSION, parent, 'dataTableRows')
 
@@ -423,23 +589,84 @@ def _delete_ioc_rows(session, base: str, parent: str, headers: dict[str, str], s
         try:
             r = session.get(list_root, headers=headers, params=params, timeout=REQUEST_TIMEOUT_SEC)
         except Exception as e:
+            from utils.outbound_http_errors import format_requests_exception
             logger.exception('Google SecOps dataTableRows.list failed')
-            return False, str(e)[:240]
+            return False, [], format_requests_exception('dataTableRows.list', e)
         if r.status_code != 200:
+            from utils.outbound_http_errors import format_http_response_error
             logger.warning('Google SecOps list rows HTTP %s %s', r.status_code, r.text[:300])
-            return False, f'list HTTP {r.status_code}'
+            return False, [], format_http_response_error('dataTableRows.list', r.status_code, r.text)
         try:
             data = r.json()
         except json.JSONDecodeError:
-            return False, 'list invalid JSON'
+            return False, [], 'dataTableRows.list invalid JSON'
         for row in data.get('dataTableRows') or []:
             if isinstance(row, dict) and _row_matches_ioc(row, slug, value):
-                name = (row.get('name') or '').strip()
-                if name:
-                    to_delete.append(name)
+                matches.append(row)
         page_token = data.get('nextPageToken') or None
         if not page_token:
             break
+    return True, matches, ''
+
+
+def _create_ioc_rows(
+    session,
+    base: str,
+    parent: str,
+    headers: dict[str, str],
+    rows: list[tuple[str, str]],
+) -> tuple[bool, str]:
+    """Create one or more Data Table rows via ``dataTableRows:bulkCreate``."""
+    if not rows:
+        return True, 'bulkCreate_empty'
+    url = _api_url(base, API_VERSION, parent, 'dataTableRows:bulkCreate')
+    body = {
+        'requests': [
+            {
+                'parent': parent,
+                'dataTableRow': {'values': [slug, value]},
+            }
+            for slug, value in rows
+        ],
+    }
+    try:
+        r = session.post(url, headers=headers, json=body, timeout=REQUEST_TIMEOUT_SEC)
+        if r.status_code in (200, 201):
+            return True, 'ok'
+        from utils.outbound_http_errors import format_http_response_error
+        logger.warning('Google SecOps bulkCreate failed: HTTP %s %s', r.status_code, r.text[:300])
+        return False, format_http_response_error('dataTableRows.bulkCreate', r.status_code, r.text)
+    except Exception as e:
+        from utils.outbound_http_errors import format_requests_exception
+        logger.exception('Google SecOps bulkCreate request failed')
+        return False, format_requests_exception('dataTableRows.bulkCreate', e)
+
+
+def _create_ioc_row(session, base: str, parent: str, headers: dict[str, str], slug: str, value: str) -> tuple[bool, str]:
+    ok, msg = _create_ioc_rows(session, base, parent, headers, [(slug, value)])
+    if not ok:
+        return ok, msg
+    list_ok, rows, list_err = _list_matching_ioc_rows(session, base, parent, headers, slug, value)
+    if not list_ok:
+        return False, f'{msg}; verify_list_failed: {list_err}'
+    if rows:
+        return True, f'{msg}; verified_present'
+    return False, f'{msg}; verify_not_found'
+
+
+def _delete_ioc_rows(session, base: str, parent: str, headers: dict[str, str], slug: str, value: str) -> tuple[bool, str]:
+    """List rows with filter on value, delete those matching type slug + value."""
+    from utils.outbound_http_errors import format_http_response_error, format_requests_exception
+
+    list_ok, rows, list_err = _list_matching_ioc_rows(session, base, parent, headers, slug, value)
+    if not list_ok:
+        return False, list_err
+
+    to_delete: list[str] = []
+    for row in rows:
+        name = (row.get('name') or '').strip()
+        if name:
+            to_delete.append(name)
 
     if not to_delete:
         return True, 'remove_no_matching_rows'
@@ -450,13 +677,22 @@ def _delete_ioc_rows(session, base: str, parent: str, headers: dict[str, str], s
         try:
             dr = session.delete(del_url, headers=headers, timeout=REQUEST_TIMEOUT_SEC)
             if dr.status_code not in (200, 204):
-                errors.append(f'{name}:{dr.status_code}')
+                errors.append(format_http_response_error('dataTableRows.delete', dr.status_code, dr.text))
         except Exception as e:
-            errors.append(f'{name}:{str(e)[:80]}')
+            errors.append(format_requests_exception('dataTableRows.delete', e))
+
+    list_ok2, remaining, list_err2 = _list_matching_ioc_rows(session, base, parent, headers, slug, value)
+    if not list_ok2:
+        if errors:
+            return False, 'delete_partial ' + '; '.join(errors)[:200] + f'; verify_list_failed: {list_err2}'
+        return False, f'delete_done_but_verify_list_failed: {list_err2}'
+    if remaining:
+        detail = '; '.join(errors) if errors else f'{len(remaining)} row(s) still present'
+        return False, f'verify_still_present: {detail}'[:240]
 
     if errors:
-        return False, 'delete_partial ' + ';'.join(errors)[:240]
-    return True, f'removed_{len(to_delete)}'
+        return False, 'delete_partial ' + '; '.join(errors)[:240]
+    return True, f'removed_{len(to_delete)}; verified_absent'
 
 
 def _checklist_credentials_direct(settings: dict[str, str], steps: list[dict[str, str]]) -> None:

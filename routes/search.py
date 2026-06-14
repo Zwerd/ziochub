@@ -1361,10 +1361,45 @@ def list_ip_country_codes():
 def search_ioc():
     """Search for an IOC across all types with optional field filter (including tag)."""
     try:
-        return _search_ioc_impl()
+        resp = _search_ioc_impl()
+        if hasattr(resp, 'get_json'):
+            data = resp.get_json(silent=True)
+            if isinstance(data, dict) and data.get('success') and isinstance(data.get('results'), list):
+                _attach_distribution_to_results(data['results'])
+                return jsonify(data), resp.status_code
+        return resp
     except Exception as e:
         logger.exception('search_ioc failed')
         return jsonify({'success': False, 'message': f'Search error: {e}'}), 500
+
+
+def _attach_distribution_to_results(results):
+    """Add distribution[] (downstream coverage icons) to IOC/YARA-less search rows."""
+    if not results:
+        return results
+    pairs = []
+    for r in results:
+        ft = (r.get('file_type') or '').strip()
+        if ft in ('YARA', 'Campaign'):
+            continue
+        val = (r.get('ioc') or '').strip()
+        if val:
+            pairs.append((ft, val))
+    if not pairs:
+        return results
+    try:
+        from utils.downstream import distribution_map_for_iocs
+        dmap = distribution_map_for_iocs(pairs)
+        for r in results:
+            ft = (r.get('file_type') or '').strip()
+            if ft in ('YARA', 'Campaign'):
+                r['distribution'] = []
+                continue
+            key = (ft, (r.get('ioc') or '').strip())
+            r['distribution'] = dmap.get(key, [])
+    except Exception:
+        logger.debug('attach distribution failed', exc_info=True)
+    return results
 
 
 def _search_ioc_impl():

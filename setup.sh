@@ -20,6 +20,7 @@
 #  Updated: 2026-04-13 — --check/--preflight; venv preflight uses real test create.
 #  Offline domain sanity: utils/offline_domain_checks.py (import verified below).
 #  GUI timestamps: utils/jinja_datetime.py (zoneinfo; host should have tzdata package on minimal Linux).
+#  Updated: 2026-06 — post-upgrade feature checks (Admin Distribution, Feed Pulse, YARA_rejected, data/dxl).
 # ============================================================================
 set -euo pipefail
 
@@ -497,7 +498,7 @@ fi
 
 # ── 2. Directory structure ──────────────────────────────────────────────────
 info "Setting up directories..."
-mkdir -p "${APP_DIR}" "${DATA_DIR}" "${DATA_DIR}/Main" "${DATA_DIR}/YARA" "${DATA_DIR}/YARA_pending" "${DATA_DIR}/backups"
+mkdir -p "${APP_DIR}" "${DATA_DIR}" "${DATA_DIR}/Main" "${DATA_DIR}/YARA" "${DATA_DIR}/YARA_pending" "${DATA_DIR}/YARA_rejected" "${DATA_DIR}/dxl" "${DATA_DIR}/backups"
 ok "Directories ready: ${APP_DIR}"
 
 # ── 3. Copy application files (overwrites existing on upgrade) ─────────────
@@ -589,6 +590,31 @@ if [[ -d "${SCRIPT_DIR}/docs" ]]; then
 fi
 
 ok "Application files copied."
+
+# ── 3b. Verify recent feature files landed (catch stale offline ZIP) ───────
+_verify_installed_file() {
+    local rel="$1"
+    local label="$2"
+    if [[ ! -f "${APP_DIR}/${rel}" ]]; then
+        warn "Missing after copy: ${rel} — ${label} may be unavailable."
+        return 1
+    fi
+    return 0
+}
+
+FEATURE_CHECK_FAILED=false
+_verify_installed_file "templates/admin/downstream.html" "Admin → Distribution" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "templates/admin/base.html" "Admin navigation" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "utils/downstream.py" "Distribution / vendor icons" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "static/js/feed-pulse.js" "Feed Pulse (Connections / Push / Pull state)" || FEATURE_CHECK_FAILED=true
+if $FEATURE_CHECK_FAILED; then
+    echo ""
+    warn "Some newer UI modules are missing under ${APP_DIR}."
+    warn "This usually means the installer ZIP was built from an older source tree."
+    warn "Fix: on a dev machine with the latest repo, run ./package_offline.sh, transfer the new ZIP,"
+    warn "     extract to a folder outside ${APP_DIR}, then: sudo ./setup.sh --offline --upgrade"
+    echo ""
+fi
 
 # ── 4. Permissions ──────────────────────────────────────────────────────────
 info "Setting ownership & permissions..."
@@ -686,7 +712,7 @@ if [[ ${#MISSING_MODULES[@]} -gt 0 ]]; then
 fi
 
 # Verify utils submodules (Reports, Admin Settings, CEF logging, etc.)
-REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "offline_domain_checks" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "mentorship" "ambition" "jinja_datetime")
+REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "offline_domain_checks" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "mentorship" "ambition" "jinja_datetime" "downstream" "integration_telemetry")
 MISSING_UTILS=()
 
 for util in "${REQUIRED_UTILS[@]}"; do
@@ -990,6 +1016,14 @@ echo "    SSL certs     : ${DATA_DIR}/ssl/"
 echo "    Backups       : ${DATA_DIR}/backups/"
 [[ -d "${APP_DIR}/docs" ]] && echo "    Documentation : ${APP_DIR}/docs/"
 echo ""
+
+INSTALLED_VERSION=""
+if [[ -f "${APP_DIR}/constants.py" ]]; then
+    INSTALLED_VERSION=$(grep -E '^VERSION\s*=' "${APP_DIR}/constants.py" 2>/dev/null | sed -E "s/.*[\"']([^\"']+)[\"'].*/\1/" | tr -d '\r' || true)
+fi
+if [[ -n "${INSTALLED_VERSION}" ]]; then
+    info "Installed application version: ${INSTALLED_VERSION}"
+fi
 
 if $UPGRADE; then
     info "Your data was preserved:"

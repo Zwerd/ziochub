@@ -14,6 +14,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from requests.auth import HTTPBasicAuth
 
+from utils.http_identity import configure_requests_session
 from utils.stix_pattern_parse import parse_indicator_pattern
 from utils.validation import validate_ioc
 from utils.ioc_aggregate_fields import compute_ioc_aggregate_fields
@@ -73,6 +74,7 @@ def _make_session(
     verify_ssl: bool,
 ) -> requests.Session:
     sess = requests.Session()
+    configure_requests_session(sess)
     sess.verify = verify_ssl
     key = (api_key or '').strip()
     user = (username or '').strip()

@@ -29,6 +29,8 @@ from collections import defaultdict
 from typing import Any, Callable, Optional
 from urllib.parse import quote
 
+from utils.http_identity import apply_user_agent_to_request
+
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SEC = 45
@@ -179,6 +181,7 @@ def esa_login(base_url: str, username: str, passphrase: str, verify_ssl: bool) -
     url = f'{base}/login'
     ctx = _ssl_context(verify_ssl)
     req = urllib.request.Request(url, data=body.encode('utf-8'), method='POST')
+    apply_user_agent_to_request(req)
     req.add_header('Content-Type', 'application/json')
     try:
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC, context=ctx) as resp:
@@ -280,6 +283,7 @@ def esa_api_call(
     else:
         data = body
     req = urllib.request.Request(url, data=data, method=m)
+    apply_user_agent_to_request(req)
     req.add_header('jwttoken', jwt)
     if body is not None and m not in ('GET', 'HEAD'):
         req.add_header('Content-Type', 'application/json')
@@ -433,6 +437,7 @@ def esa_test_connection(settings: Optional[dict[str, str]] = None) -> dict[str, 
     probe_url = f'{_base_url_normalize(base)}/config/dictionaries?{qs}'
     ctx = _ssl_context(verify_ssl)
     req = urllib.request.Request(probe_url, method='GET')
+    apply_user_agent_to_request(req)
     req.add_header('jwttoken', jwt)
     req.add_header('Accept', '*/*')
     try:
@@ -468,6 +473,7 @@ def sync_add_batch(
     skip_misp = g.get('esa_skip_misp_sync', 'true').strip().lower() in ('true', '1', 'yes')
     mappings = parse_mappings(g.get('esa_mappings', '[]'))
     by_dict: defaultdict[str, set[str]] = defaultdict(set)
+    retry_contexts: list[dict[str, Any]] = []
     for ctx in contexts:
         if not isinstance(ctx, dict):
             continue
@@ -475,14 +481,37 @@ def sync_add_batch(
         analyst = (ctx.get('analyst') or '').strip()
         if skip_misp and analyst.lower() == misp_sync:
             continue
-        word = normalize_dictionary_word(ioc_type, ctx.get('value') or '')
+        value = (ctx.get('value') or '').strip()
+        word = normalize_dictionary_word(ioc_type, value)
         if not word:
             continue
+        retry_contexts.append({'action': 'create', 'type': ioc_type, 'value': value, 'analyst': analyst})
         for dname in dictionary_names_for_ioc_type(mappings, ioc_type):
             by_dict[dname].add(word)
     if not by_dict:
         return
-    esa_push_add_by_dictionary(by_dict, settings=g, audit_log_fn=audit_log_fn)
+    ok, msg = esa_push_add_by_dictionary(by_dict, settings=g, audit_log_fn=audit_log_fn)
+    try:
+        from utils.integration_telemetry import record_vendor_push_attempt, record_vendor_push_if_applicable
+
+        word_count = sum(len(words) for words in by_dict.values())
+        record_vendor_push_attempt(
+            'cisco_esa',
+            data_kind='IOC',
+            ok=ok,
+            message=msg,
+            count=word_count or None,
+        )
+        record_vendor_push_if_applicable('cisco_esa', ok, msg)
+    except Exception:
+        logger.debug('ESA push telemetry failed', exc_info=True)
+    if not ok and retry_contexts:
+        try:
+            from utils.integration_retry import enqueue_integration_retries
+
+            enqueue_integration_retries('esa', [(c, msg) for c in retry_contexts], get_setting=_get_setting)
+        except Exception:
+            logger.exception('ESA batch enqueue retry failed')
 
 
 def sync_add_for_ioc(
@@ -510,15 +539,38 @@ def sync_remove_batch(
         return
     mappings = parse_mappings(g.get('esa_mappings', '[]'))
     by_dict: defaultdict[str, set[str]] = defaultdict(set)
+    retry_contexts: list[dict[str, Any]] = []
     for ioc_type, value in rows:
         word = normalize_dictionary_word(ioc_type, value or '')
         if not word:
             continue
+        retry_contexts.append({'action': 'remove', 'type': ioc_type, 'value': (value or '').strip()})
         for dname in dictionary_names_for_ioc_type(mappings, ioc_type):
             by_dict[dname].add(word)
     if not by_dict:
         return
-    esa_push_remove_by_dictionary(by_dict, settings=g, audit_log_fn=audit_log_fn)
+    ok, msg = esa_push_remove_by_dictionary(by_dict, settings=g, audit_log_fn=audit_log_fn)
+    try:
+        from utils.integration_telemetry import record_vendor_push_attempt, record_vendor_push_if_applicable
+
+        word_count = sum(len(words) for words in by_dict.values())
+        record_vendor_push_attempt(
+            'cisco_esa',
+            data_kind='IOC',
+            ok=ok,
+            message=msg,
+            count=word_count or None,
+        )
+        record_vendor_push_if_applicable('cisco_esa', ok, msg)
+    except Exception:
+        logger.debug('ESA remove telemetry failed', exc_info=True)
+    if not ok and retry_contexts:
+        try:
+            from utils.integration_retry import enqueue_integration_retries
+
+            enqueue_integration_retries('esa', [(c, msg) for c in retry_contexts], get_setting=_get_setting)
+        except Exception:
+            logger.exception('ESA remove enqueue retry failed')
 
 
 def sync_remove_for_ioc(

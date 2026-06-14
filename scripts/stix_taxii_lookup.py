@@ -108,8 +108,10 @@ Examples:
     except ImportError:
         _die('Install requests: pip install requests', 2)
 
+    from utils.http_identity import configure_requests_session
+
     s = requests.Session()
-    s.headers.setdefault('User-Agent', 'ziochub-stix-taxii-lookup/1.0')
+    configure_requests_session(s)
     s.verify = verify_tls
     if not verify_tls:
         try:

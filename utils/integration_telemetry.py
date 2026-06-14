@@ -9,12 +9,18 @@ import threading
 from collections import defaultdict
 import time
 from datetime import datetime
+from typing import Any
 from urllib.parse import urlparse
 
 from flask import has_request_context, request
 
 from extensions import db
 from models import FeedSourceLastSeen, SystemSetting, _utcnow
+from utils.downstream import (
+    build_feed_client_lookup_by_ip,
+    vendor_icon_url,
+    vendor_meta_for_integration,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,15 +69,20 @@ _TELEMETRY_PULL_PREFIXES = ('/feed', '/taxii2')
 # Vendor integrations (Integrations tab): last successful IOC/YARA push per platform (JSON per vendor)
 KEY_VENDOR_PUSH_DETAIL_CORTEX = 'telemetry_vendor_push_detail_cortex_xdr'
 KEY_VENDOR_PUSH_DETAIL_GOOGLE = 'telemetry_vendor_push_detail_google_secops'
+KEY_VENDOR_PUSH_DETAIL_ESA = 'telemetry_vendor_push_detail_cisco_esa'
 
 # Vendor push attempts (last attempt, regardless of success) for Push State table
 KEY_VENDOR_PUSH_ATTEMPT_CORTEX = 'telemetry_vendor_push_attempt_cortex_xdr'
 KEY_VENDOR_PUSH_ATTEMPT_GOOGLE = 'telemetry_vendor_push_attempt_google_secops'
+KEY_VENDOR_PUSH_ATTEMPT_ESA = 'telemetry_vendor_push_attempt_cisco_esa'
 
 # Outbound push kinds ZIoCHub actually supports per vendor (Push State rows).
 _VENDOR_PUSH_DATA_KINDS: dict[str, tuple[str, ...]] = {
     'cortex_xdr': ('IOC',),  # Cortex XDR API: IOC/blocklist only — no YARA push
     'google_secops': ('IOC',),  # Chronicle/SecOps: IOC indicators only — no YARA / YARA-L push
+    'cisco_esa': ('IOC',),
+    'misp_push': ('IOC',),
+    'opendxl': ('IOC',),  # Hash reputation via TIE only
 }
 
 
@@ -136,6 +147,11 @@ def record_feed_pull_if_ok(response):
                 last_ok=ok,
             ))
         db.session.commit()
+        try:
+            from utils.downstream import correlate_feed_pull
+            correlate_feed_pull(ip, path, ts, ok)
+        except Exception:
+            logger.debug('correlate_feed_pull hook failed', exc_info=True)
     except Exception:
         logger.debug('record_feed_pull_if_ok failed', exc_info=True)
         try:
@@ -346,6 +362,7 @@ def record_vendor_integration_push(vendor_id: str, data_kind: str) -> None:
     key_map = {
         'cortex_xdr': KEY_VENDOR_PUSH_DETAIL_CORTEX,
         'google_secops': KEY_VENDOR_PUSH_DETAIL_GOOGLE,
+        'cisco_esa': KEY_VENDOR_PUSH_DETAIL_ESA,
     }
     setting_key = key_map.get(vid)
     if not setting_key:
@@ -384,7 +401,28 @@ def record_vendor_push_if_applicable(vendor_id: str, ok: bool, msg: str) -> None
         return
     if vendor_id == 'google_secops' and 'skipped_incomplete_data_table_config' in m:
         return
+    if vendor_id == 'cisco_esa' and (m.startswith('skipped') or m.startswith('nothing to')):
+        return
     record_vendor_integration_push(vendor_id, 'IOC')
+
+
+def vendor_batch_summary_message(
+    succeeded: int,
+    failed: int,
+    processed: int,
+    all_failed: list,
+) -> str:
+    """Batch push summary for Feed Pulse; appends the first failure detail when present."""
+    msg = f'batch ok={succeeded} fail={failed} total={processed}'
+    if not all_failed:
+        return msg
+    err = str(all_failed[0][1] or '').strip()
+    if not err:
+        return msg
+    budget = 240 - len(msg) - 2
+    if budget > 16:
+        msg = f'{msg}; {err[:budget]}'
+    return msg
 
 
 def record_vendor_push_attempt(vendor_id: str, *, data_kind: str = 'IOC', ok: bool, message: str = '', count: int | None = None) -> None:
@@ -401,6 +439,7 @@ def record_vendor_push_attempt(vendor_id: str, *, data_kind: str = 'IOC', ok: bo
     key_map = {
         'cortex_xdr': KEY_VENDOR_PUSH_ATTEMPT_CORTEX,
         'google_secops': KEY_VENDOR_PUSH_ATTEMPT_GOOGLE,
+        'cisco_esa': KEY_VENDOR_PUSH_ATTEMPT_ESA,
     }
     setting_key = key_map.get(vid)
     if not setting_key:
@@ -492,6 +531,7 @@ def _vendor_attempt_setting_key(vendor_id: str) -> str | None:
     m = {
         'cortex_xdr': KEY_VENDOR_PUSH_ATTEMPT_CORTEX,
         'google_secops': KEY_VENDOR_PUSH_ATTEMPT_GOOGLE,
+        'cisco_esa': KEY_VENDOR_PUSH_ATTEMPT_ESA,
     }
     return m.get((vendor_id or '').strip())
 
@@ -573,9 +613,178 @@ def _google_secops_is_configured(_get) -> bool:
     return bool(creds and base_ok)
 
 
+def _norm_automation_url(url: str) -> str:
+    return (url or '').strip().lower().rstrip('/')
+
+
+def _esa_is_configured(_get) -> bool:
+    base = (_get('esa_base_url') or '').strip()
+    enabled = (_get('esa_enabled') or 'false').strip().lower() in ('true', '1', 'yes')
+    user = (_get('esa_username') or '').strip()
+    return bool((base or enabled) and user)
+
+
+def build_automation_url_vendor_lookup(_get) -> dict[str, dict[str, Any]]:
+    """
+    Map normalized push/upload URL → vendor icon/label for built-in YARA automation targets
+    (FireEye HTTP, Trellix NX/EX/CMS). Generic IOC push URLs are not included.
+    """
+    import json
+
+    from utils.downstream import vendor_meta_for_integration
+    from utils.trellix_cms import list_trellix_cms_targets
+    from utils.trellix_ex import list_trellix_ex_targets, trellix_ex_upload_url_for_target
+    from utils.trellix_nx import (
+        expand_trellix_nx_targets,
+        list_nx_wmps_session_targets,
+        parse_trellix_nx_targets_json,
+        trellix_nx_enabled,
+    )
+    from utils.yara_http_push import appliance_upload_url
+
+    lookup: dict[str, dict[str, Any]] = {}
+
+    def _add(url: str, integration_id: str, *, target_name: str = '', configured: bool = True) -> None:
+        raw = (url or '').strip()
+        key = _norm_automation_url(raw)
+        if not key:
+            return
+        meta = vendor_meta_for_integration(integration_id)
+        lookup[key] = {
+            **meta,
+            'url': raw,
+            'target_name': (target_name or '').strip() or meta.get('integration_label') or '—',
+            'configured': configured,
+        }
+
+    fe_enabled = (_get('automation_fireeye_enabled') or 'false').strip().lower() in ('true', '1', 'yes')
+    raw_fe = (_get('automation_fireeye_appliances') or '[]').strip()
+    try:
+        fe_apps = json.loads(raw_fe) if raw_fe else []
+    except (json.JSONDecodeError, TypeError):
+        fe_apps = []
+    if fe_enabled or (isinstance(fe_apps, list) and fe_apps):
+        for app in fe_apps if isinstance(fe_apps, list) else []:
+            if not isinstance(app, dict):
+                continue
+            upload = appliance_upload_url(app)
+            _add(
+                upload,
+                'fireeye_yara',
+                target_name=(app.get('name') or '').strip() or 'FireEye / Trellix',
+                configured=fe_enabled,
+            )
+
+    nx_on = trellix_nx_enabled(_get)
+    nx_raw = parse_trellix_nx_targets_json(_get('automation_trellix_nx_targets') or '[]')
+    if nx_on or nx_raw:
+        for app in expand_trellix_nx_targets(nx_raw):
+            upload = appliance_upload_url(app)
+            _add(
+                upload,
+                'trellix_nx',
+                target_name=(app.get('name') or '').strip() or 'Trellix NX',
+                configured=nx_on,
+            )
+        for t in list_nx_wmps_session_targets(_get):
+            upload = trellix_ex_upload_url_for_target(t)
+            _add(
+                upload,
+                'trellix_nx',
+                target_name=(t.get('name') or '').strip() or 'Trellix NX (wmps)',
+                configured=nx_on,
+            )
+
+    ex_on = (_get('trellix_ex_enabled') or 'false').strip().lower() in ('true', '1', 'yes')
+    ex_targets = list_trellix_ex_targets(_get)
+    if ex_on or ex_targets:
+        for t in ex_targets:
+            upload = trellix_ex_upload_url_for_target(t)
+            _add(
+                upload,
+                'trellix_ex',
+                target_name=(t.get('name') or '').strip() or 'Trellix Email Security',
+                configured=ex_on,
+            )
+
+    cms_on = (_get('trellix_cms_enabled') or 'false').strip().lower() in ('true', '1', 'yes')
+    cms_targets = list_trellix_cms_targets(_get)
+    if cms_on or cms_targets:
+        for t in cms_targets:
+            upload = trellix_ex_upload_url_for_target(t)
+            _add(
+                upload,
+                'trellix_cms',
+                target_name=(t.get('name') or '').strip() or 'Trellix CMS',
+                configured=cms_on,
+            )
+
+    return lookup
+
+
+def resolve_automation_target_vendor(
+    url: str,
+    name: str,
+    lookup: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Resolve vendor icon for an automation telemetry row (built-in product or generic)."""
+    from utils.downstream import vendor_icon_url
+
+    generic = vendor_icon_url('generic')
+    lu = lookup or {}
+    key = _norm_automation_url(url)
+    if key and key in lu:
+        return lu[key]
+    name_l = (name or '').strip().lower()
+    if name_l:
+        for meta in lu.values():
+            if (meta.get('target_name') or '').strip().lower() == name_l:
+                return meta
+    if key:
+        for k, meta in lu.items():
+            if key.startswith(k) or k.startswith(key):
+                return meta
+    return {
+        'registered': False,
+        'vendor_label': '',
+        'vendor_icon_url': generic,
+        'integration_id': None,
+        'integration_label': 'HTTP automation',
+    }
+
+
+def _merge_configured_automation_targets(
+    _get,
+    telemetry_rows: list[dict[str, Any]],
+    url_lookup: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Add configured built-in YARA targets that have not recorded a push attempt yet."""
+    seen = {_norm_automation_url(r.get('url') or '') for r in telemetry_rows}
+    out = list(telemetry_rows)
+    for key, meta in url_lookup.items():
+        if not meta.get('configured'):
+            continue
+        if key in seen:
+            continue
+        raw_url = meta.get('url') or key
+        out.append({
+            'name': meta.get('target_name') or '—',
+            'url': raw_url,
+            'host': _host_from_url(raw_url),
+            'last_seen_at': None,
+            'kinds': [],
+            'status': 'never',
+            'vendor_label': meta.get('vendor_label', ''),
+            'vendor_icon_url': meta.get('vendor_icon_url', ''),
+            'integration_id': meta.get('integration_id'),
+            'integration_label': meta.get('integration_label', ''),
+        })
+    return out
+
+
 def _build_integration_push_state_entries(_get):
     """
-    Outbound vendor integrations (Admin → Integrations): Cortex XDR, Google SecOps.
+    Outbound vendor integrations (Admin → Integrations): Cortex XDR, Google SecOps, Cisco ESA.
     One flat row per (system, data kind) with last push time (IOC/YARA tracked separately in JSON).
     """
     rows = []
@@ -589,6 +798,7 @@ def _build_integration_push_state_entries(_get):
         hip = _resolve_hostname_ip(host) if host else ''
         for kind in _push_kinds_for_vendor('cortex_xdr'):
             attempt = _vendor_attempt_for_kind(_get, 'cortex_xdr', kind)
+            cx_vendor = vendor_meta_for_integration('cortex_xdr')
             rows.append({
                 'id': 'cortex_xdr_' + kind.lower(),
                 'integration_id': 'cortex_xdr',
@@ -598,6 +808,8 @@ def _build_integration_push_state_entries(_get):
                 'host_ip': hip,
                 'data_kind': kind,
                 'enabled': cx_enabled,
+                'vendor_label': cx_vendor['vendor_label'],
+                'vendor_icon_url': cx_vendor['vendor_icon_url'],
                 'last_push_at': detail.get(kind) or None,
                 'last_attempt_at': attempt.get('at') or None,
                 'last_attempt_ok': attempt.get('ok') if attempt else None,
@@ -612,6 +824,7 @@ def _build_integration_push_state_entries(_get):
         hip_g = _resolve_hostname_ip(g_host)
         for kind in _push_kinds_for_vendor('google_secops'):
             attempt_g = _vendor_attempt_for_kind(_get, 'google_secops', kind)
+            gs_vendor = vendor_meta_for_integration('google_secops')
             rows.append({
                 'id': 'google_secops_' + kind.lower(),
                 'integration_id': 'google_secops',
@@ -620,11 +833,90 @@ def _build_integration_push_state_entries(_get):
                 'host': g_host,
                 'host_ip': hip_g,
                 'data_kind': kind,
+                'vendor_label': gs_vendor['vendor_label'],
+                'vendor_icon_url': gs_vendor['vendor_icon_url'],
                 'last_push_at': detail_g.get(kind) or None,
                 'last_attempt_at': attempt_g.get('at') or None,
                 'last_attempt_ok': attempt_g.get('ok') if attempt_g else None,
                 'last_attempt_message': attempt_g.get('message') or None,
                 'last_attempt_count': attempt_g.get('count') if attempt_g else None,
+            })
+
+    esa_base = (_get('esa_base_url') or '').strip()
+    esa_enabled = (_get('esa_enabled') or 'false').strip().lower() in ('true', '1', 'yes')
+    if esa_base or esa_enabled or _esa_is_configured(_get):
+        esa_name = 'Cisco ESA (IronPort)'
+        detail_esa = _parse_vendor_push_detail_json(_get(KEY_VENDOR_PUSH_DETAIL_ESA) or '')
+        host_esa = _host_from_url(esa_base) if esa_base else ''
+        hip_esa = _resolve_hostname_ip(host_esa) if host_esa else ''
+        esa_vendor = vendor_meta_for_integration('cisco_esa')
+        for kind in _push_kinds_for_vendor('cisco_esa'):
+            attempt_esa = _vendor_attempt_for_kind(_get, 'cisco_esa', kind)
+            rows.append({
+                'id': 'cisco_esa_' + kind.lower(),
+                'integration_id': 'cisco_esa',
+                'display_name': esa_name,
+                'address': esa_base or '(not configured)',
+                'host': host_esa,
+                'host_ip': hip_esa,
+                'data_kind': kind,
+                'enabled': esa_enabled,
+                'vendor_label': esa_vendor['vendor_label'],
+                'vendor_icon_url': esa_vendor['vendor_icon_url'],
+                'last_push_at': detail_esa.get(kind) or None,
+                'last_attempt_at': attempt_esa.get('at') or None,
+                'last_attempt_ok': attempt_esa.get('ok') if attempt_esa else None,
+                'last_attempt_message': attempt_esa.get('message') or None,
+                'last_attempt_count': attempt_esa.get('count') if attempt_esa else None,
+            })
+
+    misp_url = (_get('misp_url') or '').strip()
+    misp_push_enabled = (_get('misp_push_enabled') or 'false').strip().lower() in ('true', '1', 'yes')
+    if misp_url or misp_push_enabled:
+        misp_vendor = vendor_meta_for_integration('misp_push')
+        host_misp = _host_from_url(misp_url) if misp_url else ''
+        hip_misp = _resolve_hostname_ip(host_misp) if host_misp else ''
+        for kind in _push_kinds_for_vendor('misp_push'):
+            rows.append({
+                'id': 'misp_push_' + kind.lower(),
+                'integration_id': 'misp_push',
+                'display_name': 'MISP',
+                'address': misp_url or '(not configured)',
+                'host': host_misp,
+                'host_ip': hip_misp,
+                'data_kind': kind,
+                'enabled': misp_push_enabled,
+                'vendor_label': misp_vendor['vendor_label'],
+                'vendor_icon_url': misp_vendor['vendor_icon_url'],
+                'last_push_at': None,
+                'last_attempt_at': None,
+                'last_attempt_ok': None,
+                'last_attempt_message': None,
+                'last_attempt_count': None,
+            })
+
+    dxl_cfg = (_get('dxl_config_path') or '').strip()
+    dxl_enabled = (_get('dxl_enabled') or 'false').strip().lower() in ('true', '1', 'yes')
+    if dxl_cfg or dxl_enabled:
+        dxl_vendor = vendor_meta_for_integration('opendxl')
+        last_dxl = (_get(KEY_DXL) or '').strip() or None
+        for kind in _push_kinds_for_vendor('opendxl'):
+            rows.append({
+                'id': 'opendxl_' + kind.lower(),
+                'integration_id': 'opendxl',
+                'display_name': 'OpenDXL / Trellix TIE',
+                'address': dxl_cfg or '(not configured)',
+                'host': '',
+                'host_ip': '',
+                'data_kind': kind,
+                'enabled': dxl_enabled,
+                'vendor_label': dxl_vendor['vendor_label'],
+                'vendor_icon_url': dxl_vendor['vendor_icon_url'],
+                'last_push_at': last_dxl,
+                'last_attempt_at': last_dxl,
+                'last_attempt_ok': True if last_dxl else None,
+                'last_attempt_message': None,
+                'last_attempt_count': None,
             })
 
     return rows
@@ -683,6 +975,17 @@ def _parse_pull_sync_result(result_raw) -> tuple[str, str]:
     return sync_status, last_summary
 
 
+def _enrich_pull_row_vendor(row: dict, integration_id: str) -> dict:
+    """Attach vendor icon/label for configured inbound pull sources."""
+    if (row.get('status') or '') == 'not_configured' and not (row.get('address') or '').strip():
+        return row
+    vendor = vendor_meta_for_integration(integration_id)
+    row['integration_id'] = integration_id
+    row['vendor_label'] = vendor['vendor_label']
+    row['vendor_icon_url'] = vendor['vendor_icon_url']
+    return row
+
+
 def _misp_pull_state_row(_get) -> dict:
     from utils.misp_sync_runner import (
         MISP_PULL_INTERVAL_DEFAULT,
@@ -700,7 +1003,7 @@ def _misp_pull_state_row(_get) -> dict:
     nxt = next_misp_pull_at(_get) if enabled and last_str else None
 
     if not url:
-        return {
+        return _enrich_pull_row_vendor({
             'id': 'misp',
             'name': 'MISP',
             'address': '',
@@ -711,7 +1014,7 @@ def _misp_pull_state_row(_get) -> dict:
             'last_summary': '',
             'status': 'not_configured',
             'enabled': False,
-        }
+        }, 'misp_pull')
 
     row = {
         'id': 'misp',
@@ -725,7 +1028,7 @@ def _misp_pull_state_row(_get) -> dict:
         'enabled': enabled,
         'status': 'disabled' if not enabled else sync_status,
     }
-    return row
+    return _enrich_pull_row_vendor(row, 'misp_pull')
 
 
 def _taxii_pull_state_row(_get) -> dict:
@@ -874,6 +1177,19 @@ def get_connections_snapshot():
         return v
 
     automation_targets = _build_automation_targets(_get)
+    automation_vendor_lookup = build_automation_url_vendor_lookup(_get)
+    automation_targets = _merge_configured_automation_targets(_get, automation_targets, automation_vendor_lookup)
+    for row in automation_targets:
+        vendor = resolve_automation_target_vendor(
+            row.get('url') or '',
+            row.get('name') or '',
+            automation_vendor_lookup,
+        )
+        row['vendor_label'] = vendor.get('vendor_label', '')
+        row['vendor_icon_url'] = vendor.get('vendor_icon_url', '')
+        row['integration_id'] = vendor.get('integration_id')
+        row['integration_label'] = vendor.get('integration_label', '')
+        row['downstream_registered'] = bool(vendor.get('integration_id'))
     pull_state = _build_pull_state_entries(_get)
     push_state = _build_integration_push_state_entries(_get)
 
@@ -920,17 +1236,34 @@ def get_connections_snapshot():
             or (x.get('feed_path') or '').startswith('/taxii2'))
     ]
 
-    feed_clients = [
-        {
-            # "Product name" per spec: show the connecting address (client IP)
-            'product_name': x.get('client_ip') or 'unknown',
+    feed_clients = []
+    downstream_by_ip = build_feed_client_lookup_by_ip()
+    for x in feed_access:
+        ip = x.get('client_ip') or 'unknown'
+        info = downstream_by_ip.get(ip)
+        if info:
+            system_name = info['system_name']
+            vendor_label = info['vendor_label']
+            vendor_icon = info['vendor_icon_url']
+            registered = True
+        else:
+            system_name = ip
+            vendor_label = ''
+            vendor_icon = vendor_icon_url('generic')
+            registered = False
+        feed_clients.append({
+            'client_ip': ip,
+            'system_name': system_name,
+            'downstream_registered': registered,
+            'vendor_label': vendor_label,
+            'vendor_icon_url': vendor_icon,
+            # Backward compatible: product_name was client IP; now admin display name when known
+            'product_name': system_name,
             'product_type': _feed_product_type(x.get('feed_path') or ''),
             'value_kind': _feed_value_kind(x.get('feed_path') or ''),
             'uri': x.get('feed_path') or '',
             'last_connection_at': x.get('last_seen_at'),
-        }
-        for x in feed_access
-    ]
+        })
 
     # Newest first
     feed_clients.sort(key=lambda r: _parse_iso_ts(r.get('last_connection_at')) or datetime.min, reverse=True)

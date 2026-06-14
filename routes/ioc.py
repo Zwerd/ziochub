@@ -914,7 +914,19 @@ def submit_ioc():
                     config_path = _get_setting('dxl_config_path', '').strip()
                     if config_path:
                         from utils.dxl_tie import push_hash_to_tie
-                        push_hash_to_tie(config_path, value, audit_log)
+                        dxl_ok = push_hash_to_tie(config_path, value, audit_log)
+                        if not dxl_ok:
+                            try:
+                                from utils.integration_retry import enqueue_integration_retry
+
+                                enqueue_integration_retry(
+                                    'dxl',
+                                    {'action': 'create', 'type': 'Hash', 'value': value},
+                                    'dxl_push_failed',
+                                    get_setting=_get_setting,
+                                )
+                            except Exception:
+                                logging.exception('DXL enqueue retry failed')
             except Exception as dxl_err:
                 logging.warning('DXL push after submit_ioc failed: %s', dxl_err)
         # MISP push: send IOC to MISP when enabled (SOC uses ZIoCHub but feeds MISP; comment pushed if option on).
@@ -939,6 +951,18 @@ def submit_ioc():
                     )
                     if not ok:
                         logging.warning('MISP push after submit_ioc failed: %s', msg)
+                        try:
+                            from utils.integration_retry import enqueue_integration_retry, integration_is_retriable_failure
+
+                            if integration_is_retriable_failure(msg):
+                                enqueue_integration_retry(
+                                    'misp_push',
+                                    {'action': 'create', 'type': ioc_type, 'value': value, 'comment': cmt or None},
+                                    msg,
+                                    get_setting=_get_setting,
+                                )
+                        except Exception:
+                            logging.exception('MISP push enqueue retry failed')
         except Exception as misp_err:
             logging.warning('MISP push after submit_ioc failed: %s', misp_err)
         try:

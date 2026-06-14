@@ -1,6 +1,7 @@
+{% from 'admin/partials/integration_form_macros.html' import integ_section, integ_yes_no, integ_retry_panel, integ_brand_heading %}
 <div id="settings-tab-opendxl" class="settings-tab-pane hidden">
-    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
-        <h3 class="text-lg font-semibold accent-blue mb-2">OpenDXL / Trellix TIE</h3>
+    <div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+        {{ integ_brand_heading(integration_icons.opendxl, 'OpenDXL / Trellix TIE') }}
         <p class="text-secondary text-sm mb-4">When <strong class="text-primary">OpenDXL enabled</strong> is Yes, ZIoCHub connects to your organization’s <strong class="text-primary">DXL fabric</strong> (managed by Trellix ePO or an OpenDXL broker) and publishes <strong class="text-primary">Hash</strong> IOCs (MD5 / SHA1 / SHA256) to <strong class="text-primary">Threat Intelligence Exchange (TIE)</strong> as <em>Known Malicious</em> file reputation. Managed endpoints that use TIE can then block or score those files. This is <strong class="text-primary">not</strong> a generic “publish any message to the bus” integration — ZIoCHub uses the documented TIE client API (<code class="px-0.5 rounded bg-white/10 text-xs">set_file_reputation</code>) over DXL. Domain, IP, URL, and Email IOCs are not sent on this path.</p>
         <p class="text-secondary text-xs mb-4">Requires Python packages <code class="px-0.5 rounded bg-white/10 text-xs">dxlclient</code> and <code class="px-0.5 rounded bg-white/10 text-xs">dxltieclient</code> on the Linux host (<code class="px-0.5 rounded bg-white/10 text-xs">pip install -r requirements.txt</code>). Outbound TCP from the ZIoCHub server to DXL broker hosts (typically port <strong class="text-primary">8883</strong>) must be allowed.</p>
 
@@ -87,28 +88,36 @@
         </form>
         <div id="dxlUploadMessage" class="mb-6 hidden text-sm"></div>
 
-        <h4 class="text-sm font-semibold text-primary mb-3">Runtime settings</h4>
-        <form id="dxlForm" class="space-y-4">
-            <div>
-                <label for="dxl_enabled" class="block text-sm font-semibold text-secondary mb-1">OpenDXL enabled</label>
-                <select id="dxl_enabled" name="dxl_enabled" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                    <option value="false" {% if settings.dxl_enabled == 'false' %}selected{% endif %}>No</option>
-                    <option value="true" {% if settings.dxl_enabled == 'true' %}selected{% endif %}>Yes</option>
-                </select>
-                <p class="text-secondary text-xs mt-1">When Yes, each new <strong class="text-primary">Hash</strong> IOC triggers a background TIE reputation update. Failures are logged only — the IOC is still saved in ZIoCHub.</p>
+        <form id="dxlForm" class="space-y-0">
+            {% call integ_section('General') %}
+            {{ integ_yes_no('dxl_enabled', 'Enable outbound push', settings.dxl_enabled, 'Each new Hash IOC triggers a background TIE reputation update. Failures are logged only — the IOC is still saved in ZIoCHub.') }}
+            {% endcall %}
+
+            {% call integ_section('Connection') %}
+            <div class="integ-field">
+                <label for="dxl_config_path" class="integ-label">Path to dxlclient.config</label>
+                <input type="text" id="dxl_config_path" name="dxl_config_path" placeholder="/path/to/data/dxl/dxlclient.config" value="{{ settings.dxl_config_path }}" class="integ-input font-mono text-sm">
+                <p class="integ-hint">Absolute path on the <strong class="text-primary">Linux server</strong>. Auto-filled after config upload. Default: <code class="px-0.5 rounded bg-white/10 text-xs">&lt;ZIoCHub data&gt;/dxl/dxlclient.config</code>.</p>
             </div>
-            <div>
-                <label for="dxl_config_path" class="block text-sm font-semibold text-secondary mb-1">Path to dxlclient.config</label>
-                <input type="text" id="dxl_config_path" name="dxl_config_path" placeholder="/path/to/data/dxl/dxlclient.config" value="{{ settings.dxl_config_path }}"
-                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm">
-                <p class="text-secondary text-xs mt-1">Absolute path on the <strong class="text-primary">Linux server</strong> (not your Windows SMB path). Auto-filled after uploading the config file; default storage is <code class="px-0.5 rounded bg-white/10 text-xs">&lt;ZIoCHub data&gt;/dxl/dxlclient.config</code>. The process user must be able to read this file and the certificate files it references.</p>
-            </div>
-            <div class="flex flex-wrap gap-2 items-center">
-                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save OpenDXL settings</button>
-                <button type="button" id="dxlTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test connection</button>
+            {% endcall %}
+
+            {% call integ_section('Retry on failure') %}
+            {{ integ_retry_panel(
+                'Retry on failure',
+                'Re-queue failed TIE reputation writes after broker connect or transient DXL errors.',
+                'dxl',
+                'dxl_retry_enabled', settings.dxl_retry_enabled,
+                'dxl_retry_interval_minutes', settings.dxl_retry_interval_minutes or '15',
+                'dxl_retry_max_attempts', settings.dxl_retry_max_attempts or '3'
+            ) }}
+            {% endcall %}
+
+            <div class="integ-form-actions">
+                <button type="submit" class="integ-btn integ-btn--save">Save OpenDXL settings</button>
+                <button type="button" id="dxlTestBtn" class="integ-btn integ-btn--test">Test connection</button>
             </div>
         </form>
-        <div id="dxlMessage" class="mt-4 hidden text-sm"></div>
+        <div id="dxlMessage" class="integ-message mt-4 hidden text-sm"></div>
         <p class="text-secondary text-xs mt-2">Test runs: load config → connect to DXL broker → send a test <em>Known Malicious</em> SHA256 reputation to TIE → disconnect. All steps must succeed before enabling production push.</p>
         <div id="dxlTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs max-h-64 overflow-auto">
             <div id="dxlTestLogContent" class="space-y-1"></div>

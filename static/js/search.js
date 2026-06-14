@@ -311,6 +311,42 @@
         }
     }
 
+    function distributionChannelLabel(channel) {
+        var ch = (channel || '').toLowerCase();
+        if (ch === 'feed') return tLabel('distribution.channel_feed', 'Feed pull (likely seen after add)');
+        if (ch === 'taxii') return tLabel('distribution.channel_taxii', 'TAXII pull (likely seen after add)');
+        return tLabel('distribution.channel_api', 'API push');
+    }
+
+    function distributionTooltip(entry) {
+        var name = entry.display_name || entry.vendor_id || '';
+        var ch = distributionChannelLabel(entry.channel);
+        var when = (typeof formatUtcToLocal === 'function' && entry.event_at)
+            ? formatUtcToLocal(entry.event_at)
+            : (entry.event_at || '');
+        var status = (entry.is_active === false)
+            ? tLabel('distribution.status_removed', 'No longer on product (removed from feed or API delete succeeded)')
+            : tLabel('distribution.status_active', 'Likely still on product');
+        return name + '\n' + ch + '\n' + status + '\n' + when;
+    }
+
+    function renderDistributionCell(result) {
+        if (result.file_type === 'YARA' || result.file_type === 'Campaign') {
+            return '<span class="text-secondary">-</span>';
+        }
+        var list = result.distribution;
+        if (!Array.isArray(list) || !list.length) {
+            return '<span class="text-secondary">-</span>';
+        }
+        return '<div class="search-distribution-icons">' + list.map(function(d) {
+            var tip = distributionTooltip(d);
+            var src = d.icon_url || '/static/img/vendors/generic.svg';
+            var inactive = d.is_active === false;
+            var cls = 'downstream-vendor-icon' + (inactive ? ' downstream-vendor-icon--inactive' : '');
+            return '<img src="' + escapeAttr(src) + '" alt="" class="' + cls + '" title="' + escapeAttr(tip) + '" />';
+        }).join('') + '</div>';
+    }
+
     let _searchAllResults = [];
     let _searchPage = 1;
     let _searchSortBy = null;
@@ -459,28 +495,28 @@
         const isDeleted = result.status === 'Deleted';
         const graphBtnLabel = tLabel('tab.campaign', 'Campaign Graph');
         const actionsCell = isCampaign
-            ? `<td class="border border-white/10 px-3 py-2">
-                <div class="flex items-center gap-1.5 flex-wrap">
+            ? `<td class="border border-white/10 px-2 py-2 search-actions-cell">
+                <div class="search-actions-btns">
                     <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="open-campaign-graph" title="${escapeAttr(graphBtnLabel)}">${escapeHtml(graphBtnLabel)}</button>
                 </div>
                </td>`
             : isYara
-            ? `<td class="border border-white/10 px-3 py-2">
-                <div class="flex items-center gap-1.5 flex-wrap">
+            ? `<td class="border border-white/10 px-2 py-2 search-actions-cell">
+                <div class="search-actions-btns">
                     <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="edit-yara-meta" title="${tLabel('actions.edit_metadata', 'Edit metadata')}">${tLabel('actions.edit', 'Edit')}</button>
                     <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="history" title="${tLabel('actions.history', 'History')}">${tLabel('actions.history', 'History')}</button>
                     <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="view-yara" title="${tLabel('actions.go_to_yara', 'Go to YARA tab')}">${tLabel('actions.view', 'View')}</button>
                 </div>
                </td>`
             : isDeleted
-            ? `<td class="border border-white/10 px-3 py-2">
-                <div class="flex items-center gap-1.5">
+            ? `<td class="border border-white/10 px-2 py-2 search-actions-cell">
+                <div class="search-actions-btns">
                     <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="history" title="${tLabel('actions.history', 'History')}">${tLabel('actions.history', 'History')}</button>
                     <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="add-note" title="${tLabel('actions.note', 'Note')}">${tLabel('actions.note', 'Note')}</button>
                 </div>
                </td>`
-            : `<td class="border border-white/10 px-3 py-2">
-                <div class="flex items-center gap-1.5">
+            : `<td class="border border-white/10 px-2 py-2 search-actions-cell">
+                <div class="search-actions-btns">
                     <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="edit">${tLabel('actions.edit', 'Edit')}</button>
                     <button type="button" class="btn-cmd-primary btn-cmd-sm" data-action="add-note" title="${tLabel('actions.note', 'Note')}">${tLabel('actions.note', 'Note')}</button>
                     <button type="button" class="btn-cmd-neutral btn-cmd-sm" data-action="history" title="${tLabel('actions.history', 'History')}">${tLabel('actions.history', 'History')}</button>
@@ -501,6 +537,7 @@
 
         const commentDir = (typeof detectTextDir === 'function') ? detectTextDir(result.comment || '') : 'auto';
         const copyLabel = tLabel('actions.copy', 'Copy');
+        const distributionCell = renderDistributionCell(result);
 
         row.innerHTML = `
             <td class="${typeCellClass}">${icon} ${result.file_type}${hintsHtml}</td>
@@ -512,6 +549,7 @@
             <td class="border border-white/10 px-4 py-2 text-sm">${tagsDisplay}</td>
             <td class="border border-white/10 px-4 py-2 text-sm" title="${escapeAttr(result.campaign_name || '')}">${campaignDisplay || '<span class="text-secondary">-</span>'}</td>
             <td class="border border-white/10 px-4 py-2">${expirationBadge}</td>
+            <td class="border border-white/10 px-1 py-2 text-sm search-distribution-cell">${distributionCell}</td>
             ${actionsCell}
         `;
 

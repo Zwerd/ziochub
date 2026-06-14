@@ -8,16 +8,15 @@
 
     let feedPulseData = null;
 
-    /** Clipped table cell: ellipsis + hover tooltip (data-title). colKind: address|tail|date|other */
+    /** Wrapped table cell with hover tooltip bubble (data-title). colKind: address|tail|date|other */
     function feedStateClipTd(innerHtml, titleText, tdExtraClass, innerExtraClass, colKind) {
-        var title = escapeAttr(titleText == null ? '' : String(titleText));
+        var rawTitle = titleText == null ? '' : String(titleText);
         var colCls = colKind === 'address' ? ' feed-state-td--address'
             : (colKind === 'tail' ? ' feed-state-td--tail'
             : (colKind === 'date' ? ' feed-state-td--date' : ''));
-        var hardCls = (colKind === 'address' || colKind === 'tail' || colKind === 'date')
-            ? ' feed-state-cell__inner--hard' : '';
-        var innerCls = 'feed-state-cell__inner' + hardCls + (innerExtraClass ? ' ' + innerExtraClass : '');
-        var dataTitle = title ? ' data-title="' + title + '"' : '';
+        var innerCls = 'feed-state-cell__inner' + (innerExtraClass ? ' ' + innerExtraClass : '');
+        var dataTitle = rawTitle.trim() && rawTitle.trim() !== '—'
+            ? ' data-title="' + escapeAttr(rawTitle) + '"' : '';
         return '<td class="' + (tdExtraClass || '') + colCls + '"' + dataTitle + '>' +
             '<span class="' + innerCls + '">' + innerHtml + '</span></td>';
     }
@@ -37,12 +36,7 @@
         }
         function showTip(td) {
             var text = td.getAttribute('data-title');
-            if (!text) {
-                hideTip();
-                return;
-            }
-            var inner = td.querySelector('.feed-state-cell__inner');
-            if (inner && inner.scrollWidth <= inner.clientWidth + 1) {
+            if (!text || text === '—') {
                 hideTip();
                 return;
             }
@@ -247,6 +241,15 @@
         const res = await fetch('/api/integration-connections');
         return await res.json().catch(function () { return {}; });
     }
+    function feedConnVendorCell(iconUrl, label, title) {
+        var iconSrc = escapeAttr(iconUrl || '/static/img/vendors/generic.svg');
+        var vendorLabel = label ? escapeHtml(label) : '—';
+        var vendorTitle = escapeAttr(title || label || '');
+        return '<div class="feed-conn-vendor">' +
+            '<img src="' + iconSrc + '" alt="" class="downstream-vendor-icon feed-conn-vendor-icon" title="' + vendorTitle + '" />' +
+            '<span class="feed-conn-vendor-label">' + vendorLabel + '</span></div>';
+    }
+
     function renderPushUnified(data) {
         if (!connPushUnifiedBody) return;
         const vendor = (data && data.push_state) ? data.push_state : [];
@@ -260,13 +263,16 @@
             if (st === 'partial') return 'PARTIAL';
             if (st === 'disabled') return 'Disabled';
             if (st === 'skip') return 'Skipped';
+            if (st === 'never') {
+                return (typeof t === 'function' && t('feedpulse.connections_never')) ? t('feedpulse.connections_never') : 'Never';
+            }
             return '—';
         }
         function statusClass(st) {
             if (st === true || st === 'ok') return 'text-green-300 font-semibold';
             if (st === false || st === 'fail') return 'text-red-300 font-semibold';
             if (st === 'partial') return 'text-amber-300 font-semibold';
-            if (st === 'disabled' || st === 'skip') return 'text-slate-400';
+            if (st === 'disabled' || st === 'skip' || st === 'never') return 'text-slate-400';
             return 'text-secondary';
         }
         function transferredText(count, kind) {
@@ -301,15 +307,21 @@
                 at: at,
                 status: displayStatus,
                 reason: msg || '',
+                vendor_label: r.vendor_label || '',
+                vendor_icon_url: r.vendor_icon_url || '/static/img/vendors/generic.svg',
             });
         });
 
         // Automation targets: already aggregated per URL
         autoTargets.forEach(function (r) {
             const system = r.name || '—';
-            const systemType = 'HTTP automation';
+            const systemType = r.integration_label || 'HTTP automation';
             const addr = (r.url || '').trim() || '—';
             const kinds = (r.kinds || []).join(', ');
+            var autoMsg = '';
+            if (r.status === 'never') {
+                autoMsg = (typeof t === 'function' && t('feedpulse.push_state_no_attempt')) ? t('feedpulse.push_state_no_attempt') : 'No push attempt recorded yet';
+            }
             rows.push({
                 system: system,
                 system_type: systemType,
@@ -317,7 +329,10 @@
                 transferred: kinds ? ('— (' + kinds + ')') : '—',
                 at: r.last_seen_at || null,
                 status: r.status || '',
-                reason: '',
+                reason: autoMsg,
+                vendor_label: r.vendor_label || '',
+                vendor_icon_url: r.vendor_icon_url || '/static/img/vendors/generic.svg',
+                integration_id: r.integration_id || '',
             });
         });
 
@@ -338,13 +353,21 @@
         connPushUnifiedBody.innerHTML = rows.map(function (r) {
             const stLbl = statusLabel(r.status);
             const stCls = statusClass(r.status);
+            var vendorTitle = r.vendor_label || '';
+            if (r.integration_id) {
+                vendorTitle = r.vendor_label || r.system_type || '';
+            } else if (r.system_type === 'HTTP automation') {
+                vendorTitle = (typeof t === 'function' && t('feedpulse.push_state_generic_automation')) ? t('feedpulse.push_state_generic_automation') : 'Generic HTTP automation target';
+            }
+            var vendorInner = feedConnVendorCell(r.vendor_icon_url, r.vendor_label, vendorTitle);
             return '<tr class="hover:bg-white/5">' +
+                feedStateClipTd(vendorInner, vendorTitle || r.vendor_label, 'text-slate-300', '', 'other') +
                 feedStateClipTd(escapeHtml(r.system), r.system, 'text-slate-200', '', 'other') +
                 feedStateClipTd(escapeHtml(r.system_type), r.system_type, 'text-cyan-200/90', '', 'other') +
                 feedStateClipTd(escapeHtml(r.address), r.address, 'text-slate-200', 'feed-state-cell--mono', 'address') +
                 feedStateClipTd(escapeHtml(r.transferred), r.transferred, 'text-slate-200', '', 'other') +
-                feedStateClipTd(escapeHtml(fmtConnTs(r.at)), fmtConnTs(r.at), 'text-secondary', 'feed-state-cell--nowrap', 'date') +
-                '<td class="' + stCls + ' feed-state-cell--nowrap">' + escapeHtml(stLbl) + '</td>' +
+                feedStateClipTd(escapeHtml(fmtConnTs(r.at)), fmtConnTs(r.at), 'text-secondary', '', 'date') +
+                '<td class="' + stCls + ' feed-state-cell--status">' + escapeHtml(stLbl) + '</td>' +
                 feedStateClipTd(escapeHtml(r.reason || ''), r.reason, 'text-secondary', '', 'tail') +
                 '</tr>';
         }).join('');
@@ -392,13 +415,20 @@
             var stLbl = escapeHtml(statusLabel(st));
             var stCls = statusClass(st);
             var summary = escapeHtml(row.last_summary || '—');
+            var vendorTitle = row.vendor_label || name;
+            var vendorInner = feedConnVendorCell(
+                row.vendor_icon_url || '/static/img/vendors/generic.svg',
+                row.vendor_label || '',
+                vendorTitle
+            );
             return '<tr class="hover:bg-white/5">' +
+                feedStateClipTd(vendorInner, vendorTitle, 'text-slate-300', '', 'other') +
                 feedStateClipTd(name, row.name, 'text-slate-200 font-semibold', '', 'other') +
                 feedStateClipTd(addrDisp, addrRaw || row.host, 'text-cyan-200/90', 'feed-state-cell--mono', 'address') +
-                '<td class="text-slate-300 feed-state-cell--nowrap">' + escapeHtml(intervalLabel(row.pull_interval_min)) + '</td>' +
-                feedStateClipTd(seen, fmtConnTs(row.last_pull_at), 'text-secondary', 'feed-state-cell--nowrap', 'date') +
-                feedStateClipTd(nextSeen, fmtConnTs(row.next_pull_at), 'text-secondary', 'feed-state-cell--nowrap', 'date') +
-                '<td class="' + stCls + ' feed-state-cell--nowrap">' + stLbl + '</td>' +
+                feedStateClipTd(escapeHtml(intervalLabel(row.pull_interval_min)), intervalLabel(row.pull_interval_min), 'text-slate-300', '', 'other') +
+                feedStateClipTd(seen, fmtConnTs(row.last_pull_at), 'text-secondary', '', 'date') +
+                feedStateClipTd(nextSeen, fmtConnTs(row.next_pull_at), 'text-secondary', '', 'date') +
+                '<td class="' + stCls + ' feed-state-cell--status">' + stLbl + '</td>' +
                 feedStateClipTd(summary, row.last_summary, 'text-secondary', '', 'tail') +
                 '</tr>';
         }).join('');
@@ -487,7 +517,7 @@
 
     function resetPushModalLoadingState() {
         if (connPushUnifiedBody) {
-            connPushUnifiedBody.innerHTML = '<tr><td colspan="7" class="px-3 py-3 text-secondary text-xs">' +
+            connPushUnifiedBody.innerHTML = '<tr><td colspan="8" class="px-3 py-3 text-secondary text-xs">' +
                 ((typeof t === 'function' && t('feedpulse.loading')) ? t('feedpulse.loading') : 'Loading...') + '</td></tr>';
         }
         if (connPushUnifiedEmpty) connPushUnifiedEmpty.classList.add('hidden');
@@ -506,7 +536,7 @@
     async function openFeedConnectionsModal() {
         if (!connModal || !connBody) return;
         connModal.classList.remove('hidden');
-        connBody.innerHTML = '<tr><td colspan="5" class="px-3 py-3 text-secondary text-xs">' +
+        connBody.innerHTML = '<tr><td colspan="6" class="px-3 py-3 text-secondary text-xs">' +
             ((typeof t === 'function' && t('feedpulse.loading')) ? t('feedpulse.loading') : 'Loading...') + '</td></tr>';
         if (connEmpty) {
             connEmpty.textContent = '';
@@ -525,13 +555,20 @@
             const rows = (data.feed_clients || []);
             if (connEmpty) connEmpty.classList.toggle('hidden', rows.length > 0);
             connBody.innerHTML = rows.map(function (r) {
-                const name = escapeHtml(r.product_name || '—');
-                const ptype = escapeHtml(r.product_type || '—');
-                const kind = escapeHtml(r.value_kind || '—');
-                const uri = escapeHtml(r.uri || '');
-                const seen = escapeHtml(fmtConnTs(r.last_connection_at));
+                var vendorTitle = r.downstream_registered
+                    ? (r.vendor_label || '')
+                    : ((typeof t === 'function' && t('feedpulse.connections_vendor_unregistered')) ? t('feedpulse.connections_vendor_unregistered') : 'Not registered in Admin → Downstream Systems') + ' (' + (r.client_ip || '') + ')';
+                var vendorCell = feedConnVendorCell(r.vendor_icon_url, r.vendor_label, vendorTitle);
+                var sysName = escapeHtml(r.system_name || r.product_name || '—');
+                var sysTitle = r.downstream_registered && r.client_ip
+                    ? ' title="' + escapeAttr(r.client_ip) + '"' : '';
+                var ptype = escapeHtml(r.product_type || '—');
+                var kind = escapeHtml(r.value_kind || '—');
+                var uri = escapeHtml(r.uri || '');
+                var seen = escapeHtml(fmtConnTs(r.last_connection_at));
                 return '<tr class="hover:bg-white/5">' +
-                    '<td class="px-2 py-1.5 text-slate-300 break-all">' + name + '</td>' +
+                    '<td class="px-2 py-1.5 text-slate-300">' + vendorCell + '</td>' +
+                    '<td class="px-2 py-1.5 text-slate-300 break-all"' + sysTitle + '>' + sysName + '</td>' +
                     '<td class="px-2 py-1.5 text-cyan-200/90 break-words">' + ptype + '</td>' +
                     '<td class="px-2 py-1.5 text-slate-200">' + kind + '</td>' +
                     '<td class="px-2 py-1.5 text-slate-200 font-mono text-[11px] break-all">' + uri + '</td>' +

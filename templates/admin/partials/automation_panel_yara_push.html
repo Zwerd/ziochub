@@ -1,27 +1,36 @@
+{% from 'admin/partials/integration_form_macros.html' import integ_section, integ_yes_no, integ_retry_panel %}
 <div id="settings-tab-yara-push" class="settings-tab-pane hidden">
-    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
-        <h3 class="text-lg font-semibold accent-blue mb-2">YARA push — HTTP API</h3>
-        <p class="text-secondary text-sm mb-4">Vendor-neutral HTTP YARA upload targets. Trellix NX wsapis presets are under <strong class="text-primary">Push YARA → Trellix</strong>.</p>
-        <form id="yaraAutomationForm" class="space-y-4">
-            <div>
-                <label for="automation_fireeye_enabled" class="block text-sm font-semibold text-secondary mb-1">Push approved YARA to HTTP API target(s)</label>
-                <select id="automation_fireeye_enabled" name="automation_fireeye_enabled" class="w-full max-w-xs px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                    <option value="false" {% if settings.automation_fireeye_enabled == 'false' %}selected{% endif %}>No</option>
-                    <option value="true" {% if settings.automation_fireeye_enabled == 'true' %}selected{% endif %}>Yes</option>
-                </select>
+    <div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+        <h3 class="text-lg font-semibold accent-blue mb-2">HTTP YARA push</h3>
+        <p class="text-secondary text-sm mb-4">Vendor-neutral HTTP YARA upload targets. Trellix NX wsapis presets are under <strong class="text-primary">Push YARA → Trellix</strong>. TLS for YARA uses the same <strong class="text-primary">Verify TLS</strong> setting as Trellix NX.</p>
+
+        <form id="yaraAutomationForm" class="space-y-0">
+            {% call integ_section('General') %}
+            {{ integ_yes_no('automation_fireeye_enabled', 'Enable outbound push', settings.automation_fireeye_enabled, 'Upload approved YARA rules to each enabled HTTP API target.') }}
+            {% endcall %}
+
+            {% call integ_section('Targets') %}
+            <div id="fireeyeAppliancesList" class="space-y-3" data-initial="{{ settings.automation_fireeye_appliances | e }}"></div>
+            <button type="button" id="fireeyeAddAppliance" class="mt-2 integ-btn integ-btn--secondary text-sm py-1.5">+ Add target</button>
+            {% endcall %}
+
+            {% call integ_section('Retry on failure') %}
+            {{ integ_retry_panel(
+                'Retry on failure',
+                'Re-queue failed custom HTTP YARA uploads after transient network errors.',
+                'yara_http',
+                'yara_http_retry_enabled', settings.yara_http_retry_enabled,
+                'yara_http_retry_interval_minutes', settings.yara_http_retry_interval_minutes or '15',
+                'yara_http_retry_max_attempts', settings.yara_http_retry_max_attempts or '3'
+            ) }}
+            {% endcall %}
+
+            <div class="integ-form-actions">
+                <button type="submit" class="integ-btn integ-btn--save">Save YARA push settings</button>
+                <button type="button" id="automationTestBtn" class="integ-btn integ-btn--test">Test push</button>
             </div>
-            <p class="text-secondary text-xs">TLS ignore for YARA push uses the same setting as <strong class="text-primary">Trellix NX</strong> (Push YARA → Trellix tab).</p>
-            <div>
-                <label class="block text-sm font-semibold text-secondary mb-2">Custom HTTP targets</label>
-                <div id="fireeyeAppliancesList" class="space-y-3" data-initial="{{ settings.automation_fireeye_appliances | e }}"></div>
-                <button type="button" id="fireeyeAddAppliance" class="mt-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition">+ Add target</button>
-            </div>
-            <div class="flex flex-wrap gap-2 items-center">
-                <button type="button" id="automationTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-cyan-500/40 hover:bg-cyan-900/30 text-cyan-200 transition">Test custom targets</button>
-                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save YARA push settings</button>
-            </div>
-            <div id="automationTestResult" class="hidden rounded-lg border border-white/10 bg-black/30 p-3 text-sm space-y-1 mt-2"></div>
+            <div id="automationTestResult" class="integ-test-log hidden rounded-lg border border-white/10 bg-black/30 p-3 text-sm space-y-1 mt-2"></div>
         </form>
-        <div id="yaraAutomationMessage" class="mt-4 hidden text-sm"></div>
+        <div id="yaraAutomationMessage" class="integ-message mt-4 hidden text-sm"></div>
     </div>
 </div>

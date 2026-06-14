@@ -128,6 +128,7 @@
       "tags": "Tags",
       "campaign": "Campaign",
       "expiration": "Expiration Status",
+      "distribution": "Distribution",
       "actions": "Actions",
       "expired": "Expired",
       "deleted": "Deleted"
@@ -364,6 +365,13 @@
     "search_revoked": "Revoked",
     "search_deleted": "Deleted",
     "search_expired": "Expired"
+  },
+  "distribution": {
+    "channel_feed": "Feed pull (likely seen after add)",
+    "channel_taxii": "TAXII pull (likely seen after add)",
+    "channel_api": "API push",
+    "status_active": "Likely still on product",
+    "status_removed": "No longer on product (removed from feed or API delete succeeded)"
   },
   "feed": {
     "title": "Live Feed",
@@ -613,6 +621,14 @@
     "connections_last_ioc_expire_short": "Last expired IOC removal (outbound)",
     "connections_last_ioc_manual_short": "Last manual IOC removal (outbound)",
     "connections_feed_hint": "Consumers that successfully pulled /feed or /taxii2 (throttled).",
+    "connections_col_vendor": "Vendor",
+    "connections_col_system": "System",
+    "connections_col_product_type": "Product type",
+    "connections_col_value_kind": "Value kind",
+    "connections_col_uri": "URI",
+    "connections_vendor_unregistered": "Not registered in Admin → Downstream Systems",
+    "push_state_no_attempt": "No push attempt recorded yet",
+    "push_state_generic_automation": "Generic HTTP automation target",
     "connections_never": "Never",
     "connections_empty_feeds": "No feed access recorded yet.",
     "allowlist_btn": "Allowlist",

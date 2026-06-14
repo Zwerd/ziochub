@@ -128,6 +128,7 @@
       "tags": "תגיות",
       "campaign": "קמפיין",
       "expiration": "סטטוס תפוגה",
+      "distribution": "הפצה",
       "actions": "פעולות",
       "expired": "פג תוקף",
       "deleted": "נמחק"
@@ -364,6 +365,13 @@
     "search_revoked": "בוטל (Revoked)",
     "search_deleted": "נמחק",
     "search_expired": "פג תוקף"
+  },
+  "distribution": {
+    "channel_feed": "משיכת Feed (כנראה נראה אחרי ההוספה)",
+    "channel_taxii": "משיכת TAXII (כנראה נראה אחרי ההוספה)",
+    "channel_api": "דחיפה ב-API",
+    "status_active": "כנראה עדיין במוצר",
+    "status_removed": "כבר לא במוצר (הוסר מה-Feed או מחיקת API הצליחה)"
   },
   "feed": {
     "title": "פיד חי",
@@ -613,6 +621,14 @@
     "connections_last_ioc_expire_short": "הסרת IOC שפג אחרונה (יוצא)",
     "connections_last_ioc_manual_short": "הסרת IOC ידנית אחרונה (יוצא)",
     "connections_feed_hint": "צרכנים שמשכו בהצלחה /feed או /taxii2 (מוגבל קצב).",
+    "connections_col_vendor": "יצרן",
+    "connections_col_system": "מערכת",
+    "connections_col_product_type": "סוג מוצר",
+    "connections_col_value_kind": "סוג ערך",
+    "connections_col_uri": "URI",
+    "connections_vendor_unregistered": "לא רשום ב-Admin → Downstream Systems",
+    "push_state_no_attempt": "עדיין לא נרשמה דחיפה",
+    "push_state_generic_automation": "יעד HTTP אוטומציה גנרי",
     "connections_never": "אף פעם",
     "connections_empty_feeds": "עדיין לא נרשמה גישה לפיד.",
     "allowlist_btn": "רשימת היתר",

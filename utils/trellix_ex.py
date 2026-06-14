@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from urllib.parse import urlencode
 from typing import Any, Callable, List, Optional
 
+from utils.http_identity import trellix_ex_user_agent
 from utils.yara_http_push import _evaluate_http_response_body, _truncate_msg
 
 _MAX_RESPONSE_BODY_BYTES = 256 * 1024
@@ -48,7 +49,7 @@ _DEFAULT_EX_CONTENT_TYPE = 'base'
 # EX (Email Security) web UI - NX IPS uses /wmps/... (see utils.trellix_nx, api_style wmps).
 _DEFAULT_EX_UPLOAD_PATH = '/ex/yara_rules_ng/upload_yara'
 _EX_ACCEPT = 'application/json, text/plain, */*'
-_EX_USER_AGENT = 'Mozilla/5.0 (compatible; ZIoCHub/2.0; Trellix-EX-YARA)'
+_EX_USER_AGENT = trellix_ex_user_agent()
 _VALID_AUTH_METHODS = frozenset(('password', 'ldap', 'auto'))
 _EX_CONNECTION_TEST_FILENAME = 'ziochub_connection_test.yar'
 _EX_CONNECTION_TEST_YARA = """rule ziochub_connection_test {

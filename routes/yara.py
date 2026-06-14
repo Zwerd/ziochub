@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 from datetime import datetime
 
@@ -54,12 +55,27 @@ def _data_yara_pending():
     return current_app.config.get('DATA_YARA_PENDING') or ''
 
 
+def _data_yara_rejected():
+    return current_app.config.get('DATA_YARA_REJECTED') or ''
+
+
 def _yara_safe_path(filename):
     return yara_safe_path(filename, _data_yara())
 
 
 def _yara_safe_path_pending(filename):
     return yara_safe_path(filename, _data_yara_pending())
+
+
+def _yara_safe_path_rejected(filename):
+    return yara_safe_path(filename, _data_yara_rejected())
+
+
+def _move_yara_file(src: str, dst: str) -> None:
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if os.path.isfile(dst):
+        os.remove(dst)
+    shutil.move(src, dst)
 
 
 def _reject_invalid_yara_syntax(content: str):
@@ -102,7 +118,7 @@ def _find_existing_yara_with_same_content(content: str, exclude_filename: str | 
     if row:
         return row.filename
     excl = {exclude_filename} if exclude_filename else set()
-    for base in (_data_yara(), _data_yara_pending()):
+    for base in (_data_yara(), _data_yara_pending(), _data_yara_rejected()):
         if not base or not os.path.isdir(base):
             continue
         for name in os.listdir(base):
@@ -164,13 +180,22 @@ def upload_yara():
         data_pending = _data_yara_pending()
         filepath_approved = os.path.join(data_yara, safe_filename)
         filepath_pending = os.path.join(data_pending, safe_filename)
-        if os.path.exists(filepath_approved) or os.path.exists(filepath_pending):
+        filepath_rejected = os.path.join(_data_yara_rejected(), safe_filename)
+        username = current_user.username.lower()
+        if os.path.exists(filepath_approved) or os.path.exists(filepath_pending) or os.path.exists(filepath_rejected):
             return jsonify({'success': False, 'message': 'Rule name already exists'}), 409
-        if YaraRule.query.filter_by(filename=safe_filename).first():
+        existing_rule = YaraRule.query.filter_by(filename=safe_filename).first()
+        if existing_rule:
+            if (existing_rule.status or '').lower() == 'rejected' and (existing_rule.analyst or '').lower() == username:
+                return jsonify({
+                    'success': False,
+                    'message': f'Rule "{safe_filename}" was rejected. Open Status → Rejected and use Edit & Resubmit.',
+                    'code': 'rejected_resubmit',
+                    'filename': safe_filename,
+                }), 409
             return jsonify({'success': False, 'message': 'Rule name already exists'}), 409
         with open(filepath_pending, 'w', encoding='utf-8') as f:
             f.write(file_content)
-        username = current_user.username.lower()
         comment = (request.form.get('comment') or '').strip() or 'Uploaded YARA Rule'
         quality_pts = compute_yara_quality_points(file_content)
         _commit_with_retry, _api_error, audit_log, _log_champs_event = _from_app('_commit_with_retry', '_api_error', 'audit_log', '_log_champs_event')
@@ -844,12 +869,17 @@ def approve_yara():
                         try:
                             combined_results = []
                             overall = True
+                            from utils.yara_retry_enqueue import enqueue_yara_vendor_failure
+
                             if has_fe_targets:
                                 result_fe = push_yara_to_appliances(
                                     content, rule.filename, appliances, audit_log, verify_ssl=verify_fe
                                 )
                                 combined_results.extend(result_fe.get('results', []))
                                 overall = overall and bool(result_fe.get('overall_success'))
+                                enqueue_yara_vendor_failure(
+                                    'yara_http', rule.filename, result_fe, get_setting=_get_setting,
+                                )
                             if tx_on:
                                 from utils.trellix_ex import push_yara_trellix_ex
 
@@ -862,6 +892,9 @@ def approve_yara():
                                 )
                                 combined_results.extend(result_tx.get('results', []))
                                 overall = overall and bool(result_tx.get('overall_success'))
+                                enqueue_yara_vendor_failure(
+                                    'trellix_ex', rule.filename, result_tx, get_setting=_get_setting,
+                                )
                             if cms_on:
                                 from utils.trellix_cms import push_yara_trellix_cms
 
@@ -874,6 +907,9 @@ def approve_yara():
                                 )
                                 combined_results.extend(result_cms.get('results', []))
                                 overall = overall and bool(result_cms.get('overall_success'))
+                                enqueue_yara_vendor_failure(
+                                    'trellix_cms', rule.filename, result_cms, get_setting=_get_setting,
+                                )
                             if nx_wmps_on:
                                 from utils.trellix_nx import push_yara_nx_wmps
 
@@ -886,6 +922,9 @@ def approve_yara():
                                 )
                                 combined_results.extend(result_nxw.get('results', []))
                                 overall = overall and bool(result_nxw.get('overall_success'))
+                                enqueue_yara_vendor_failure(
+                                    'trellix_nx', rule.filename, result_nxw, get_setting=_get_setting,
+                                )
                             result = {'overall_success': overall, 'results': combined_results}
                             try:
                                 from utils.integration_telemetry import record_yara_automation_results
@@ -905,6 +944,7 @@ def approve_yara():
                                 set_fireeye_status(rule.filename, 'error', msgs or 'Push failed')
                         except Exception as e:
                             logging.exception('YARA outbound push failed for %s', rule.filename)
+                            err_msg = str(e)
                             try:
                                 from utils.integration_telemetry import record_yara_automation_results
 
@@ -912,7 +952,7 @@ def approve_yara():
                                     {
                                         'overall_success': False,
                                         'results': [
-                                            {'name': '—', 'url': '', 'success': False, 'message': str(e)}
+                                            {'name': '—', 'url': '', 'success': False, 'message': err_msg}
                                         ],
                                     },
                                     kind='push',
@@ -920,7 +960,32 @@ def approve_yara():
                                 )
                             except Exception:
                                 pass
-                            set_fireeye_status(rule.filename, 'error', str(e))
+                            try:
+                                from utils.yara_retry_enqueue import enqueue_yara_vendor_failure
+
+                                err_res = {
+                                    'overall_success': False,
+                                    'results': [{'name': '—', 'success': False, 'message': err_msg}],
+                                }
+                                if has_fe_targets:
+                                    enqueue_yara_vendor_failure(
+                                        'yara_http', rule.filename, err_res, get_setting=_get_setting,
+                                    )
+                                if tx_on:
+                                    enqueue_yara_vendor_failure(
+                                        'trellix_ex', rule.filename, err_res, get_setting=_get_setting,
+                                    )
+                                if cms_on:
+                                    enqueue_yara_vendor_failure(
+                                        'trellix_cms', rule.filename, err_res, get_setting=_get_setting,
+                                    )
+                                if nx_wmps_on:
+                                    enqueue_yara_vendor_failure(
+                                        'trellix_nx', rule.filename, err_res, get_setting=_get_setting,
+                                    )
+                            except Exception:
+                                logging.exception('YARA exception enqueue retry failed')
+                            set_fireeye_status(rule.filename, 'error', err_msg)
                             audit_log('yara_push_fail', f'file={rule.filename} error={e}')
 
                 threading.Thread(target=_yara_outbound_upload, daemon=True).start()
@@ -953,40 +1018,242 @@ def fireeye_status():
     return jsonify({'success': True, 'data': info})
 
 
+def _yara_rejected_row_dict(r: YaraRule) -> dict:
+    return {
+        'filename': r.filename,
+        'original_filename': r.original_filename or None,
+        'display_name': (r.original_filename or r.filename),
+        'upload_date': r.uploaded_at.strftime('%Y-%m-%d %H:%M') if r.uploaded_at else None,
+        'rejected_at': iso_utc(r.rejected_at) if r.rejected_at else None,
+        'rejected_by': r.rejected_by,
+        'rejection_reason': r.rejection_reason,
+        'seen': r.rejection_seen_at is not None,
+        'comment': r.comment,
+        'ticket_id': r.ticket_id,
+        'campaign_id': r.campaign_id,
+    }
+
+
+@bp.route('/yara/my-rejected', methods=['GET'])
+@login_required
+def list_my_rejected():
+    """List current user's rejected YARA rules (soft reject — resubmit allowed)."""
+    try:
+        username = current_user.username.lower()
+        rules = (
+            YaraRule.query.filter_by(status='rejected', analyst=username)
+            .order_by(YaraRule.rejected_at.desc(), YaraRule.uploaded_at.desc())
+            .all()
+        )
+        data_rejected = _data_yara_rejected()
+        files = []
+        unseen = 0
+        for r in rules:
+            filepath = os.path.join(data_rejected, r.filename)
+            if not os.path.isfile(filepath):
+                continue
+            if r.rejection_seen_at is None:
+                unseen += 1
+            files.append(_yara_rejected_row_dict(r))
+        return jsonify({'success': True, 'files': files, 'unseen_count': unseen})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/yara/rejected-content/<path:filename>', methods=['GET'])
+@login_required
+def view_yara_rejected_content(filename):
+    """Return raw content of a rejected YARA file (admin or rule owner)."""
+    safe, filepath = _yara_safe_path_rejected(filename)
+    if safe is None:
+        return jsonify({'success': False, 'message': MSG_INVALID_FILENAME}), 400
+    if not os.path.isfile(filepath):
+        return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
+    rule = YaraRule.query.filter_by(filename=safe, status='rejected').first()
+    if not rule:
+        return jsonify({'success': False, 'message': 'Not a rejected rule'}), 404
+    if not getattr(current_user, 'is_admin', False) and rule.analyst != current_user.username.lower():
+        return jsonify({'success': False, 'message': 'Access denied'}), 403
+    try:
+        with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+        return jsonify({
+            'success': True,
+            'filename': safe,
+            'content': content,
+            'rejection_reason': rule.rejection_reason,
+            'rejected_by': rule.rejected_by,
+            'rejected_at': iso_utc(rule.rejected_at) if rule.rejected_at else None,
+            'comment': rule.comment,
+            'ticket_id': rule.ticket_id,
+            'campaign_id': rule.campaign_id,
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/yara/mark-rejection-seen', methods=['POST'])
+@login_required
+def mark_yara_rejection_seen():
+    """Mark rejected rule(s) as seen by the analyst (clears notification badge)."""
+    _commit_with_retry, = _from_app('_commit_with_retry')
+    try:
+        data = request.get_json() or {}
+        mark_all = bool(data.get('all'))
+        filename = (data.get('filename') or '').strip()
+        username = current_user.username.lower()
+        now = datetime.utcnow()
+        q = YaraRule.query.filter_by(status='rejected', analyst=username).filter(
+            YaraRule.rejection_seen_at.is_(None)
+        )
+        if not mark_all:
+            if not filename:
+                return jsonify({'success': False, 'message': MSG_FILENAME_REQUIRED}), 400
+            safe, _ = _yara_safe_path_rejected(filename)
+            if safe is None:
+                return jsonify({'success': False, 'message': MSG_INVALID_FILENAME}), 400
+            q = q.filter_by(filename=safe)
+        updated = 0
+        for rule in q.all():
+            rule.rejection_seen_at = now
+            updated += 1
+        if updated:
+            _commit_with_retry()
+        return jsonify({'success': True, 'updated': updated})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
+@bp.route('/yara/resubmit', methods=['POST'])
+@login_required
+def resubmit_yara():
+    """Move a rejected rule back to pending (optionally with updated content/metadata)."""
+    _commit_with_retry, audit_log, _log_champs_event = _from_app(
+        '_commit_with_retry', 'audit_log', '_log_champs_event'
+    )
+    try:
+        data = request.get_json() or {}
+        if not data:
+            return jsonify({'success': False, 'message': MSG_JSON_BODY_REQUIRED}), 400
+        filename = (data.get('filename') or '').strip()
+        if not filename:
+            return jsonify({'success': False, 'message': MSG_FILENAME_REQUIRED}), 400
+        safe, path_rejected = _yara_safe_path_rejected(filename)
+        if safe is None:
+            return jsonify({'success': False, 'message': MSG_INVALID_FILENAME}), 400
+        rule = YaraRule.query.filter_by(filename=safe, status='rejected').first()
+        if not rule:
+            return jsonify({'success': False, 'message': 'Rule not found or not rejected'}), 404
+        if rule.analyst != current_user.username.lower():
+            return jsonify({'success': False, 'message': 'Access denied'}), 403
+        if not os.path.isfile(path_rejected):
+            return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
+
+        content = data.get('content')
+        if content is None:
+            with open(path_rejected, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+        else:
+            content = str(content)
+        syntax_reject = _reject_invalid_yara_syntax(content)
+        if syntax_reject is not None:
+            return syntax_reject
+        dup_name = _find_existing_yara_with_same_content(content, exclude_filename=safe)
+        if dup_name:
+            msg = MSG_YARA_DUPLICATE_CONTENT_UPLOAD.format(filename=dup_name)
+            return jsonify({
+                'success': False,
+                'message': msg,
+                'code': 'duplicate_content',
+                'existing_filename': dup_name,
+            }), 409
+
+        path_pending = os.path.join(_data_yara_pending(), safe)
+        if os.path.isfile(path_pending):
+            return jsonify({'success': False, 'message': 'A pending rule with this name already exists'}), 409
+        _move_yara_file(path_rejected, path_pending)
+        with open(path_pending, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        if 'comment' in data:
+            rule.comment = (data.get('comment') or '').strip() or rule.comment
+        if 'ticket_id' in data:
+            rule.ticket_id = (data.get('ticket_id') or '').strip() or None
+        campaign_name = (data.get('campaign_name') or '').strip()
+        if campaign_name:
+            c = Campaign.query.filter_by(name=campaign_name).first()
+            rule.campaign_id = c.id if c else None
+        elif data.get('campaign_name') == '':
+            rule.campaign_id = None
+
+        rule.status = 'pending'
+        rule.rejected_at = None
+        rule.rejected_by = None
+        rule.rejection_reason = None
+        rule.rejection_seen_at = None
+        rule.uploaded_at = datetime.utcnow()
+        rule.quality_points = compute_yara_quality_points(content)
+        rule.content_sha256 = yara_content_sha256(content)
+        _commit_with_retry()
+        audit_log('YARA_RESUBMIT', f'file={safe} analyst={rule.analyst}')
+        _log_champs_event('yara_resubmit', user_id=current_user.id, payload={'filename': safe})
+        return jsonify({
+            'success': True,
+            'message': f'Rule "{safe}" resubmitted and is pending admin approval.',
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @bp.route('/yara/reject', methods=['POST'])
 @admin_required
 def reject_yara():
-    """Remove pending rule file and delete DB row (admin only)."""
-    _commit_with_retry, audit_log, refresh_champ_score_for_user = _from_app('_commit_with_retry', 'audit_log', 'refresh_champ_score_for_user')
+    """Soft-reject pending rule: keep DB row + file in YARA_rejected for analyst resubmit."""
+    _commit_with_retry, audit_log, _log_champs_event = _from_app(
+        '_commit_with_retry', 'audit_log', '_log_champs_event'
+    )
     try:
         data = request.get_json() or {}
         filename = (data.get('filename') or '').strip()
         if not filename:
             return jsonify({'success': False, 'message': MSG_FILENAME_REQUIRED}), 400
+        reason = sanitize_comment((data.get('reason') or '').strip()) or None
         safe, path_pending = _yara_safe_path_pending(filename)
         if safe is None:
             return jsonify({'success': False, 'message': MSG_INVALID_FILENAME}), 400
         rule = YaraRule.query.filter_by(filename=safe, status='pending').first()
         if not rule:
             return jsonify({'success': False, 'message': 'Rule not found or not pending'}), 404
-        if os.path.isfile(path_pending):
-            try:
-                os.remove(path_pending)
-            except OSError:
-                pass
-        analyst_username = (rule.analyst or '').strip()
-        db.session.delete(rule)
+        if not os.path.isfile(path_pending):
+            return jsonify({'success': False, 'message': MSG_FILE_NOT_FOUND}), 404
+        path_rejected = os.path.join(_data_yara_rejected(), rule.filename)
+        _move_yara_file(path_pending, path_rejected)
+        rule.status = 'rejected'
+        rule.rejected_at = datetime.utcnow()
+        rule.rejected_by = (current_user.username or '').strip().lower() or None
+        rule.rejection_reason = reason
+        rule.rejection_seen_at = None
         _commit_with_retry()
-        audit_log('YARA_REJECT', f'file={safe}')
-        # Pending rules don't grant points, but refresh anyway so caches/UI stay consistent.
+        audit_log('YARA_REJECT', f'file={safe} by={rule.rejected_by} reason="{ (reason or "")[:120] }"')
+        analyst_username = (rule.analyst or '').strip()
         if analyst_username:
             owner = User.query.filter(func.lower(User.username) == analyst_username.lower()).first()
             if owner:
-                try:
-                    refresh_champ_score_for_user(owner.id)
-                except Exception:
-                    pass
-        return jsonify({'success': True, 'message': f'Rejected: {safe}'})
+                _log_champs_event(
+                    'yara_rejected',
+                    user_id=owner.id,
+                    payload={
+                        'filename': safe,
+                        'rejected_by': rule.rejected_by,
+                        'reason': reason,
+                    },
+                )
+        return jsonify({
+            'success': True,
+            'message': f'Rejected: {safe}. The analyst can edit and resubmit from Status → Rejected.',
+        })
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': str(e)}), 500

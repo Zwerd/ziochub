@@ -1,0 +1,101 @@
+{# Shared layout primitives for Integrations → Push IOC / Push YARA panels. #}
+
+{% macro integ_brand_heading(icon_url, title) %}
+<h3 class="integ-brand-heading text-lg font-semibold accent-blue mb-2 flex items-center gap-2">
+    <img src="{{ icon_url }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+    <span>{{ title }}</span>
+</h3>
+{% endmacro %}
+
+{% macro integ_panel_open(title, intro='') %}
+<div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+    <h3 class="text-lg font-semibold accent-blue mb-2">{{ title }}</h3>
+    {% if intro %}<p class="text-secondary text-sm mb-4">{{ intro }}</p>{% endif %}
+{% endmacro %}
+
+{% macro integ_panel_close() %}
+</div>
+{% endmacro %}
+
+{% macro integ_section(title='') %}
+<section class="integ-form-section">
+    {% if title %}<h4 class="integ-form-section__title">{{ title }}</h4>{% endif %}
+    <div class="integ-form-section__body space-y-4">
+        {{ caller() }}
+    </div>
+</section>
+{% endmacro %}
+
+{% macro integ_yes_no(id, label, value, hint='', wide=false, default_on=false) %}
+<div class="integ-field{% if not wide %} integ-field--compact{% endif %}">
+    <label for="{{ id }}" class="integ-label">{{ label }}</label>
+    <select id="{{ id }}" class="integ-select">
+        {% if default_on %}
+        <option value="false" {% if value == 'false' %}selected{% endif %}>No</option>
+        <option value="true" {% if value != 'false' %}selected{% endif %}>Yes</option>
+        {% else %}
+        <option value="false" {% if value != 'true' %}selected{% endif %}>No</option>
+        <option value="true" {% if value == 'true' %}selected{% endif %}>Yes</option>
+        {% endif %}
+    </select>
+    {% if hint %}<p class="integ-hint">{{ hint }}</p>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro integ_verify_tls(id, value, hint='') %}
+{{ integ_yes_no(id, 'Verify TLS certificate', value, hint or 'Set to No only for lab appliances with self-signed certificates.') }}
+{% endmacro %}
+
+{% macro integ_actions(save_label, save_id='', test_id='', ping_id='', extra='') %}
+<div class="integ-form-actions">
+    <button type="submit" class="integ-btn integ-btn--save"{% if save_id %} id="{{ save_id }}"{% endif %}>{{ save_label }}</button>
+    {% if ping_id %}
+    <button type="button" id="{{ ping_id }}" class="integ-btn integ-btn--secondary" title="Import / module check only (no remote call)">Check module</button>
+    {% endif %}
+    {% if test_id %}
+    <button type="button" id="{{ test_id }}" class="integ-btn integ-btn--test">Test connection</button>
+    {% endif %}
+    {{ extra }}
+</div>
+{% endmacro %}
+
+{% macro integ_message(id) %}
+<div id="{{ id }}" class="integ-message mt-4 hidden text-sm"></div>
+{% endmacro %}
+
+{% macro integ_test_log(id) %}
+<div id="{{ id }}" class="integ-test-log mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto overflow-y-auto max-h-80 whitespace-pre-wrap break-words"></div>
+{% endmacro %}
+
+{% macro integ_retry_panel(title, description, vendor, enabled_id, enabled_value, interval_id, interval_value, max_attempts_id, max_attempts_value) %}
+<div class="integ-retry-panel rounded-lg border border-amber-500/30 bg-amber-950/20 px-4 py-3 space-y-3" data-retry-vendor="{{ vendor }}">
+    <p class="text-sm font-semibold text-amber-200">{{ title }}</p>
+    {% if description %}<p class="text-secondary text-xs">{{ description|safe }}</p>{% endif %}
+    <div class="integ-form-grid integ-form-grid--2">
+        {{ integ_yes_no(enabled_id, 'Automatic retry on failure', enabled_value, 'Re-queue failed pushes and retry on the interval below.', default_on=true) }}
+        <div class="integ-field integ-field--compact">
+            <label for="{{ interval_id }}" class="integ-label">Retry interval (minutes)</label>
+            <input type="number" id="{{ interval_id }}" min="1" max="1440" step="1" class="integ-input integ-input--compact" value="{{ interval_value or '15' }}">
+            <p class="integ-hint">Between scheduled retries for queued failures (1–1440).</p>
+        </div>
+    </div>
+    <div class="integ-field integ-field--compact max-w-xs">
+        <label for="{{ max_attempts_id }}" class="integ-label">Max retry attempts</label>
+        <input type="number" id="{{ max_attempts_id }}" min="1" max="50" step="1" class="integ-input integ-input--compact" value="{{ max_attempts_value or '3' }}">
+        <p class="integ-hint">Immediate in-request retries and scheduled queue retries both use this limit (1–50). Default: 3.</p>
+    </div>
+    <div class="flex flex-wrap items-center gap-3">
+        <button type="button" class="integ-btn integ-btn--retry integ-retry-run-btn">Retry failed now</button>
+        <button type="button" class="integ-btn integ-btn--secondary integ-retry-refresh-btn">Refresh queue</button>
+        <span class="integ-retry-queue-summary text-xs text-secondary"></span>
+    </div>
+    <div class="integ-retry-queue-list hidden rounded border border-white/10 bg-black/30 p-3 font-mono text-xs max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-secondary"></div>
+</div>
+{% endmacro %}
+
+{% macro integ_callout_warn(title, body) %}
+<div class="integ-callout integ-callout--warn mb-4">
+    <p class="integ-callout__title">{{ title }}</p>
+    <div class="integ-callout__body text-secondary text-sm">{{ body|safe }}</div>
+</div>
+{% endmacro %}

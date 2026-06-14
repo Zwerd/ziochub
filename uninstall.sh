@@ -18,6 +18,7 @@
 #    sudo ./setup.sh --offline        # Offline (from installer ZIP)
 #
 #  Updated: 2026-04-12
+#  Updated: 2026-06 — note YARA_rejected + data/dxl paths in removal list
 # ============================================================================
 set -euo pipefail
 
@@ -58,7 +59,8 @@ show_help() {
     echo "    - Virtual environment (venv/)"
     echo "    - SQLite database (data/ziochub.db)"
     echo "    - IOC files (data/Main/)"
-    echo "    - YARA rules (data/YARA/, data/YARA_pending/)"
+    echo "    - YARA rules (data/YARA/, data/YARA_pending/, data/YARA_rejected/)"
+    echo "    - OpenDXL provisioning (data/dxl/)"
     echo "    - SSL certificates (data/ssl/)"
     echo "    - Port config (data/ziochub.env)"
     echo "    - Backups (data/backups/)"
@@ -306,7 +308,8 @@ echo "    - ${APP_DIR}/ (application code, templates, static, Python venv)"
 echo "      (includes all pip dependencies: yara-python, google-auth, requests, …)"
 echo "    - ${DATA_DIR}/ziochub.db (SQLite database)"
 echo "    - ${DATA_DIR}/Main/ (IOC files)"
-echo "    - ${DATA_DIR}/YARA/ and YARA_pending/ (YARA rules)"
+echo "    - ${DATA_DIR}/YARA/, YARA_pending/, YARA_rejected/ (YARA rules)"
+echo "    - ${DATA_DIR}/dxl/ (OpenDXL client files, if present)"
 echo "    - ${DATA_DIR}/ssl/ (SSL certificates)"
 echo "    - ${DATA_DIR}/ziochub.env (HTTPS port config)"
 echo "    - ${DATA_DIR}/backups/ (local backups)"

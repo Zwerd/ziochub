@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from constants import DEFAULT_IOC_LIMIT, DEFAULT_PAGE_SIZE, IOC_FILES, VERSION
 from extensions import db
+from utils.http_identity import install_ziochub_user_agent
 
 try:
     import config as _config
@@ -52,6 +53,7 @@ else:
         DATA_MAIN = _main_candidate  # use default and create below
 DATA_YARA = os.path.join(_data_dir, 'YARA')
 DATA_YARA_PENDING = os.path.join(_data_dir, 'YARA_pending')
+DATA_YARA_REJECTED = os.path.join(_data_dir, 'YARA_rejected')
 ALLOWLIST_FILE = os.path.join(_data_dir, 'allowlist.txt')
 PLAYBOOK_CUSTOM_FILE = os.path.join(_data_dir, 'playbook_custom.json')
 SSL_DIR = os.path.join(_data_dir, 'ssl')
@@ -64,11 +66,14 @@ DATA_CAMPAIGN_IMAGES = os.path.join(_data_dir, 'campaign_images')
 os.makedirs(DATA_MAIN, exist_ok=True)
 os.makedirs(DATA_YARA, exist_ok=True)
 os.makedirs(DATA_YARA_PENDING, exist_ok=True)
+os.makedirs(DATA_YARA_REJECTED, exist_ok=True)
 os.makedirs(SSL_DIR, exist_ok=True)
 os.makedirs(DXL_DIR, exist_ok=True)
 os.makedirs(DATA_CAMPAIGN_IMAGES, exist_ok=True)
 
 app = Flask(__name__)
+
+install_ziochub_user_agent()
 
 
 def _get_secret_key():
@@ -107,6 +112,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + _db_path
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['DATA_YARA'] = DATA_YARA
 app.config['DATA_YARA_PENDING'] = DATA_YARA_PENDING
+app.config['DATA_YARA_REJECTED'] = DATA_YARA_REJECTED
 # Session cookie security (AppSec step 1). HttpOnly reduces XSS risk; SameSite/Secure optional to avoid breaking login.
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 # SameSite: unset = browser default (often Lax). Set to 'Lax' only if login works; 'Strict' can break redirects after login.
@@ -1581,13 +1587,14 @@ def _backfill_yara_content_sha256():
     try:
         data_yara = app.config.get('DATA_YARA') or ''
         data_pending = app.config.get('DATA_YARA_PENDING') or ''
+        data_rejected = app.config.get('DATA_YARA_REJECTED') or ''
         rows = YaraRule.query.filter(
             or_(YaraRule.content_sha256.is_(None), YaraRule.content_sha256 == '')
         ).all()
         n = 0
         for row in rows:
             digest = None
-            for base in (data_yara, data_pending):
+            for base in (data_yara, data_pending, data_rejected):
                 path = os.path.join(base, row.filename)
                 if os.path.isfile(path):
                     with open(path, 'r', encoding='utf-8', errors='replace') as f:
@@ -1602,6 +1609,26 @@ def _backfill_yara_content_sha256():
     except Exception as e:
         db.session.rollback()
         print(f"[Migration] yara_rules content_sha256 backfill: {e}")
+
+
+def _ensure_yara_rejection_columns():
+    """Add rejection workflow columns to yara_rules (soft reject + analyst resubmit)."""
+    cols = {
+        'rejected_at': 'DATETIME',
+        'rejected_by': 'VARCHAR(255)',
+        'rejection_reason': 'TEXT',
+        'rejection_seen_at': 'DATETIME',
+    }
+    try:
+        result = db.session.execute(text("PRAGMA table_info(yara_rules)"))
+        existing = {row[1] for row in result.fetchall()}
+        for name, sql_type in cols.items():
+            if name not in existing:
+                db.session.execute(text(f"ALTER TABLE yara_rules ADD COLUMN {name} {sql_type}"))
+        _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] yara_rules rejection columns check/add: {e}")
 
 
 def _ensure_yara_original_filename_column():
@@ -1739,6 +1766,52 @@ def _ensure_feed_source_last_seen_status_columns():
     except Exception as e:
         db.session.rollback()
         print(f"[Migration] feed_source_last_seen status columns: {e}")
+
+
+def _ensure_ioc_downstream_events_is_active_column():
+    """Add is_active to ioc_downstream_events (gray vs colorful Distribution icons in Search)."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(ioc_downstream_events)"))
+        rows = result.fetchall()
+        if not rows:
+            return
+        if any((row[1] == 'is_active' for row in rows)):
+            return
+        db.session.execute(text(
+            "ALTER TABLE ioc_downstream_events ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1"
+        ))
+        _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] ioc_downstream_events is_active: {e}")
+
+
+def _ensure_downstream_system_custom_columns():
+    """Custom vendor name + uploaded icon path on downstream_systems."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(downstream_systems)"))
+        rows = result.fetchall()
+        if not rows:
+            return
+        names = {row[1] for row in rows}
+        if 'is_custom_vendor' not in names:
+            db.session.execute(text(
+                "ALTER TABLE downstream_systems ADD COLUMN is_custom_vendor BOOLEAN NOT NULL DEFAULT 0"
+            ))
+            _commit_with_retry()
+        if 'custom_vendor_label' not in names:
+            db.session.execute(text(
+                "ALTER TABLE downstream_systems ADD COLUMN custom_vendor_label VARCHAR(255)"
+            ))
+            _commit_with_retry()
+        if 'custom_icon_path' not in names:
+            db.session.execute(text(
+                "ALTER TABLE downstream_systems ADD COLUMN custom_icon_path VARCHAR(512)"
+            ))
+            _commit_with_retry()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] downstream_systems custom vendor columns: {e}")
 
 
 def _ensure_admin_user():
@@ -1991,14 +2064,17 @@ def _init_db():
         _ensure_yara_quality_points_column()
         _ensure_yara_status_column()
         _ensure_yara_content_sha256_column()
-        _backfill_yara_content_sha256()
         _ensure_yara_original_filename_column()
+        _ensure_yara_rejection_columns()
+        _backfill_yara_content_sha256()
         _backfill_yara_original_filename()
         _ensure_ioc_tags_column()
         _ensure_ioc_submission_method_column()
         _ensure_ioc_rare_find_columns()
         _ensure_ioc_revocation_columns()
         _ensure_feed_source_last_seen_status_columns()
+        _ensure_downstream_system_custom_columns()
+        _ensure_ioc_downstream_events_is_active_column()
         _ensure_user_last_login_column()  # Must run before any User query (admin_user, etc.)
         _ensure_user_must_change_password_column()
         _ensure_admin_user()  # Must exist before user_id migration
@@ -2032,6 +2108,12 @@ except Exception:
 try:
     from utils.taxii_sync_scheduler import start_taxii_sync_scheduler
     start_taxii_sync_scheduler(app)
+except Exception:
+    pass
+
+try:
+    from utils.integration_retry_scheduler import start_integration_retry_scheduler
+    start_integration_retry_scheduler(app)
 except Exception:
     pass
 

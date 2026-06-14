@@ -531,7 +531,10 @@ async function switchTab(tabId, skipHash) {
         var pendingSec = document.getElementById('yaraPendingSection');
         if (authState && authState.authenticated && pendingSec) pendingSec.classList.remove('hidden');
         loadYaraRules();
-        if (authState && authState.authenticated) loadYaraPending();
+        if (authState && authState.authenticated) {
+            loadYaraPending();
+            if (typeof loadYaraRejected === 'function') loadYaraRejected(true);
+        }
     }
 
     if (tabId === 'campaigns') {

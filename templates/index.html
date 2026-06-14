@@ -217,9 +217,9 @@
                 </div>
 
                 <!-- Tab 2: Search & Investigate -->
-                <div id="tab-search" class="tab-content hidden overflow-y-auto flex-1 min-h-0">
-                    <h2 class="text-2xl font-bold mb-3 accent-blue" data-i18n="search.title">Search & Investigate</h2>
-                    <div class="mb-3">
+                <div id="tab-search" class="tab-content hidden flex flex-col flex-1 min-h-0 overflow-hidden">
+                    <h2 class="text-2xl font-bold mb-3 accent-blue flex-shrink-0" data-i18n="search.title">Search & Investigate</h2>
+                    <div class="mb-3 flex-shrink-0">
                         <div class="flex gap-2 flex-wrap">
                             <input type="text" id="searchInput" 
                                    class="flex-1 min-w-[200px]"
@@ -258,8 +258,8 @@
                             <a href="/api/export-all" id="exportAllCsvBtn" class="btn-cmd-primary" download data-i18n="search.export_all">Export All CSV</a>
                         </div>
                     </div>
-                    <div id="searchResults" class="hidden">
-                        <div class="text-sm text-secondary mb-2 flex items-center justify-between flex-wrap gap-2">
+                    <div id="searchResults" class="hidden flex flex-col flex-1 min-h-0">
+                        <div class="text-sm text-secondary mb-2 flex items-center justify-between flex-wrap gap-2 flex-shrink-0">
                             <span><span data-i18n="search.found">Found</span> <span id="resultCount">0</span> <span data-i18n="search.results">result(s)</span></span>
                             <div id="searchPagination" class="flex items-center gap-2">
                                 <button type="button" id="searchPrevPage" class="btn-cmd-neutral text-xs py-1 px-2" disabled data-i18n="search.prev">Prev</button>
@@ -272,10 +272,10 @@
                                 </select>
                             </div>
                         </div>
-                        <div class="overflow-x-auto">
-                            <table class="w-full border-collapse">
-                                <thead>
-                                    <tr class="bg-tertiary">
+                        <div class="search-results-table-scroll flex-1 min-h-0 overflow-auto border border-white/10 rounded-lg">
+                            <table class="w-full search-results-table">
+                                <thead class="search-results-thead bg-tertiary">
+                                    <tr>
                                         <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="file_type" title="Sort"><span data-i18n="search.col.found_in">Found in</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
                                         <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="ioc" title="Sort"><span data-i18n="search.col.ioc">IOC</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
                                         <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="date" title="Sort"><span data-i18n="search.col.date">Date</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
@@ -285,7 +285,8 @@
                                         <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="tags" title="Sort"><span data-i18n="search.col.tags">Tags</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
                                         <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="campaign_name" title="Sort"><span data-i18n="search.col.campaign">Campaign</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
                                         <th class="border border-white/10 px-4 py-2 text-left search-sortable cursor-pointer select-none hover:bg-white/5" data-sort="expiration_status" title="Sort"><span data-i18n="search.col.expiration">Expiration Status</span><span class="search-sort-arrow ml-1 text-cyan-400" aria-hidden="true"></span></th>
-                                        <th class="border border-white/10 px-4 py-2 text-left" data-i18n="search.col.actions">Actions</th>
+                                        <th class="border border-white/10 px-4 py-2 text-left search-distribution-col" title="Downstream systems that received this IOC"><span data-i18n="search.col.distribution">Distribution</span></th>
+                                        <th class="border border-white/10 px-2 py-2 text-left search-actions-col" data-i18n="search.col.actions">Actions</th>
                                     </tr>
                                 </thead>
                                 {# IOC rows are built in search.js; dates use formatUtcToLocal() (UTC → {{ display_timezone }}).
@@ -566,7 +567,7 @@
                             <div class="flex rounded border border-white/10 overflow-hidden bg-tertiary">
                                 <button type="button" id="btnModeYaraUpload" class="text-xs py-1 px-3 font-semibold bg-blue-600 text-white transition" data-i18n="yara.mode_upload_btn">Upload</button>
                                 <button type="button" id="btnModeYaraWrite" class="text-xs py-1 px-3 font-semibold bg-transparent text-secondary hover:bg-white/5 transition" data-i18n="yara.mode_write_btn">Write</button>
-                                <button type="button" id="btnModeYaraStatus" class="text-xs py-1 px-3 font-semibold bg-transparent text-secondary hover:bg-white/5 transition" data-i18n="yara.mode_status_btn">Status</button>
+                                <button type="button" id="btnModeYaraStatus" class="relative text-xs py-1 px-3 font-semibold bg-transparent text-secondary hover:bg-white/5 transition" data-i18n="yara.mode_status_btn">Status<span id="yaraRejectedBadge" class="hidden absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none flex items-center justify-center">0</span></button>
                             </div>
                         </div>
                     </div>
@@ -674,6 +675,26 @@
                                     </thead>
                                     <tbody id="yaraPendingTableBody">
                                         <tr><td colspan="6" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">No pending rules</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div id="yaraRejectedSection" class="hidden">
+                            <h3 class="text-xl font-bold mb-3 text-red-400" data-i18n="yara.rejected_title">Rejected by Admin</h3>
+                            <p class="text-secondary text-sm mb-2" data-i18n="yara.rejected_hint">Rules declined by an administrator. Review the reason, edit if needed, and resubmit for approval.</p>
+                            <div class="overflow-x-auto rounded-lg border border-red-500/20 mb-2">
+                                <table class="w-full border-collapse">
+                                    <thead>
+                                        <tr class="bg-tertiary">
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.name">Rule Name</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.reason">Reason</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.rejected_at">Rejected</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.rejected_by">By</th>
+                                            <th class="border border-white/10 px-4 py-2 text-left text-sm font-semibold" data-i18n="yara.col.actions">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="yaraRejectedTableBody">
+                                        <tr><td colspan="5" class="border border-white/10 px-4 py-4 text-center text-secondary text-sm">No rejected rules</td></tr>
                                     </tbody>
                                 </table>
                             </div>
@@ -1762,6 +1783,19 @@
         </div>
     </div>
 
+    <!-- Admin: reject pending YARA (soft reject — analyst can resubmit) -->
+    <div id="yaraAdminRejectModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="bg-secondary rounded-lg p-6 max-w-lg w-full mx-4 backdrop-blur-sm border border-white/10 min-w-0">
+            <h3 id="yaraAdminRejectTitle" class="text-xl font-bold text-red-400 mb-2 break-all" data-i18n="yara.admin_reject_title">Reject YARA rule</h3>
+            <p class="text-sm text-secondary mb-3" data-i18n="yara.admin_reject_hint">The rule is kept for the analyst. They can see your reason and resubmit from Status → Rejected.</p>
+            <textarea id="yaraAdminRejectReason" rows="4" class="w-full rounded-lg bg-dark-800 border border-white/10 px-3 py-2 text-sm text-primary focus:border-cyan-400 focus:outline-none" placeholder="Optional reason for rejection..." data-i18n-placeholder="yara.admin_reject_placeholder"></textarea>
+            <div class="flex gap-2 justify-end mt-4">
+                <button type="button" id="yaraAdminRejectCancel" class="btn-cmd-neutral" data-i18n="actions.cancel">Cancel</button>
+                <button type="button" id="yaraAdminRejectSubmit" class="btn-cmd-danger" data-i18n="yara.admin_reject_btn">Reject</button>
+            </div>
+        </div>
+    </div>
+
     <!-- YARA Confirm Action Modal (delete / reject) -->
     <div id="yaraConfirmModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
         <div class="bg-secondary rounded-lg p-6 max-w-md w-full mx-4 backdrop-blur-sm border border-white/10 min-w-0">
@@ -1806,14 +1840,15 @@
                     </h4>
                     <p class="text-xs text-secondary mb-2 break-words" data-i18n="feedpulse.connections_feed_hint">Consumers that successfully pulled /feed or /taxii2 (throttled).</p>
                     <div class="bg-tertiary rounded border border-white/5 overflow-x-auto max-h-[min(24rem,55vh)] min-w-0">
-                        <table class="w-full min-w-[44rem] text-xs border-collapse">
+                        <table class="w-full min-w-[52rem] text-xs border-collapse">
                             <thead class="bg-tertiary border-b border-white/10 sticky top-0">
                                 <tr>
-                                    <th class="text-left px-2 py-1 font-semibold">Product name</th>
-                                    <th class="text-left px-2 py-1 font-semibold">Product type</th>
-                                    <th class="text-left px-2 py-1 font-semibold">Value kind</th>
-                                    <th class="text-left px-2 py-1 font-semibold">URI</th>
-                                    <th class="text-left px-2 py-1 font-semibold">Last connection</th>
+                                    <th class="text-left px-2 py-1 font-semibold" data-i18n="feedpulse.connections_col_vendor">Vendor</th>
+                                    <th class="text-left px-2 py-1 font-semibold" data-i18n="feedpulse.connections_col_system">System</th>
+                                    <th class="text-left px-2 py-1 font-semibold" data-i18n="feedpulse.connections_col_product_type">Product type</th>
+                                    <th class="text-left px-2 py-1 font-semibold" data-i18n="feedpulse.connections_col_value_kind">Value kind</th>
+                                    <th class="text-left px-2 py-1 font-semibold" data-i18n="feedpulse.connections_col_uri">URI</th>
+                                    <th class="text-left px-2 py-1 font-semibold" data-i18n="feedpulse.connections_col_last">Last connection</th>
                                 </tr>
                             </thead>
                             <tbody id="feedConnectionsList" class="divide-y divide-white/5 font-mono"></tbody>
@@ -1839,17 +1874,9 @@
             <div class="overflow-y-auto overflow-x-hidden flex-1 min-h-0 min-w-0 text-sm">
                 <div class="feed-state-table-scroll bg-tertiary rounded border border-white/5">
                     <table class="feed-state-table">
-                        <colgroup>
-                            <col style="width:12%">
-                            <col class="feed-state-col-address">
-                            <col style="width:8%">
-                            <col class="feed-state-col-date">
-                            <col class="feed-state-col-date">
-                            <col style="width:7%">
-                            <col class="feed-state-col-tail">
-                        </colgroup>
                         <thead class="bg-tertiary border-b border-white/10 sticky top-0">
                             <tr>
+                                <th class="font-semibold" data-i18n="feedpulse.connections_col_vendor">Vendor</th>
                                 <th class="font-semibold" data-i18n="feedpulse.pull_col_system">System</th>
                                 <th class="font-semibold" data-i18n="feedpulse.pull_col_address">Address</th>
                                 <th class="font-semibold" data-i18n="feedpulse.pull_col_interval">Interval</th>
@@ -1886,17 +1913,9 @@
                     </h4>
                     <div class="feed-state-table-scroll bg-tertiary rounded border border-white/5">
                         <table class="feed-state-table">
-                            <colgroup>
-                                <col style="width:11%">
-                                <col style="width:10%">
-                                <col class="feed-state-col-address">
-                                <col style="width:9%">
-                                <col class="feed-state-col-date">
-                                <col style="width:7%">
-                                <col class="feed-state-col-tail">
-                            </colgroup>
                             <thead class="bg-tertiary border-b border-white/10 sticky top-0">
                                 <tr>
+                                    <th class="font-semibold" data-i18n="feedpulse.connections_col_vendor">Vendor</th>
                                     <th class="font-semibold">System</th>
                                     <th class="font-semibold">System type</th>
                                     <th class="font-semibold">Address</th>

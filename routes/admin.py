@@ -512,6 +512,36 @@ _SETTINGS_DEFAULTS = {
     'cortex_xdr_display_name': '',
     'cortex_xdr_security_level': 'advanced',
     'cortex_xdr_comment_mode': 'full',
+    'cortex_xdr_retry_enabled': 'true',
+    'cortex_xdr_retry_interval_minutes': '15',
+    'cortex_xdr_retry_max_attempts': '3',
+    'google_secops_retry_enabled': 'true',
+    'google_secops_retry_interval_minutes': '15',
+    'google_secops_retry_max_attempts': '3',
+    'esa_retry_enabled': 'true',
+    'esa_retry_interval_minutes': '15',
+    'esa_retry_max_attempts': '3',
+    'ioc_http_retry_enabled': 'true',
+    'ioc_http_retry_interval_minutes': '15',
+    'ioc_http_retry_max_attempts': '3',
+    'misp_push_retry_enabled': 'true',
+    'misp_push_retry_interval_minutes': '15',
+    'misp_push_retry_max_attempts': '3',
+    'dxl_retry_enabled': 'true',
+    'dxl_retry_interval_minutes': '15',
+    'dxl_retry_max_attempts': '3',
+    'yara_http_retry_enabled': 'true',
+    'yara_http_retry_interval_minutes': '15',
+    'yara_http_retry_max_attempts': '3',
+    'trellix_ex_retry_enabled': 'true',
+    'trellix_ex_retry_interval_minutes': '15',
+    'trellix_ex_retry_max_attempts': '3',
+    'trellix_cms_retry_enabled': 'true',
+    'trellix_cms_retry_interval_minutes': '15',
+    'trellix_cms_retry_max_attempts': '3',
+    'trellix_nx_retry_enabled': 'true',
+    'trellix_nx_retry_interval_minutes': '15',
+    'trellix_nx_retry_max_attempts': '3',
     'google_secops_enabled': 'false',
     'google_secops_connection_mode': 'direct',
     'google_secops_base_url': '',
@@ -969,6 +999,18 @@ def save_settings():
             'esa_skip_misp_sync', 'esa_cleanup_on_expire', 'esa_mappings',
             'esa_deployment_mode', 'esa_group_name', 'esa_host_name',
         )
+        integration_retry_keys = (
+            'cortex_xdr_retry_enabled', 'cortex_xdr_retry_interval_minutes', 'cortex_xdr_retry_max_attempts',
+            'google_secops_retry_enabled', 'google_secops_retry_interval_minutes', 'google_secops_retry_max_attempts',
+            'esa_retry_enabled', 'esa_retry_interval_minutes', 'esa_retry_max_attempts',
+            'ioc_http_retry_enabled', 'ioc_http_retry_interval_minutes', 'ioc_http_retry_max_attempts',
+            'misp_push_retry_enabled', 'misp_push_retry_interval_minutes', 'misp_push_retry_max_attempts',
+            'dxl_retry_enabled', 'dxl_retry_interval_minutes', 'dxl_retry_max_attempts',
+            'yara_http_retry_enabled', 'yara_http_retry_interval_minutes', 'yara_http_retry_max_attempts',
+            'trellix_ex_retry_enabled', 'trellix_ex_retry_interval_minutes', 'trellix_ex_retry_max_attempts',
+            'trellix_cms_retry_enabled', 'trellix_cms_retry_interval_minutes', 'trellix_cms_retry_max_attempts',
+            'trellix_nx_retry_enabled', 'trellix_nx_retry_interval_minutes', 'trellix_nx_retry_max_attempts',
+        )
         vendor_ioc_keys = (
             'cortex_xdr_enabled',
             'cortex_xdr_display_name',
@@ -979,6 +1021,9 @@ def save_settings():
             'cortex_xdr_hash_blocklist_enabled',
             'cortex_xdr_security_level',
             'cortex_xdr_comment_mode',
+            'cortex_xdr_retry_enabled',
+            'cortex_xdr_retry_interval_minutes',
+            'cortex_xdr_retry_max_attempts',
             'google_secops_enabled',
             'google_secops_display_name',
             'google_secops_connection_mode',
@@ -1004,7 +1049,7 @@ def save_settings():
         for key in (
             session_keys + ldap_keys + misp_keys + taxii_keys + syslog_keys + dxl_keys + automation_keys + trellix_ex_keys
             + trellix_cms_keys + sanity_keys + feed_keys + search_keys + tags_keys + ioc_push_keys + esa_keys
-            + vendor_ioc_keys
+            + vendor_ioc_keys + integration_retry_keys
         ):
             if key in data:
                 val = data[key]
@@ -1086,15 +1131,61 @@ def save_settings():
                         _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
                     else:
                         _set_setting(key, str(val).strip())
+                elif key in integration_retry_keys:
+                    if key.endswith('_retry_interval_minutes'):
+                        try:
+                            n = int(str(val).strip())
+                        except ValueError:
+                            n = 15
+                        if n < 1:
+                            n = 1
+                        if n > 1440:
+                            n = 1440
+                        _set_setting(key, str(n))
+                    elif key.endswith('_retry_max_attempts'):
+                        try:
+                            n = int(str(val).strip())
+                        except ValueError:
+                            n = 3
+                        if n < 1:
+                            n = 1
+                        if n > 50:
+                            n = 50
+                        _set_setting(key, str(n))
+                    elif key.endswith('_retry_enabled'):
+                        _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
+                    if 'Retry' not in sections:
+                        sections.append('Retry')
                 elif key in vendor_ioc_keys:
                     if key in (
                         'cortex_xdr_enabled',
                         'cortex_xdr_verify_ssl',
                         'cortex_xdr_hash_blocklist_enabled',
+                        'cortex_xdr_retry_enabled',
                         'google_secops_enabled',
                         'google_secops_verify_ssl',
                     ):
                         _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
+                    elif key == 'cortex_xdr_retry_interval_minutes':
+                        try:
+                            n = int(str(val).strip())
+                        except ValueError:
+                            n = 15
+                        if n < 1:
+                            n = 1
+                        if n > 1440:
+                            n = 1440
+                        _set_setting(key, str(n))
+                    elif key == 'cortex_xdr_retry_max_attempts':
+                        try:
+                            n = int(str(val).strip())
+                        except ValueError:
+                            n = 3
+                        if n < 1:
+                            n = 1
+                        if n > 50:
+                            n = 50
+                        _set_setting(key, str(n))
                     elif key == 'cortex_xdr_security_level':
                         lvl = str(val or '').strip().lower()
                         _set_setting(key, 'standard' if lvl == 'standard' else 'advanced')
@@ -1436,6 +1527,138 @@ def cortex_xdr_test():
         return jsonify(body), 200
     except Exception as e:
         return _cortex_xdr_test_json_error(e)
+
+
+def _integration_retry_queue_response(vendor: str, get_setting):
+    from utils.integration_retry import (
+        ALL_RETRY_VENDORS,
+        get_integration_retry_queue,
+        integration_retry_enabled,
+        integration_retry_interval_minutes,
+        integration_retry_max_attempts,
+    )
+
+    if vendor not in ALL_RETRY_VENDORS:
+        return None
+    queue = get_integration_retry_queue(vendor, get_setting)
+    items = []
+    for item in queue[:50]:
+        payload = item.get('payload') if isinstance(item.get('payload'), dict) else item.get('ioc') or {}
+        entry = {
+            'key': item.get('key'),
+            'attempts': item.get('attempts'),
+            'failed_at': item.get('failed_at'),
+            'next_retry_at': item.get('next_retry_at'),
+            'last_error': (item.get('last_error') or '')[:240],
+        }
+        if 'filename' in payload:
+            entry['filename'] = (payload.get('filename') or '')[:256]
+            entry['kind'] = payload.get('kind')
+        else:
+            entry['action'] = payload.get('action')
+            entry['type'] = payload.get('type') or payload.get('ioc_type')
+            entry['value'] = (payload.get('value') or '')[:256]
+        items.append(entry)
+    return {
+        'enabled': integration_retry_enabled(vendor, get_setting),
+        'interval_minutes': integration_retry_interval_minutes(vendor, get_setting),
+        'max_attempts': integration_retry_max_attempts(vendor, get_setting),
+        'count': len(queue),
+        'items': items,
+        'vendor': vendor,
+    }
+
+
+@bp.route('/integration-retry-queue', methods=['GET'])
+@admin_required
+def integration_retry_queue_status():
+    """Return pending retry queue for a push vendor (?vendor=cortex_xdr)."""
+    _api_ok, _api_error, _get_setting = _from_app('_api_ok', '_api_error', '_get_setting')
+    try:
+        vendor = (request.args.get('vendor') or '').strip()
+        data = _integration_retry_queue_response(vendor, _get_setting)
+        if data is None:
+            return _api_error('Unknown or missing vendor', 400)
+        return _api_ok(data=data)
+    except Exception as e:
+        logging.exception('integration_retry_queue_status failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/integration-retry', methods=['POST'])
+@admin_required
+def integration_retry_now():
+    """Process due retry queue items for a vendor (JSON: vendor, force?)."""
+    _api_ok, _api_error, _get_setting = _from_app('_api_ok', '_api_error', '_get_setting')
+    try:
+        from app import audit_log
+        from utils.integration_retry import ALL_RETRY_VENDORS, process_integration_retry_queue
+
+        data = request.get_json(silent=True) or {}
+        vendor = (data.get('vendor') or '').strip()
+        if vendor not in ALL_RETRY_VENDORS:
+            return _api_error('Unknown vendor', 400)
+        force = bool(data.get('force'))
+        summary = process_integration_retry_queue(vendor, _get_setting, force=force)
+        try:
+            audit_log(
+                'admin_integration_retry',
+                f'vendor={vendor} processed={summary.get("processed")} ok={summary.get("succeeded")} '
+                f'fail={summary.get("failed")} remaining={summary.get("remaining")}',
+            )
+        except Exception:
+            logging.exception('audit_log admin_integration_retry failed')
+        msg = (
+            f"Retry complete: {summary.get('succeeded', 0)} succeeded, "
+            f"{summary.get('failed', 0)} failed, {summary.get('remaining', 0)} still queued."
+        )
+        return _api_ok(data=summary, message=msg)
+    except Exception as e:
+        logging.exception('integration_retry_now failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/cortex-xdr/retry-queue', methods=['GET'])
+@admin_required
+def cortex_xdr_retry_queue_status():
+    """Return pending Cortex XDR retry queue (failed outbound IOC operations)."""
+    _api_ok, _api_error, _get_setting = _from_app('_api_ok', '_api_error', '_get_setting')
+    try:
+        data = _integration_retry_queue_response('cortex_xdr', _get_setting)
+        return _api_ok(data=data)
+    except Exception as e:
+        logging.exception('cortex_xdr_retry_queue_status failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/cortex-xdr/retry', methods=['POST'])
+@admin_required
+def cortex_xdr_retry_now():
+    """Process due Cortex XDR retry queue items (admin manual retry)."""
+    _api_ok, _api_error, _get_setting = _from_app('_api_ok', '_api_error', '_get_setting')
+    try:
+        from app import audit_log
+        from utils.integration_retry import process_integration_retry_queue
+
+        data = request.get_json(silent=True) or {}
+        force = bool(data.get('force'))
+        summary = process_integration_retry_queue('cortex_xdr', _get_setting, force=force)
+        try:
+            audit_log(
+                'admin_cortex_xdr_retry',
+                f"processed={summary.get('processed')} ok={summary.get('succeeded')} "
+                f"fail={summary.get('failed')} remaining={summary.get('remaining')}",
+            )
+        except Exception:
+            logging.exception('audit_log admin_cortex_xdr_retry failed')
+        msg = (
+            f"Retry complete: {summary.get('succeeded', 0)} succeeded, "
+            f"{summary.get('failed', 0)} failed, {summary.get('remaining', 0)} still queued."
+        )
+        return _api_ok(data=summary, message=msg)
+    except Exception as e:
+        logging.exception('cortex_xdr_retry_now failed')
+        return _api_error(str(e), 500)
 
 
 @bp.route('/google-secops/ping', methods=['GET'])
@@ -2329,6 +2552,107 @@ def backfill_ioc_aggregate_fields():
         return _api_error(str(e), 500)
 
 
+# --- Downstream systems (distribution tracking) ---
+
+@bp.route('/downstream-systems', methods=['GET'])
+@admin_required
+def downstream_systems_list():
+    """List admin-defined downstream consumers + vendor catalog."""
+    _api_ok, _api_error = _from_app('_api_ok', '_api_error')
+    try:
+        from utils.downstream import clear_vendor_icon_cache, list_downstream_systems, vendor_catalog_for_api
+        clear_vendor_icon_cache()
+        return _api_ok(data={'systems': list_downstream_systems(), 'vendors': vendor_catalog_for_api()})
+    except Exception as e:
+        logging.exception('downstream_systems_list failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/downstream-systems', methods=['POST'])
+@admin_required
+def downstream_systems_create():
+    _api_ok, _api_error, audit_log = _from_app('_api_ok', '_api_error', 'audit_log')
+    try:
+        from utils.downstream import create_downstream_system, downstream_system_to_dict, parse_downstream_payload
+        data = parse_downstream_payload(request)
+        row = create_downstream_system(
+            name=data.get('name') or '',
+            vendor_id=data.get('vendor_id') or '',
+            client_ip=data.get('client_ip') or '',
+            enabled=data.get('enabled', True),
+            use_custom_vendor=bool(data.get('use_custom_vendor')),
+            custom_vendor_label=data.get('custom_vendor_label'),
+            icon_file=data.get('icon'),
+        )
+        audit_log('admin_downstream_create', f'id={row.id} name={row.name} by={current_user.username}')
+        return _api_ok(data={'system': downstream_system_to_dict(row)}, message='System added.')
+    except ValueError as e:
+        return _api_error(str(e), 400)
+    except Exception as e:
+        logging.exception('downstream_systems_create failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/downstream-systems/<int:system_id>', methods=['PUT'])
+@admin_required
+def downstream_systems_update(system_id):
+    _api_ok, _api_error, audit_log = _from_app('_api_ok', '_api_error', 'audit_log')
+    try:
+        from utils.downstream import downstream_system_to_dict, parse_downstream_payload, update_downstream_system
+        data = parse_downstream_payload(request)
+        row = update_downstream_system(
+            system_id,
+            name=data.get('name'),
+            vendor_id=data.get('vendor_id'),
+            client_ip=data.get('client_ip'),
+            enabled=data.get('enabled'),
+            use_custom_vendor=bool(data.get('use_custom_vendor')),
+            custom_vendor_label=data.get('custom_vendor_label'),
+            icon_file=data.get('icon'),
+        )
+        audit_log('admin_downstream_update', f'id={system_id} by={current_user.username}')
+        return _api_ok(data={'system': downstream_system_to_dict(row)}, message='System updated.')
+    except LookupError as e:
+        return _api_error(str(e), 404)
+    except ValueError as e:
+        return _api_error(str(e), 400)
+    except Exception as e:
+        logging.exception('downstream_systems_update failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/downstream-systems/<int:system_id>', methods=['DELETE'])
+@admin_required
+def downstream_systems_delete(system_id):
+    _api_ok, _api_error, audit_log = _from_app('_api_ok', '_api_error', 'audit_log')
+    try:
+        from utils.downstream import delete_downstream_system
+        delete_downstream_system(system_id)
+        audit_log('admin_downstream_delete', f'id={system_id} by={current_user.username}')
+        return _api_ok(message='System deleted.')
+    except LookupError as e:
+        return _api_error(str(e), 404)
+    except Exception as e:
+        logging.exception('downstream_systems_delete failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/downstream-systems/<int:system_id>/backfill', methods=['POST'])
+@admin_required
+def downstream_systems_backfill(system_id):
+    _api_ok, _api_error, audit_log = _from_app('_api_ok', '_api_error', 'audit_log')
+    try:
+        from utils.downstream import backfill_downstream_system
+        stats = backfill_downstream_system(system_id)
+        audit_log('admin_downstream_backfill', f'id={system_id} by={current_user.username}')
+        return _api_ok(data=stats, message='Historical correlation complete.')
+    except LookupError as e:
+        return _api_error(str(e), 404)
+    except Exception as e:
+        logging.exception('downstream_systems_backfill failed')
+        return _api_error(str(e), 500)
+
+
 # --- Admin HTML pages ---
 
 @pages_bp.route('/')
@@ -2484,6 +2808,26 @@ def _build_admin_settings_form_context():
         'cortex_xdr_hash_blocklist_enabled': _get_setting('cortex_xdr_hash_blocklist_enabled', 'true'),
         'cortex_xdr_security_level': _get_setting('cortex_xdr_security_level', 'advanced'),
         'cortex_xdr_comment_mode': _get_setting('cortex_xdr_comment_mode', 'full'),
+        'cortex_xdr_retry_enabled': _get_setting('cortex_xdr_retry_enabled', 'true'),
+        'cortex_xdr_retry_interval_minutes': _get_setting('cortex_xdr_retry_interval_minutes', '15'),
+        'google_secops_retry_enabled': _get_setting('google_secops_retry_enabled', 'true'),
+        'google_secops_retry_interval_minutes': _get_setting('google_secops_retry_interval_minutes', '15'),
+        'esa_retry_enabled': _get_setting('esa_retry_enabled', 'true'),
+        'esa_retry_interval_minutes': _get_setting('esa_retry_interval_minutes', '15'),
+        'ioc_http_retry_enabled': _get_setting('ioc_http_retry_enabled', 'true'),
+        'ioc_http_retry_interval_minutes': _get_setting('ioc_http_retry_interval_minutes', '15'),
+        'misp_push_retry_enabled': _get_setting('misp_push_retry_enabled', 'true'),
+        'misp_push_retry_interval_minutes': _get_setting('misp_push_retry_interval_minutes', '15'),
+        'dxl_retry_enabled': _get_setting('dxl_retry_enabled', 'true'),
+        'dxl_retry_interval_minutes': _get_setting('dxl_retry_interval_minutes', '15'),
+        'yara_http_retry_enabled': _get_setting('yara_http_retry_enabled', 'true'),
+        'yara_http_retry_interval_minutes': _get_setting('yara_http_retry_interval_minutes', '15'),
+        'trellix_ex_retry_enabled': _get_setting('trellix_ex_retry_enabled', 'true'),
+        'trellix_ex_retry_interval_minutes': _get_setting('trellix_ex_retry_interval_minutes', '15'),
+        'trellix_cms_retry_enabled': _get_setting('trellix_cms_retry_enabled', 'true'),
+        'trellix_cms_retry_interval_minutes': _get_setting('trellix_cms_retry_interval_minutes', '15'),
+        'trellix_nx_retry_enabled': _get_setting('trellix_nx_retry_enabled', 'true'),
+        'trellix_nx_retry_interval_minutes': _get_setting('trellix_nx_retry_interval_minutes', '15'),
         'google_secops_enabled': _get_setting('google_secops_enabled', 'false'),
         'google_secops_display_name': _get_setting('google_secops_display_name', ''),
         'google_secops_connection_mode': _get_setting('google_secops_connection_mode', 'direct'),
@@ -2523,8 +2867,13 @@ def admin_settings():
 @admin_required_page
 def admin_integrations():
     """Built-in vendor integrations: Trellix EX/NX, Cisco ESA (OpenDXL under Automations)."""
+    from utils.downstream import integration_icons_for_admin
     try:
-        return render_template('admin/integrations.html', settings=_build_admin_settings_form_context())
+        return render_template(
+            'admin/integrations.html',
+            settings=_build_admin_settings_form_context(),
+            integration_icons=integration_icons_for_admin(),
+        )
     except Exception:
         logging.exception('admin_integrations page failed')
         from flask import abort
@@ -2564,6 +2913,13 @@ def admin_sanity():
 def admin_allowlist():
     """Admin allowlist management page (known-good / critical assets)."""
     return render_template('admin/allowlist.html')
+
+
+@pages_bp.route('/downstream')
+@admin_required_page
+def admin_downstream():
+    """Admin page: register downstream systems for distribution tracking."""
+    return render_template('admin/downstream.html')
 
 
 @pages_bp.route('/users')

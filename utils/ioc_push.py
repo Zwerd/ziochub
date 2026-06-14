@@ -22,6 +22,7 @@ from typing import Any, Callable, Optional
 
 from jinja2.sandbox import SandboxedEnvironment
 from models import _utcnow
+from utils.http_identity import apply_user_agent_to_request
 from jinja2.exceptions import SecurityError, TemplateError
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,7 @@ def _post_target(
 
     ctx = _ssl_context(verify_ssl)
     req = urllib.request.Request(url, data=body_bytes, method='POST')
+    apply_user_agent_to_request(req)
     req.add_header('Content-Type', content_type or DEFAULT_CONTENT_TYPE)
 
     auth_type = (target.get('auth_type') or 'none').strip().lower()
@@ -275,6 +277,15 @@ def push_one_ioc_to_all_targets(
         results.append({'name': name, 'url': url, 'success': ok, 'message': msg})
         if ok:
             any_ok = True
+            try:
+                from utils.downstream import mark_ioc_push_target_removed, record_ioc_push_target_success
+                action = (str(ioc.get('action') or 'create')).strip().lower()
+                if action in ('remove', 'delete', 'revoke', 'expire_remove', 'delete_remove'):
+                    mark_ioc_push_target_removed(ioc, target_name=name)
+                else:
+                    record_ioc_push_target_success(ioc, target_name=name)
+            except Exception:
+                pass
 
     overall = (not any_attempt) or any_ok
     return {'overall_success': overall, 'results': results}
@@ -327,6 +338,15 @@ def push_one_ioc_to_targets(
         results.append({'name': name, 'url': url, 'success': ok, 'message': msg})
         if ok:
             any_ok = True
+            try:
+                from utils.downstream import mark_ioc_push_target_removed, record_ioc_push_target_success
+                action = (str(ioc.get('action') or 'create')).strip().lower()
+                if action in ('remove', 'delete', 'revoke', 'expire_remove', 'delete_remove'):
+                    mark_ioc_push_target_removed(ioc, target_name=name)
+                else:
+                    record_ioc_push_target_success(ioc, target_name=name)
+            except Exception:
+                pass
     overall = (not any_attempt) or any_ok
     return {'overall_success': overall, 'results': results}
 
@@ -392,6 +412,17 @@ def schedule_ioc_push_batch(app, contexts: list[dict[str, Any]], *, delay_sec: f
                         record_ioc_push_results(res, kind=kind, context=ctx if isinstance(ctx, dict) else None)
                     except Exception:
                         pass
+                    if isinstance(ctx, dict) and not res.get('overall_success'):
+                        try:
+                            from utils.integration_retry import enqueue_integration_retry, integration_is_retriable_failure
+
+                            fail_msgs = '; '.join(
+                                (r.get('message') or '') for r in (res.get('results') or []) if not r.get('success')
+                            )
+                            if integration_is_retriable_failure(fail_msgs):
+                                enqueue_integration_retry('ioc_http', ctx, fail_msgs, get_setting=_get_setting)
+                        except Exception:
+                            logger.exception('IOC HTTP enqueue retry failed')
                 except Exception:
                     logger.exception('IOC push batch item failed')
                 if delay_sec > 0:

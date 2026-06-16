@@ -6,7 +6,6 @@ Uses lazy imports from app for shared helpers to avoid circular imports.
 import json
 import logging
 import os
-import re
 import shutil
 import threading
 from datetime import datetime
@@ -18,7 +17,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
 from extensions import db
 from models import YaraRule, Campaign, User, iso_utc
-from utils.yara_utils import yara_safe_path, validate_yara_syntax, yara_content_sha256
+from utils.yara_utils import (
+    yara_safe_path,
+    validate_yara_syntax,
+    yara_content_sha256,
+    sanitize_yara_filename,
+)
 from utils.decorators import login_required, admin_required
 from utils.refanger import sanitize_comment
 from utils.validation_messages import (
@@ -33,6 +37,8 @@ from utils.validation_messages import (
     MSG_INVALID_TYPE,
     MSG_JSON_BODY_REQUIRED,
     MSG_YARA_COMPILER_UNAVAILABLE,
+    MSG_YARA_FILENAME_INVALID,
+    MSG_YARA_FILENAME_NORMALIZED,
     MSG_YARA_SOURCE_EMPTY,
     MSG_YARA_SOURCE_TOO_LARGE,
 )
@@ -45,6 +51,38 @@ bp = Blueprint('yara_api', __name__, url_prefix='/api')
 def _from_app(*names):
     import app as _app
     return tuple(getattr(_app, n) for n in names)
+
+
+def _record_yara_distribution_push(filename: str, result: dict | None, api_source: str) -> None:
+    try:
+        from utils.downstream import record_yara_push_target_results
+        record_yara_push_target_results(
+            filename,
+            (result or {}).get('results', []),
+            api_source=api_source,
+        )
+    except Exception:
+        logging.debug('record_yara_push_target_results failed', exc_info=True)
+
+
+def _mark_yara_distribution_delete(filename: str, result: dict | None, api_source: str) -> None:
+    try:
+        from utils.downstream import mark_yara_push_target_results_removed
+        mark_yara_push_target_results_removed(
+            filename,
+            (result or {}).get('results', []),
+            api_source=api_source,
+        )
+    except Exception:
+        logging.debug('mark_yara_push_target_results_removed failed', exc_info=True)
+
+
+def _mark_yara_removed_from_hub(filename: str) -> None:
+    try:
+        from utils.downstream import mark_yara_removed_from_hub
+        mark_yara_removed_from_hub(filename)
+    except Exception:
+        logging.debug('mark_yara_removed_from_hub failed', exc_info=True)
 
 
 def _data_yara():
@@ -76,6 +114,23 @@ def _move_yara_file(src: str, dst: str) -> None:
     if os.path.isfile(dst):
         os.remove(dst)
     shutil.move(src, dst)
+
+
+def _yara_upload_fail_audit(audit_log_fn, code: str, reason: str, *, filename: str = '', analyst: str = ''):
+    """CEF audit for rejected YARA uploads (Tier 1 failure)."""
+    from utils.audit_events import audit_log_event
+    fn = (filename or '').strip()
+    if fn:
+        safe, _ = sanitize_yara_filename(os.path.basename(fn))
+        fn = safe or os.path.basename(fn)
+    audit_log_event(
+        'YARA_UPLOAD_FAIL',
+        'fail',
+        username=(analyst or getattr(current_user, 'username', None) or None),
+        code=code,
+        reason=reason,
+        file=(fn or '')[:120],
+    )
 
 
 def _reject_invalid_yara_syntax(content: str):
@@ -143,8 +198,11 @@ def _find_existing_yara_with_same_content(content: str, exclude_filename: str | 
 @login_required
 def upload_yara():
     try:
+        audit_log, = _from_app('audit_log')
+        analyst_name = (current_user.username or '').lower()
         _auto_ticket_id, = _from_app('_auto_ticket_id')
         if 'file' not in request.files:
+            _yara_upload_fail_audit(audit_log, 'no_file', 'No file provided', analyst=analyst_name)
             return jsonify({'success': False, 'message': 'No file provided'}), 400
         file = request.files['file']
         ticket_id = (request.form.get('ticket_id') or '').strip() or _auto_ticket_id(current_user.id)
@@ -155,16 +213,36 @@ def upload_yara():
             if c:
                 campaign_id = c.id
         if file.filename == '':
+            _yara_upload_fail_audit(audit_log, 'no_file_selected', 'No file selected', analyst=analyst_name)
             return jsonify({'success': False, 'message': 'No file selected'}), 400
         if not file.filename.lower().endswith('.yar'):
+            _yara_upload_fail_audit(
+                audit_log, 'invalid_type', 'Invalid file type. Only .yar files are allowed',
+                filename=file.filename, analyst=analyst_name,
+            )
             return jsonify({'success': False, 'message': 'Invalid file type. Only .yar files are allowed'}), 400
         file_content = file.read().decode('utf-8', errors='replace')
         syntax_reject = _reject_invalid_yara_syntax(file_content)
         if syntax_reject is not None:
+            resp, _status = syntax_reject
+            try:
+                payload = resp.get_json(silent=True) or {}
+            except Exception:
+                payload = {}
+            _yara_upload_fail_audit(
+                audit_log,
+                payload.get('code') or 'syntax_invalid',
+                payload.get('message') or 'Invalid YARA syntax',
+                filename=file.filename,
+                analyst=analyst_name,
+            )
             return syntax_reject
         dup_name = _find_existing_yara_with_same_content(file_content)
         if dup_name:
             msg = MSG_YARA_DUPLICATE_CONTENT_UPLOAD.format(filename=dup_name)
+            _yara_upload_fail_audit(
+                audit_log, 'duplicate_content', msg, filename=file.filename, analyst=analyst_name,
+            )
             return jsonify({
                 'success': False,
                 'message': msg,
@@ -172,33 +250,50 @@ def upload_yara():
                 'existing_filename': dup_name,
             }), 409
         raw_base = os.path.basename(file.filename or '').strip()
-        original_filename = (raw_base[:512] if raw_base else None)
-        safe_filename = re.sub(r'[^a-zA-Z0-9._-]', '_', raw_base) if raw_base else ''
+        safe_filename, was_normalized = sanitize_yara_filename(raw_base)
         if not safe_filename:
-            safe_filename = 'rule.yar'
+            _yara_upload_fail_audit(
+                audit_log, 'invalid_filename', MSG_YARA_FILENAME_INVALID,
+                filename=file.filename, analyst=analyst_name,
+            )
+            return jsonify({'success': False, 'message': MSG_YARA_FILENAME_INVALID}), 400
+        original_filename = safe_filename
         data_yara = _data_yara()
         data_pending = _data_yara_pending()
         filepath_approved = os.path.join(data_yara, safe_filename)
         filepath_pending = os.path.join(data_pending, safe_filename)
         filepath_rejected = os.path.join(_data_yara_rejected(), safe_filename)
-        username = current_user.username.lower()
+        username = analyst_name
         if os.path.exists(filepath_approved) or os.path.exists(filepath_pending) or os.path.exists(filepath_rejected):
+            _yara_upload_fail_audit(
+                audit_log, 'name_exists', 'Rule name already exists',
+                filename=safe_filename, analyst=analyst_name,
+            )
             return jsonify({'success': False, 'message': 'Rule name already exists'}), 409
         existing_rule = YaraRule.query.filter_by(filename=safe_filename).first()
         if existing_rule:
             if (existing_rule.status or '').lower() == 'rejected' and (existing_rule.analyst or '').lower() == username:
+                reject_msg = f'Rule "{safe_filename}" was rejected. Open Status → Rejected and use Edit & Resubmit.'
+                _yara_upload_fail_audit(
+                    audit_log, 'rejected_resubmit', reject_msg,
+                    filename=safe_filename, analyst=analyst_name,
+                )
                 return jsonify({
                     'success': False,
-                    'message': f'Rule "{safe_filename}" was rejected. Open Status → Rejected and use Edit & Resubmit.',
+                    'message': reject_msg,
                     'code': 'rejected_resubmit',
                     'filename': safe_filename,
                 }), 409
+            _yara_upload_fail_audit(
+                audit_log, 'name_exists', 'Rule name already exists',
+                filename=safe_filename, analyst=analyst_name,
+            )
             return jsonify({'success': False, 'message': 'Rule name already exists'}), 409
         with open(filepath_pending, 'w', encoding='utf-8') as f:
             f.write(file_content)
         comment = (request.form.get('comment') or '').strip() or 'Uploaded YARA Rule'
         quality_pts = compute_yara_quality_points(file_content)
-        _commit_with_retry, _api_error, audit_log, _log_champs_event = _from_app('_commit_with_retry', '_api_error', 'audit_log', '_log_champs_event')
+        _commit_with_retry, _api_error, _log_champs_event = _from_app('_commit_with_retry', '_api_error', '_log_champs_event')
         try:
             db.session.add(YaraRule(
                 filename=safe_filename,
@@ -219,6 +314,10 @@ def upload_yara():
                     os.remove(filepath_pending)
                 except OSError:
                     pass
+            _yara_upload_fail_audit(
+                audit_log, 'name_exists', 'Rule name already exists',
+                filename=safe_filename, analyst=analyst_name,
+            )
             return _api_error('Rule name already exists', 409)
         except (ValueError, OSError) as e:
             db.session.rollback()
@@ -227,6 +326,9 @@ def upload_yara():
                     os.remove(filepath_pending)
                 except OSError:
                     pass
+            _yara_upload_fail_audit(
+                audit_log, 'db_error', str(e), filename=safe_filename, analyst=analyst_name,
+            )
             return _api_error(f'Database or file error: {str(e)}', 500)
         cmt = (comment or '')[:60]
         audit_log('YARA_UPLOAD', f'file={safe_filename} analyst={username} status=pending comment="{cmt}"')
@@ -239,15 +341,40 @@ def upload_yara():
         except Exception:
             pass
         message = f'YARA rule uploaded and pending approval: {safe_filename}'
+        if was_normalized:
+            message = MSG_YARA_FILENAME_NORMALIZED.format(filename=safe_filename) + ' ' + message
         if ticket_id:
             message += f' (Ticket: {ticket_id})'
-        return jsonify({'success': True, 'message': message})
+        return jsonify({
+            'success': True,
+            'message': message,
+            'filename': safe_filename,
+            'normalized': was_normalized,
+        })
     except (UnicodeDecodeError, OSError) as e:
         _api_error, = _from_app('_api_error')
+        try:
+            audit_log, = _from_app('audit_log')
+            _yara_upload_fail_audit(
+                audit_log, 'io_error', str(e),
+                filename=(request.files.get('file').filename if request.files.get('file') else ''),
+                analyst=(current_user.username or '').lower(),
+            )
+        except Exception:
+            pass
         return _api_error(f'File read or write error: {str(e)}', 500)
     except Exception as e:
         logging.exception('upload_yara failed')
         _api_error, = _from_app('_api_error')
+        try:
+            audit_log, = _from_app('audit_log')
+            _yara_upload_fail_audit(
+                audit_log, 'unexpected', str(e),
+                filename=(request.files.get('file').filename if request.files.get('file') else ''),
+                analyst=(current_user.username or '').lower(),
+            )
+        except Exception:
+            pass
         return _api_error('An unexpected error occurred', 500)
 
 
@@ -323,8 +450,6 @@ def list_yara():
             else:
                 upload_date = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
             display_name = name
-            if meta and getattr(meta, 'original_filename', None):
-                display_name = meta.original_filename
             analyst_lower = (meta.analyst if meta else '').strip().lower()
             if is_admin:
                 can_edit = True
@@ -337,7 +462,7 @@ def list_yara():
                 can_delete = False
             files.append({
                 'filename': name,
-                'original_filename': (meta.original_filename if meta else None) or None,
+                'original_filename': name,
                 'display_name': display_name,
                 'size_kb': size_kb,
                 'upload_date': upload_date,
@@ -398,6 +523,7 @@ def delete_yara():
         os.remove(filepath)
         YaraRule.query.filter_by(filename=safe).delete()
         _commit_with_retry()
+        _mark_yara_removed_from_hub(safe)
         _audit_del = f'file={safe} analyst={current_user.username}'
         if reason:
             _audit_del += f' reason={reason[:120]!r}'
@@ -453,24 +579,28 @@ def delete_yara():
                             result_fe = delete_yara_from_appliances(safe, appliances, audit_log, verify_ssl=verify_fe)
                             combined_results.extend(result_fe.get('results', []))
                             overall = overall and bool(result_fe.get('overall_success'))
+                            _mark_yara_distribution_delete(safe, result_fe, 'yara_http')
                         if tx_on:
                             result_tx = delete_yara_trellix_ex(
                                 safe, _get_setting, audit_log, verify_ssl=verify_session
                             )
                             combined_results.extend(result_tx.get('results', []))
                             overall = overall and bool(result_tx.get('overall_success'))
+                            _mark_yara_distribution_delete(safe, result_tx, 'yara_trellix_ex')
                         if cms_on:
                             result_cms = delete_yara_trellix_cms(
                                 safe, _get_setting, audit_log, verify_ssl=verify_session
                             )
                             combined_results.extend(result_cms.get('results', []))
                             overall = overall and bool(result_cms.get('overall_success'))
+                            _mark_yara_distribution_delete(safe, result_cms, 'yara_trellix_cms')
                         if nx_wmps_on:
                             result_nxw = delete_yara_nx_wmps(
                                 safe, _get_setting, audit_log, verify_ssl=verify_session
                             )
                             combined_results.extend(result_nxw.get('results', []))
                             overall = overall and bool(result_nxw.get('overall_success'))
+                            _mark_yara_distribution_delete(safe, result_nxw, 'yara_trellix_nx')
                         result = {'overall_success': overall, 'results': combined_results}
                         try:
                             from utils.integration_telemetry import record_yara_automation_results
@@ -727,8 +857,8 @@ def list_my_pending():
             if os.path.isfile(filepath):
                 files.append({
                     'filename': r.filename,
-                    'original_filename': r.original_filename or None,
-                    'display_name': (r.original_filename or r.filename),
+                    'original_filename': r.filename,
+                    'display_name': r.filename,
                     'upload_date': r.uploaded_at.strftime('%Y-%m-%d %H:%M') if r.uploaded_at else None,
                     'comment': r.comment,
                     'ticket_id': r.ticket_id,
@@ -751,8 +881,8 @@ def list_yara_pending():
             if os.path.isfile(filepath):
                 files.append({
                     'filename': r.filename,
-                    'original_filename': r.original_filename or None,
-                    'display_name': (r.original_filename or r.filename),
+                    'original_filename': r.filename,
+                    'display_name': r.filename,
                     'upload_date': r.uploaded_at.strftime('%Y-%m-%d %H:%M') if r.uploaded_at else None,
                     'user': r.analyst,
                     'ticket_id': r.ticket_id,
@@ -832,6 +962,13 @@ def approve_yara():
                     refresh_champ_score_for_user(owner.id)
                 except Exception as e:
                     logging.warning('YARA approve: refresh_champ_score for analyst %s failed: %s', analyst_username, e)
+                try:
+                    from utils.user_notifications import notify_yara_outcome
+                    notify_yara_outcome(owner.id, rule, 'approved')
+                    _commit_with_retry()
+                except Exception as e:
+                    logging.warning('YARA approve: notify analyst %s failed: %s', analyst_username, e)
+                    db.session.rollback()
 
         # Outbound YARA automation: generic/NX appliances (Automations) + Trellix EX (Integrations)
         fireeye_pending = False
@@ -877,6 +1014,7 @@ def approve_yara():
                                 )
                                 combined_results.extend(result_fe.get('results', []))
                                 overall = overall and bool(result_fe.get('overall_success'))
+                                _record_yara_distribution_push(rule.filename, result_fe, 'yara_http')
                                 enqueue_yara_vendor_failure(
                                     'yara_http', rule.filename, result_fe, get_setting=_get_setting,
                                 )
@@ -892,6 +1030,7 @@ def approve_yara():
                                 )
                                 combined_results.extend(result_tx.get('results', []))
                                 overall = overall and bool(result_tx.get('overall_success'))
+                                _record_yara_distribution_push(rule.filename, result_tx, 'yara_trellix_ex')
                                 enqueue_yara_vendor_failure(
                                     'trellix_ex', rule.filename, result_tx, get_setting=_get_setting,
                                 )
@@ -907,6 +1046,7 @@ def approve_yara():
                                 )
                                 combined_results.extend(result_cms.get('results', []))
                                 overall = overall and bool(result_cms.get('overall_success'))
+                                _record_yara_distribution_push(rule.filename, result_cms, 'yara_trellix_cms')
                                 enqueue_yara_vendor_failure(
                                     'trellix_cms', rule.filename, result_cms, get_setting=_get_setting,
                                 )
@@ -922,6 +1062,7 @@ def approve_yara():
                                 )
                                 combined_results.extend(result_nxw.get('results', []))
                                 overall = overall and bool(result_nxw.get('overall_success'))
+                                _record_yara_distribution_push(rule.filename, result_nxw, 'yara_trellix_nx')
                                 enqueue_yara_vendor_failure(
                                     'trellix_nx', rule.filename, result_nxw, get_setting=_get_setting,
                                 )
@@ -1021,8 +1162,8 @@ def fireeye_status():
 def _yara_rejected_row_dict(r: YaraRule) -> dict:
     return {
         'filename': r.filename,
-        'original_filename': r.original_filename or None,
-        'display_name': (r.original_filename or r.filename),
+        'original_filename': r.filename,
+        'display_name': r.filename,
         'upload_date': r.uploaded_at.strftime('%Y-%m-%d %H:%M') if r.uploaded_at else None,
         'rejected_at': iso_utc(r.rejected_at) if r.rejected_at else None,
         'rejected_by': r.rejected_by,
@@ -1236,6 +1377,7 @@ def reject_yara():
         rule.rejection_reason = reason
         rule.rejection_seen_at = None
         _commit_with_retry()
+        _mark_yara_removed_from_hub(safe)
         audit_log('YARA_REJECT', f'file={safe} by={rule.rejected_by} reason="{ (reason or "")[:120] }"')
         analyst_username = (rule.analyst or '').strip()
         if analyst_username:
@@ -1250,6 +1392,19 @@ def reject_yara():
                         'reason': reason,
                     },
                 )
+                try:
+                    from utils.user_notifications import notify_yara_outcome
+                    notify_yara_outcome(
+                        owner.id,
+                        rule,
+                        'rejected',
+                        reason=reason,
+                        rejected_by=rule.rejected_by,
+                    )
+                    _commit_with_retry()
+                except Exception as e:
+                    logging.warning('YARA reject: notify analyst %s failed: %s', analyst_username, e)
+                    db.session.rollback()
         return jsonify({
             'success': True,
             'message': f'Rejected: {safe}. The analyst can edit and resubmit from Status → Rejected.',

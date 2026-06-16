@@ -278,10 +278,19 @@ def admin_tags_suggestions_approve():
                         allowed.append(tag_norm)
                         allowed_set.add(tag_norm)
                     approved.append(tag_norm or tag)
+                try:
+                    from utils.user_notifications import notify_tag_outcome, resolve_user_id
+                    uid = resolve_user_id(item.get('suggested_by') or '')
+                    if uid:
+                        notify_tag_outcome(uid, tag_norm or tag, 'approved')
+                except Exception:
+                    logging.exception('admin_tags_suggestions_approve: notify failed')
             else:
                 keep.append(item)
         _set_setting('allowed_tags', json.dumps(allowed, ensure_ascii=False))
         _save_tag_suggestions(_set_setting, keep)
+        _commit_with_retry, = _from_app('_commit_with_retry')
+        _commit_with_retry()
         audit_log('admin_tags_approve', f'by={current_user.username} count={len(approved)}')
         return _api_ok(data={'approved': approved, 'allowed_tags': allowed}, message='Approved')
     except Exception as e:
@@ -305,8 +314,22 @@ def admin_tags_suggestions_reject():
         if not ids:
             return jsonify({'success': False, 'message': 'Missing ids'}), 400
         suggestions = _load_tag_suggestions(_get_setting)
+        rejected_items = [
+            item for item in suggestions
+            if str(item.get('id') or '').strip() in ids
+        ]
         keep = [item for item in suggestions if str(item.get('id') or '').strip() not in ids]
+        for item in rejected_items:
+            try:
+                from utils.user_notifications import notify_tag_outcome, resolve_user_id
+                uid = resolve_user_id(item.get('suggested_by') or '')
+                if uid:
+                    notify_tag_outcome(uid, item.get('tag') or '', 'rejected')
+            except Exception:
+                logging.exception('admin_tags_suggestions_reject: notify failed')
         _save_tag_suggestions(_set_setting, keep)
+        _commit_with_retry, = _from_app('_commit_with_retry')
+        _commit_with_retry()
         audit_log('admin_tags_reject', f'by={current_user.username} count={len(ids)}')
         return _api_ok(message='Rejected')
     except Exception as e:
@@ -2082,19 +2105,59 @@ def ldap_test():
 @bp.route('/logs/tail')
 @admin_required
 def logs_tail():
-    """Return last N lines of CEF audit log (default 50)."""
+    """Return last N lines of CEF audit log (default 50), optionally filtered."""
     _api_ok, _api_error, get_audit_log_path = _from_app('_api_ok', '_api_error', 'get_audit_log_path')
     try:
-        lines = min(int(request.args.get('lines', 50)), 500)
+        from utils.audit_events import line_matches_audit_filters
+
+        lines_count = min(max(int(request.args.get('lines', 50)), 1), 500)
+        action = (request.args.get('action') or '').strip()
+        user = (request.args.get('user') or '').strip()
+        q = (request.args.get('q') or '').strip()
         log_path = get_audit_log_path()
         if not os.path.isfile(log_path):
-            return _api_ok(data={'lines': [], 'path': log_path, 'message': 'Log file not found or empty.'})
+            return _api_ok(data={
+                'lines': [],
+                'path': log_path,
+                'message': 'Log file not found or empty.',
+                'filtered': False,
+                'total_matched': 0,
+            })
         with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
             all_lines = f.readlines()
-        last = all_lines[-lines:] if len(all_lines) >= lines else all_lines
-        return _api_ok(data={'lines': [ln.rstrip('\n\r') for ln in last], 'path': log_path})
+        filtered = bool(action or user or q)
+        if filtered:
+            matched = [
+                ln.rstrip('\n\r') for ln in all_lines
+                if line_matches_audit_filters(ln, action=action, user=user, q=q)
+            ]
+            tail = matched[-lines_count:] if len(matched) >= lines_count else matched
+            total_matched = len(matched)
+        else:
+            last = all_lines[-lines_count:] if len(all_lines) >= lines_count else all_lines
+            tail = [ln.rstrip('\n\r') for ln in last]
+            total_matched = len(all_lines)
+        return _api_ok(data={
+            'lines': tail,
+            'path': log_path,
+            'filtered': filtered,
+            'total_matched': total_matched,
+        })
     except Exception as e:
         logging.exception('admin logs_tail failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/logs/actions')
+@admin_required
+def logs_actions():
+    """Return CEF audit action catalog for Admin → Logs filters."""
+    _api_ok, _api_error = _from_app('_api_ok', '_api_error')
+    try:
+        from utils.audit_events import AUDIT_ACTION_CATALOG
+        return _api_ok(data={'actions': AUDIT_ACTION_CATALOG})
+    except Exception as e:
+        logging.exception('admin logs_actions failed')
         return _api_error(str(e), 500)
 
 
@@ -2413,7 +2476,8 @@ def misp_sync_now():
         _set_setting('misp_last_sync', now_str)
         _set_setting('misp_last_sync_result', json.dumps(result)[:1000])
 
-        audit_log('misp_sync', f"manual by={current_user.username} added={result.get('added', 0)} skipped={result.get('skipped', 0)}")
+        from utils.audit_events import audit_sync_result
+        audit_sync_result('misp_sync', result, username=current_user.username)
 
         if result.get('success'):
             inv = result.get('invalid', 0)
@@ -2479,7 +2543,8 @@ def taxii_sync_now():
         _set_setting('taxii_last_sync', now_str)
         _set_setting('taxii_last_sync_result', json.dumps(result)[:1000])
 
-        audit_log('taxii_sync', f"manual by={current_user.username} added={result.get('added', 0)} skipped={result.get('skipped', 0)}")
+        from utils.audit_events import audit_sync_result
+        audit_sync_result('taxii_sync', result, username=current_user.username)
 
         if result.get('success'):
             inv = result.get('invalid', 0)

@@ -112,7 +112,12 @@ def run_taxii_sync_if_due(
         )
     else:
         log_fn('[taxii-sync] FAIL %s' % (result.get('error') or 'unknown'))
+    if isinstance(result.get('skipped'), (int, float)):
+        result['duplicates_skipped'] = int(result['skipped'])
     result['skipped'] = False
+    if not force:
+        from utils.audit_events import audit_sync_result
+        audit_sync_result('taxii_sync_auto', result)
     return result
 
 

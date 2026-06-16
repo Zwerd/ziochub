@@ -104,6 +104,7 @@ def _retry_misp_push(payload: dict[str, Any], get_setting) -> tuple[bool, str]:
         ioc_type, value, comment,
         event_id=event_id, url=url, api_key=api_key,
         verify_ssl=verify_ssl, include_comment=include_comment,
+        from_retry=from_retry,
     )
 
 
@@ -159,6 +160,13 @@ def _retry_yara_vendor(vendor: str, payload: dict[str, Any], get_setting) -> tup
         if not appliances:
             return False, 'no_targets'
         res = push_yara_to_appliances(content, filename, appliances, None, verify_ssl=verify_http)
+        try:
+            from utils.downstream import record_yara_push_target_results, yara_api_source_for_vendor
+            record_yara_push_target_results(
+                filename, res.get('results', []), api_source=yara_api_source_for_vendor(vendor),
+            )
+        except Exception:
+            pass
         ok = bool(res.get('overall_success'))
         if ok:
             return True, 'yara_http_ok'
@@ -187,6 +195,13 @@ def _retry_yara_vendor(vendor: str, payload: dict[str, Any], get_setting) -> tup
     else:
         return False, 'unknown_yara_vendor'
 
+    try:
+        from utils.downstream import record_yara_push_target_results, yara_api_source_for_vendor
+        record_yara_push_target_results(
+            filename, res.get('results', []), api_source=yara_api_source_for_vendor(vendor),
+        )
+    except Exception:
+        pass
     ok = bool(res.get('overall_success'))
     if ok:
         return True, f'{vendor}_ok'
@@ -232,6 +247,13 @@ def _retry_yara_delete(vendor: str, filename: str, get_setting) -> tuple[bool, s
     else:
         return False, 'unknown_yara_vendor'
 
+    try:
+        from utils.downstream import mark_yara_push_target_results_removed, yara_api_source_for_vendor
+        mark_yara_push_target_results_removed(
+            filename, res.get('results', []), api_source=yara_api_source_for_vendor(vendor),
+        )
+    except Exception:
+        pass
     ok = bool(res.get('overall_success'))
     if ok:
         return True, f'{vendor}_delete_ok'

@@ -320,6 +320,7 @@
             const syncDiv = `<div class="col-span-full mb-3 pb-3 border-b border-white/10 text-center"><div class="text-xs text-secondary font-mono">${t('feed.last_sync')}: ${new Date().toLocaleTimeString()}</div></div>`;
             if (result.success && result.recent && result.recent.length > 0) {
                 const getIocTypeIcon = typeof global.getIocTypeIcon === 'function' ? global.getIocTypeIcon : () => '';
+                const isAuthed = document.body.getAttribute('data-authenticated') === '1';
                 const itemsHtml = result.recent.map(item => {
                     const isYara = item.type === 'YARA' || item.file_type === 'YARA';
                     const icon = getIocTypeIcon(item.file_type || item.type, item.ioc || item.value, item.country_code);
@@ -327,7 +328,14 @@
                         ? (typeof formatUtcToLocalDate === 'function' ? formatUtcToLocalDate(item.date) : new Date(item.date).toLocaleDateString())
                         : '';
                     const comment = (item.comment && item.comment.trim()) ? escapeHtml(item.comment.trim()) : '';
-                    const meta = [item.file_type || item.type, escapeHtml(item.user || item.analyst || ''), comment, date].filter(Boolean).join(' • ');
+                    const metaParts = [item.file_type || item.type];
+                    if (isAuthed) {
+                        const analyst = (item.user || item.analyst || '').trim();
+                        if (analyst) metaParts.push(escapeHtml(analyst));
+                    }
+                    if (comment) metaParts.push(comment);
+                    if (date) metaParts.push(date);
+                    const meta = metaParts.filter(Boolean).join(' • ');
                     const displayValue = item.ioc || item.value || '';
                     const valueClass = isYara ? 'font-mono text-amber-400 flex items-center justify-between gap-2 min-w-0' : 'font-mono accent-blue flex items-center justify-between gap-2 min-w-0';
                     return `<div class="bg-tertiary rounded p-3 text-sm ${isYara ? 'border-l-2 border-amber-400/60' : ''}">

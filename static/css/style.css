@@ -258,6 +258,26 @@ body, input, select, textarea, button, label, .tab-button {
     overflow: hidden;
 }
 
+/* Inbox bell modal: header fixed, notification list scrolls inside max viewport height */
+.inbox-modal-panel {
+    width: 100%;
+    max-width: min(94vw, 42rem);
+    max-height: min(85vh, 720px);
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.inbox-modal-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-gutter: stable;
+}
+
 /* Feed Pulse Push/Pull tables: wrapped cell text + hover tooltip bubble for full detail */
 .feed-state-table-scroll {
     overflow-x: auto;

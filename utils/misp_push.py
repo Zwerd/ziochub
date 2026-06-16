@@ -46,6 +46,38 @@ def _misp_type_for_ioc(ioc_type: str, value: str) -> Optional[str]:
     return ZIOCHUB_TO_MISP_TYPE.get(ioc_type)
 
 
+def _audit_misp_push(
+    ok: bool,
+    ioc_type: str,
+    value: str,
+    message: str,
+    *,
+    from_retry: bool = False,
+    event_id: int | None = None,
+) -> None:
+    try:
+        from utils.audit_events import audit_log_event
+
+        fields: dict = {
+            'type': ioc_type or None,
+            'value': (value or '')[:80],
+            'source': 'retry' if from_retry else 'submit',
+        }
+        if event_id is not None:
+            fields['event_id'] = event_id
+        if ok:
+            fields['message'] = (message or '')[:200]
+        else:
+            fields['reason'] = message or 'unknown'
+        audit_log_event(
+            'misp_push_ok' if ok else 'misp_push_fail',
+            'success' if ok else 'fail',
+            **fields,
+        )
+    except Exception:
+        _log.exception('misp_push CEF audit failed')
+
+
 def push_ioc_to_misp(
     ioc_type: str,
     value: str,
@@ -56,6 +88,7 @@ def push_ioc_to_misp(
     api_key: str = '',
     verify_ssl: bool = False,
     include_comment: bool = True,
+    from_retry: bool = False,
 ) -> tuple[bool, str]:
     """
     Push one IOC to MISP as an attribute (add to existing event or create new event).
@@ -68,35 +101,55 @@ def push_ioc_to_misp(
     :param api_key: MISP API key.
     :param verify_ssl: Whether to verify SSL.
     :param include_comment: If True, set MISP attribute comment from ZIoCHub comment.
+    :param from_retry: True when invoked from integration retry scheduler.
     :return: (success: bool, message: str).
     """
     if not PYMISP_AVAILABLE:
-        return False, 'pymisp is not installed'
+        msg = 'pymisp is not installed'
+        _audit_misp_push(False, ioc_type, value, msg, from_retry=from_retry, event_id=event_id)
+        return False, msg
     value = (value or '').strip()
     if not value:
-        return False, 'Empty IOC value'
+        msg = 'Empty IOC value'
+        _audit_misp_push(False, ioc_type, value, msg, from_retry=from_retry, event_id=event_id)
+        return False, msg
     misp_type = _misp_type_for_ioc(ioc_type, value)
     if not misp_type:
-        return False, f'Unsupported IOC type for MISP: {ioc_type}'
+        msg = f'Unsupported IOC type for MISP: {ioc_type}'
+        _audit_misp_push(False, ioc_type, value, msg, from_retry=from_retry, event_id=event_id)
+        return False, msg
     if not url or not api_key:
-        return False, 'MISP URL and API key are required'
+        msg = 'MISP URL and API key are required'
+        _audit_misp_push(False, ioc_type, value, msg, from_retry=from_retry, event_id=event_id)
+        return False, msg
     try:
         misp = PyMISP(url.rstrip('/'), api_key, ssl=verify_ssl, timeout=30)
-        if event_id is None:
+        resolved_event_id = event_id
+        if resolved_event_id is None:
             ev = misp.add_event(info='ZIoCHub export', distribution=0)
             if ev is None:
-                return False, 'Failed to create MISP event'
-            event_id = ev.get('id') if isinstance(ev, dict) else getattr(ev, 'id', None)
-            if event_id is None:
-                return False, 'Failed to get new event id'
+                msg = 'Failed to create MISP event'
+                _audit_misp_push(False, ioc_type, value, msg, from_retry=from_retry, event_id=event_id)
+                return False, msg
+            resolved_event_id = ev.get('id') if isinstance(ev, dict) else getattr(ev, 'id', None)
+            if resolved_event_id is None:
+                msg = 'Failed to get new event id'
+                _audit_misp_push(False, ioc_type, value, msg, from_retry=from_retry, event_id=event_id)
+                return False, msg
         attr_comment = (comment or '').strip()[:65535] if include_comment else ''
         kwargs = {'type': misp_type, 'value': value}
         if attr_comment:
             kwargs['comment'] = attr_comment
-        attr = misp.add_attribute(event_id, kwargs)
+        attr = misp.add_attribute(resolved_event_id, kwargs)
         if attr is None:
-            return False, 'MISP did not return the new attribute (may already exist)'
-        return True, f'Pushed to MISP event {event_id}'
+            msg = 'MISP did not return the new attribute (may already exist)'
+            _audit_misp_push(False, ioc_type, value, msg, from_retry=from_retry, event_id=resolved_event_id)
+            return False, msg
+        ok_msg = f'Pushed to MISP event {resolved_event_id}'
+        _audit_misp_push(True, ioc_type, value, ok_msg, from_retry=from_retry, event_id=resolved_event_id)
+        return True, ok_msg
     except Exception as e:
+        msg = str(e)[:300]
         _log.warning('push_ioc_to_misp failed: %s', e)
-        return False, str(e)[:300]
+        _audit_misp_push(False, ioc_type, value, msg, from_retry=from_retry, event_id=event_id)
+        return False, msg

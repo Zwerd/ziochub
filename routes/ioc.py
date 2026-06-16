@@ -755,6 +755,80 @@ def _log_champs_event(event_type, user_id=None, payload=None):
         db.session.rollback()
 
 
+def _ioc_create_fail_audit(audit_log_fn, code: str, reason: str, *, ioc_type: str = '', value: str = '', source: str = 'ui'):
+    """CEF audit for rejected IOC submissions (Tier 1 failure)."""
+    from utils.audit_events import audit_log_event
+    action = 'IOC_INGEST_FAIL' if source == 'ingest' else 'IOC_CREATE_FAIL'
+    audit_log_event(
+        action,
+        'fail',
+        username=getattr(current_user, 'username', None),
+        code=code,
+        reason=reason,
+        type=ioc_type or None,
+        value=(value or '')[:80],
+        source=source,
+    )
+
+
+def _bulk_upload_fail_audit(code: str, reason: str, *, bulk_type: str, filename: str = '', batch_id: str = ''):
+    from utils.audit_events import audit_log_event
+    action = 'BULK_CSV_FAIL' if bulk_type == 'csv' else 'BULK_TXT_FAIL'
+    audit_log_event(
+        action,
+        'fail',
+        username=getattr(current_user, 'username', None),
+        code=code,
+        reason=reason,
+        file=(filename or '')[:120],
+        batch_id=batch_id or None,
+    )
+
+
+def _bulk_upload_success_audit(
+    bulk_type: str,
+    *,
+    batch_id: str,
+    filename: str = '',
+    analyst: str = '',
+    new: int = 0,
+    updated: int = 0,
+    comment: str = '',
+    rows_scanned: int = 0,
+):
+    from utils.audit_events import audit_log_event
+    action = 'BULK_CSV' if bulk_type == 'csv' else 'BULK_TXT'
+    imported = new + updated
+    severity = 4 if imported == 0 and rows_scanned > 0 else None
+    audit_log_event(
+        action,
+        'success',
+        severity=severity,
+        username=analyst or getattr(current_user, 'username', None),
+        batch_id=batch_id,
+        file=(filename or '')[:120],
+        analyst=analyst,
+        new=new,
+        updated=updated,
+        imported=imported,
+        rows_scanned=rows_scanned or None,
+        comment=(comment or '')[:60] or None,
+    )
+
+
+def _staging_submit_fail_audit(code: str, reason: str, *, batch_id: str = '', source: str = ''):
+    from utils.audit_events import audit_log_event
+    audit_log_event(
+        'IOC_STAGING_FAIL',
+        'fail',
+        username=getattr(current_user, 'username', None),
+        code=code,
+        reason=reason,
+        batch_id=batch_id or None,
+        source=source or None,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -801,15 +875,24 @@ def submit_ioc():
         tags_list = normalize_tags_from_input(data.get('tags'))
         tags_list, tags_err = _validate_tags_or_reject(tags_list, _get_setting)
         if tags_err is not None:
-            return tags_err[0], tags_err[1]
-        tags_json = json.dumps(tags_list) if tags_list else '[]'
+            resp, status = tags_err
+            try:
+                msg = (resp.get_json(silent=True) or {}).get('message', 'invalid_tags')
+            except Exception:
+                msg = 'invalid_tags'
+            _ioc_create_fail_audit(audit_log, 'invalid_tags', msg, ioc_type=ioc_type, value=value)
+            return resp, status
         
         # Validation
         if not value or not ioc_type:
+            _ioc_create_fail_audit(audit_log, 'missing_fields', MSG_MISSING_FIELDS, ioc_type=ioc_type, value=value)
             return jsonify({'success': False, 'message': MSG_MISSING_FIELDS}), 400
         
         if ioc_type not in IOC_FILES:
+            _ioc_create_fail_audit(audit_log, 'invalid_type', MSG_INVALID_IOC_TYPE, ioc_type=ioc_type, value=value)
             return jsonify({'success': False, 'message': MSG_INVALID_IOC_TYPE}), 400
+        
+        tags_json = json.dumps(tags_list) if tags_list else '[]'
         
         # Apply refanger (auto-fix hxxp->http, [.]->., (.)->., [dot]->.)
         cleaned_value, was_changed = refanger(value)
@@ -821,10 +904,15 @@ def submit_ioc():
         is_admin = getattr(current_user, 'is_admin', False)
         should_block, should_warn = _sanity_should_block_else_warn(is_blocked, is_admin, mode)
         if should_block:
+            _ioc_create_fail_audit(audit_log, 'sanity_block', msg, ioc_type=ioc_type, value=value)
             return jsonify({'success': False, 'message': f'⛔ {msg}'}), 400
         
         # Validate after cleaning
         if not validate_ioc(value, ioc_type):
+            _ioc_create_fail_audit(
+                audit_log, 'invalid_format', f'Invalid {ioc_type} format',
+                ioc_type=ioc_type, value=value,
+            )
             return jsonify({'success': False, 'message': f'Invalid {ioc_type} format'}), 400
         
         warnings = get_ioc_warnings(value, ioc_type)
@@ -836,13 +924,16 @@ def submit_ioc():
         # Check allowlist (Safety Net) - hard block, no exceptions
         is_blocked, reason = check_allowlist(value, ioc_type)
         if is_blocked:
+            allow_msg = f'⛔ Allowlist: Block Prevented! {reason}'
+            _ioc_create_fail_audit(audit_log, 'allowlist', allow_msg, ioc_type=ioc_type, value=value)
             return jsonify({
                 'success': False,
-                'message': f'⛔ Allowlist: Block Prevented! {reason}'
+                'message': allow_msg
             }), 403
         
         # Block only if the same type+value is already an active IOC (revoked/expired rows are reactivated below).
         if check_ioc_exists(ioc_type, value):
+            _ioc_create_fail_audit(audit_log, 'duplicate', MSG_IOC_EXISTS, ioc_type=ioc_type, value=value)
             return jsonify({'success': False, 'message': MSG_IOC_EXISTS}), 409
 
         rare = _compute_rare_find_fields(ioc_type, value)
@@ -881,9 +972,11 @@ def submit_ioc():
                 _commit_with_retry()
         except IntegrityError:
             db.session.rollback()
+            _ioc_create_fail_audit(audit_log, 'duplicate', MSG_IOC_EXISTS, ioc_type=ioc_type, value=value)
             return _api_error(MSG_IOC_EXISTS, 409)
         except (ValueError, OSError) as e:
             db.session.rollback()
+            _ioc_create_fail_audit(audit_log, 'db_error', str(e), ioc_type=ioc_type, value=value)
             return _api_error(f'Database error: {str(e)}', 500)
         payload_hist = _ioc_created_history_payload(
             entered_by=current_user.username or '',
@@ -1005,9 +1098,19 @@ def submit_ioc():
         response.update(_detect_champs_changes(champs_before, user_id, username))
         return jsonify(response)
     except (TypeError, AttributeError) as e:
+        try:
+            audit_log, = _from_app('audit_log')
+            _ioc_create_fail_audit(audit_log, 'invalid_request', str(e))
+        except Exception:
+            pass
         return _api_error('Invalid request body or missing JSON', 400)
     except Exception as e:
         logging.exception('submit_ioc failed')
+        try:
+            audit_log, = _from_app('audit_log')
+            _ioc_create_fail_audit(audit_log, 'unexpected', str(e))
+        except Exception:
+            pass
         return _api_error('An unexpected error occurred', 500)
 
 
@@ -1030,6 +1133,7 @@ def ingest_ioc():
         data = request.get_json()
         
         if not data:
+            _ioc_create_fail_audit(audit_log, 'invalid_json', 'Invalid JSON payload', source='ingest')
             return jsonify({'success': False, 'message': 'Invalid JSON payload'}), 400
         
         ioc_type = data.get('type', '').strip()
@@ -1046,9 +1150,11 @@ def ingest_ioc():
         
         # Validation
         if not value or not ioc_type:
+            _ioc_create_fail_audit(audit_log, 'missing_fields', MSG_MISSING_FIELDS_TYPE_VALUE, source='ingest', ioc_type=ioc_type, value=value)
             return jsonify({'success': False, 'message': MSG_MISSING_FIELDS_TYPE_VALUE}), 400
         
         if ioc_type not in IOC_FILES:
+            _ioc_create_fail_audit(audit_log, 'invalid_type', MSG_INVALID_IOC_TYPE, source='ingest', ioc_type=ioc_type, value=value)
             return jsonify({'success': False, 'message': f'{MSG_INVALID_IOC_TYPE}. Must be one of: {", ".join(IOC_FILES.keys())}'}), 400
         
         # Apply refanger (input cleaning)
@@ -1057,17 +1163,21 @@ def ingest_ioc():
         
         # Validate after cleaning
         if not validate_ioc(value, ioc_type):
+            _ioc_create_fail_audit(audit_log, 'invalid_format', f'Invalid {ioc_type} format', source='ingest', ioc_type=ioc_type, value=value)
             return jsonify({'success': False, 'message': f'Invalid {ioc_type} format'}), 400
         
         # Check allowlist (Safety Net)
         is_blocked, reason = check_allowlist(value, ioc_type)
         if is_blocked:
+            allow_msg = f'⛔ CRITICAL ASSET: Block Prevented! {reason}'
+            _ioc_create_fail_audit(audit_log, 'allowlist', allow_msg, source='ingest', ioc_type=ioc_type, value=value)
             return jsonify({
                 'success': False,
-                'message': f'⛔ CRITICAL ASSET: Block Prevented! {reason}'
+                'message': allow_msg
             }), 403
         
         if check_ioc_exists(ioc_type, value):
+            _ioc_create_fail_audit(audit_log, 'duplicate', MSG_IOC_EXISTS, source='ingest', ioc_type=ioc_type, value=value)
             return jsonify({'success': False, 'message': MSG_IOC_EXISTS}), 409
         if expiration.lower() == 'permanent':
             exp_dt = None
@@ -1075,6 +1185,10 @@ def ingest_ioc():
             try:
                 exp_dt = datetime.strptime(expiration, '%Y-%m-%d')
             except ValueError:
+                _ioc_create_fail_audit(
+                    audit_log, 'invalid_expiration', 'Invalid expiration date format',
+                    source='ingest', ioc_type=ioc_type, value=value,
+                )
                 return jsonify({'success': False, 'message': 'Invalid expiration date format. Use YYYY-MM-DD or "Permanent"'}), 400
         rare = _compute_rare_find_fields(ioc_type, value)
         reactivated_ingest = False
@@ -1175,12 +1289,19 @@ def ingest_ioc():
             }), 201
         except IntegrityError:
             db.session.rollback()
+            _ioc_create_fail_audit(audit_log, 'duplicate', MSG_IOC_EXISTS, source='ingest', ioc_type=ioc_type, value=value)
             return jsonify({'success': False, 'message': MSG_IOC_EXISTS}), 409
         except Exception as e:
             db.session.rollback()
+            _ioc_create_fail_audit(audit_log, 'db_error', str(e), source='ingest', ioc_type=ioc_type, value=value)
             return jsonify({'success': False, 'message': str(e)}), 500
             
     except Exception as e:
+        try:
+            audit_log, = _from_app('audit_log')
+            _ioc_create_fail_audit(audit_log, 'unexpected', str(e), source='ingest')
+        except Exception:
+            pass
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
@@ -1204,7 +1325,10 @@ def bulk_csv():
         'ioc_row_is_active',
     )
     try:
+        from utils.audit_events import audit_log_event, new_audit_batch_id
+        batch_id = new_audit_batch_id()
         if 'file' not in request.files:
+            _bulk_upload_fail_audit('no_file', 'No file provided', bulk_type='csv', batch_id=batch_id)
             return jsonify({'success': False, 'message': 'No file provided'}), 400
         
         file = request.files['file']
@@ -1217,6 +1341,14 @@ def bulk_csv():
         )
         tags_list, tags_err = _validate_tags_or_reject(tags_list, _get_setting)
         if tags_err is not None:
+            err_msg = 'Invalid tags'
+            try:
+                err_msg = (tags_err[0].get_json(silent=True) or {}).get('message', err_msg)
+            except Exception:
+                pass
+            _bulk_upload_fail_audit(
+                'invalid_tags', err_msg, bulk_type='csv', filename=file.filename or '', batch_id=batch_id,
+            )
             return tags_err[0], tags_err[1]
         tags_json = json.dumps(tags_list) if tags_list else '[]'
         campaign_id = None
@@ -1226,6 +1358,9 @@ def bulk_csv():
                 campaign_id = c.id
         
         if file.filename == '':
+            _bulk_upload_fail_audit(
+                'no_file_selected', 'No file selected', bulk_type='csv', filename=file.filename, batch_id=batch_id,
+            )
             return jsonify({'success': False, 'message': 'No file selected'}), 400
 
         sanity_mode = _get_setting('sanity_check_mode', 'block_non_admin')
@@ -1442,7 +1577,16 @@ def bulk_csv():
         message = f"Processed CSV: {', '.join(summary_parts)}" if summary_parts else "No valid IOCs found in CSV"
         fn = (file.filename or '')[:60]
         cmt = (global_comment or '')[:60]
-        audit_log('BULK_CSV', f'file={fn} analyst={username} new={total_new} updated={total_updated} comment="{cmt}"')
+        _bulk_upload_success_audit(
+            'csv',
+            batch_id=batch_id,
+            filename=fn,
+            analyst=username,
+            new=total_new,
+            updated=total_updated,
+            comment=cmt,
+            rows_scanned=len(data_rows),
+        )
         refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
         refresh_champ_score_for_user(current_user.id)
         return jsonify({
@@ -1453,6 +1597,14 @@ def bulk_csv():
         })
         
     except Exception as e:
+        logging.exception('bulk_csv failed')
+        try:
+            fn = ''
+            if request.files.get('file'):
+                fn = request.files['file'].filename or ''
+            _bulk_upload_fail_audit('unexpected', str(e), bulk_type='csv', filename=fn, batch_id=locals().get('batch_id', ''))
+        except Exception:
+            pass
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
@@ -1949,6 +2101,8 @@ def submit_staging():
         'ioc_row_is_active',
     )
     try:
+        from utils.audit_events import audit_log_event, new_audit_batch_id
+        batch_id = new_audit_batch_id()
         sanity_mode = _get_setting('sanity_check_mode', 'block_non_admin')
         is_admin = getattr(current_user, 'is_admin', False)
         data = request.get_json() or {}
@@ -1961,6 +2115,11 @@ def submit_staging():
         )
         tags_for_all_list, tags_err = _validate_tags_or_reject(tags_for_all_list, _get_setting)
         if tags_err is not None:
+            try:
+                err_msg = (tags_err[0].get_json(silent=True) or {}).get('message', 'invalid_tags')
+            except Exception:
+                err_msg = 'invalid_tags'
+            _staging_submit_fail_audit('invalid_tags', err_msg, batch_id=batch_id, source=submission_source)
             return tags_err[0], tags_err[1]
         tags_json = json.dumps(tags_for_all_list) if tags_for_all_list else '[]'
         campaign_id = None
@@ -1983,21 +2142,28 @@ def submit_staging():
         new_hashes_for_dxl = []
         new_iocs_for_misp = []
         new_iocs_for_push = []
+        rows_requested = len(items)
+        rows_skipped = 0
         for raw in items:
             ioc_value = (raw.get('ioc') or '').strip()
             ioc_type = (raw.get('type') or '').strip()
             if not ioc_value or not ioc_type:
+                rows_skipped += 1
                 continue
             if ioc_type not in IOC_FILES or ioc_type == 'YARA':
+                rows_skipped += 1
                 continue
             ioc_value, _ = refanger(ioc_value)
             if not validate_ioc(ioc_value, ioc_type):
+                rows_skipped += 1
                 continue
             is_critical, _ = check_sanity_critical(ioc_value, ioc_type, _data_dir)
             if _sanity_should_block_else_warn(is_critical, is_admin, sanity_mode)[0]:
+                rows_skipped += 1
                 continue
             is_blocked, _ = check_allowlist(ioc_value, ioc_type)
             if is_blocked:
+                rows_skipped += 1
                 continue
             analyst_raw = (raw.get('analyst') or '').strip() or 'unknown'
             resolved_user = _resolve_analyst_to_user(analyst_raw)
@@ -2199,7 +2365,21 @@ def submit_staging():
             if parts:
                 summary_parts.append(f"{ioc_type}s ({', '.join(parts)})")
         message = f"Imported: {', '.join(summary_parts)}" if summary_parts else "No items imported"
-        audit_log('IOC_STAGING_SUBMIT', f'source={submission_source} new={total_new} updated={total_updated} campaign={campaign_name or "-"}')
+        imported = total_new + total_updated
+        severity = 4 if rows_requested > 0 and imported == 0 else None
+        audit_log_event(
+            'IOC_STAGING_SUBMIT',
+            'success',
+            severity=severity,
+            batch_id=batch_id,
+            source=submission_source,
+            new=total_new,
+            updated=total_updated,
+            imported=imported,
+            requested=rows_requested,
+            skipped=rows_skipped,
+            campaign=campaign_name or '-',
+        )
         try:
             refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
             refresh_champ_score_for_user(current_user.id)
@@ -2214,6 +2394,10 @@ def submit_staging():
         return jsonify(resp)
     except Exception as e:
         db.session.rollback()
+        try:
+            _staging_submit_fail_audit('unexpected', str(e), batch_id=locals().get('batch_id', ''))
+        except Exception:
+            pass
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
@@ -2239,8 +2423,11 @@ def upload_txt():
         'ioc_row_is_active',
     )
     try:
+        from utils.audit_events import audit_log_event, new_audit_batch_id
+        batch_id = new_audit_batch_id()
         champs_before = _capture_champs_before(current_user.id, current_user.username.lower())
         if 'file' not in request.files:
+            _bulk_upload_fail_audit('no_file', 'No file provided', bulk_type='txt', batch_id=batch_id)
             return jsonify({'success': False, 'message': 'No file provided'}), 400
         
         file = request.files['file']
@@ -2254,6 +2441,14 @@ def upload_txt():
         _get_setting = _from_app('_get_setting')[0]
         tags_list, tags_err = _validate_tags_or_reject(tags_list, _get_setting)
         if tags_err is not None:
+            err_msg = 'Invalid tags'
+            try:
+                err_msg = (tags_err[0].get_json(silent=True) or {}).get('message', err_msg)
+            except Exception:
+                pass
+            _bulk_upload_fail_audit(
+                'invalid_tags', err_msg, bulk_type='txt', filename=file.filename or '', batch_id=batch_id,
+            )
             return tags_err[0], tags_err[1]
         tags_json = json.dumps(tags_list) if tags_list else '[]'
         campaign_id = None
@@ -2263,8 +2458,8 @@ def upload_txt():
                 campaign_id = c.id
         
         if file.filename == '':
+            _bulk_upload_fail_audit('no_file_selected', 'No file selected', bulk_type='txt', filename=file.filename, batch_id=batch_id)
             return jsonify({'success': False, 'message': 'No file selected'}), 400
-        
         text = decode_uploaded_text_bytes(file.read())
         exp_date = calculate_expiration_date(ttl)
         findings = {'IP': {}, 'Domain': {}, 'Hash': {}, 'Email': {}, 'URL': {}}
@@ -2480,7 +2675,16 @@ def upload_txt():
         
         message = f"Processed TXT: {', '.join(summary_parts)}" if summary_parts else "No valid IOCs found in TXT"
         fn = (file.filename or '')[:60]
-        audit_log('BULK_TXT', f'file={fn} analyst={username} new={total_new} updated={total_updated}')
+        txt_lines = sum(1 for ln in text.splitlines() if ln.strip())
+        _bulk_upload_success_audit(
+            'txt',
+            batch_id=batch_id,
+            filename=fn,
+            analyst=username,
+            new=total_new,
+            updated=total_updated,
+            rows_scanned=txt_lines,
+        )
         refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
         refresh_champ_score_for_user(current_user.id)
         resp = {
@@ -2494,4 +2698,12 @@ def upload_txt():
         return jsonify(resp)
         
     except Exception as e:
+        logging.exception('upload_txt failed')
+        try:
+            fn = ''
+            if request.files.get('file'):
+                fn = request.files['file'].filename or ''
+            _bulk_upload_fail_audit('unexpected', str(e), bulk_type='txt', filename=fn, batch_id=locals().get('batch_id', ''))
+        except Exception:
+            pass
         return jsonify({'success': False, 'message': str(e)}), 500

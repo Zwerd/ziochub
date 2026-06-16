@@ -21,6 +21,7 @@ import urllib.error
 import ssl
 
 from utils.http_identity import apply_user_agent_to_request
+from utils.yara_utils import sanitize_yara_filename
 
 # Cap response read to avoid huge bodies in memory / DB telemetry.
 _MAX_RESPONSE_BODY_BYTES = 256 * 1024
@@ -61,12 +62,15 @@ def appliance_delete_url(app: dict, filename: str) -> str:
     """Canonical DELETE URL for YARA rule removal (must match delete_yara_from_appliances)."""
     from urllib.parse import quote
 
+    safe_fn, _ = sanitize_yara_filename((filename or '').strip() or 'rule.yar')
+    if not safe_fn:
+        safe_fn = 'rule.yar'
     base_url = (app.get('base_url') or '').strip().rstrip('/')
     if not base_url:
         return ''
     path = _norm_path(app.get('path') or '')
     delete_tpl = (app.get('delete_path') or '').strip()
-    safe_name = quote((filename or '').strip(), safe='')
+    safe_name = quote(safe_fn, safe='')
     if delete_tpl:
         if '{filename}' in delete_tpl:
             rel = delete_tpl.replace('{filename}', safe_name)
@@ -237,6 +241,11 @@ def push_yara_to_appliances(
             pass
         audit_log_fn = _noop
 
+    safe_fn, _ = sanitize_yara_filename((filename or '').strip() or 'rule.yar')
+    if not safe_fn:
+        safe_fn = 'rule.yar'
+    filename = safe_fn
+
     if not verify_ssl:
         logging.warning(
             'YARA push: TLS certificate verification is disabled (self-signed / ignore-cert mode)'
@@ -324,13 +333,18 @@ def delete_yara_from_appliances(
             pass
         audit_log_fn = _noop
 
+    safe_fn, _ = sanitize_yara_filename((filename or '').strip() or 'rule.yar')
+    if not safe_fn:
+        safe_fn = 'rule.yar'
+    filename = safe_fn
+
     if not verify_ssl:
         logging.warning(
             'YARA automation delete: TLS certificate verification is disabled (self-signed / ignore-cert mode)'
         )
 
     ctx = _ssl_context(verify_ssl)
-    safe_name = quote((filename or '').strip(), safe='')
+    safe_name = quote(filename, safe='')
     results = []
     for app in appliances or []:
         name = (app.get('name') or '').strip() or 'Target'

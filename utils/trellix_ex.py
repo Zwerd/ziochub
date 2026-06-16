@@ -788,6 +788,10 @@ def _multipart_body(
         parts.append(value.encode("utf-8") + crlf)
 
     fn = (filename or "rule.yar").replace("\r", "").replace("\n", "").replace('"', "").strip() or "rule.yar"
+    from utils.yara_utils import sanitize_yara_filename
+
+    safe_fn, _ = sanitize_yara_filename(fn)
+    fn = safe_fn or "rule.yar"
     for ename, evalue in extra_fields or []:
         add_field(ename, evalue)
     add_field("f_type", f_type)
@@ -996,7 +1000,10 @@ def _ex_delete_remote_filename(filename: str, target: dict) -> str:
     Mode yar_txt: rule.yar -> rule.yar.txt (matches common EX UI naming).
     """
     mode = (target.get("ex_delete_name_mode") or "same").strip().lower()
-    fn = (filename or "").strip()
+    from utils.yara_utils import sanitize_yara_filename
+
+    safe_fn, _ = sanitize_yara_filename((filename or '').strip() or 'rule.yar')
+    fn = safe_fn or 'rule.yar'
     if mode == "yar_txt" and fn.lower().endswith(".yar"):
         return fn + ".txt"
     return fn
@@ -1304,6 +1311,11 @@ def push_yara_session_targets(
             pass
 
         audit_log_fn = _noop
+
+    from utils.yara_utils import sanitize_yara_filename
+
+    safe_fn, _ = sanitize_yara_filename((filename or '').strip() or 'rule.yar')
+    filename = safe_fn or 'rule.yar'
 
     if not targets:
         audit_log_fn(empty_skip_log, empty_log_detail)

@@ -474,6 +474,16 @@ def set_champs_team_goal():
         delete_cached('champs_team_goal')
         delete_cached_prefix('champs_team_goal:')
         _log_champs_event('goal_created', user_id=current_user.id, payload={'goal_id': goal.id, 'title': title})
+        from utils.audit_events import audit_log_event
+        audit_log_event(
+            'champs_team_goal_set',
+            'success',
+            title=title,
+            target=target_value,
+            period=period,
+            goal_type=goal_type,
+            goal_id=goal.id,
+        )
         return jsonify({'success': True, 'message': 'Team goal set', 'goal_id': goal.id})
     except (ValueError, TypeError) as e:
         return jsonify({'success': False, 'message': str(e)}), 400
@@ -605,6 +615,13 @@ def set_champs_ticker_messages():
             banner_direction = _ticker_banner_direction()
         else:
             _set_setting(TICKER_BANNER_DIRECTION_KEY, banner_direction)
+        from utils.audit_events import audit_log_event
+        audit_log_event(
+            'champs_ticker_update',
+            'success',
+            count=len(out),
+            banner_direction=banner_direction,
+        )
         return jsonify({
             'success': True,
             'messages': out,

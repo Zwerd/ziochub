@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 
 # Max size for validate-syntax API (bytes)
 YARA_VALIDATE_MAX_SOURCE_BYTES = 512 * 1024
@@ -15,13 +16,34 @@ def yara_content_sha256(content: str) -> str:
     return hashlib.sha256(content.encode('utf-8')).hexdigest()
 
 
+def sanitize_yara_filename(raw: str) -> tuple[str | None, bool]:
+    """
+    Normalize a YARA rule basename for storage, UI, and automation push.
+    Spaces and unsupported characters become underscores; repeated underscores collapse.
+    Returns (safe_basename, was_changed). safe_basename is None when input is invalid.
+    """
+    raw_base = os.path.basename((raw or '').strip())
+    if not raw_base or not raw_base.lower().endswith('.yar'):
+        return None, False
+    safe = re.sub(r'[^a-zA-Z0-9._-]', '_', raw_base)
+    safe = re.sub(r'_+', '_', safe).strip('._')
+    if not safe or not safe.lower().endswith('.yar'):
+        safe = 'rule.yar'
+    return safe, safe != raw_base
+
+
 def yara_safe_path(filename: str, yara_dir: str) -> tuple[str | None, str | None]:
     """
     Return (safe_basename, full_path) if path is under yara_dir; else (None, None).
-    Prevents path traversal.
+    Prevents path traversal. Resolves spaces/invalid chars to the stored safe basename.
     """
-    safe = os.path.basename(filename)
-    if safe != filename or '..' in filename or not safe.lower().endswith('.yar'):
+    if '..' in filename:
+        return None, None
+    raw_base = os.path.basename(filename)
+    if raw_base != filename:
+        return None, None
+    safe, _ = sanitize_yara_filename(raw_base)
+    if not safe:
         return None, None
     filepath = os.path.join(yara_dir, safe)
     try:

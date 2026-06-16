@@ -333,18 +333,19 @@ def _commit_with_retry(max_attempts=3):
                 raise
             time.sleep(0.05 * (attempt + 1))
 
-def audit_log(action: str, detail: str = ''):
+def audit_log(action: str, detail: str = '', *, severity: int = 5, username: str | None = None):
     """Write CEF-formatted audit log (local 48h rotation + optional UDP syslog)."""
     global _cef_logger_inited
     client_ip = request.remote_addr if request else '-'
     user_id = None
-    username = None
-    try:
-        if current_user.is_authenticated:
-            user_id = current_user.id
-            username = current_user.username
-    except Exception:
-        pass
+    audit_username = username
+    if audit_username is None:
+        try:
+            if current_user.is_authenticated:
+                user_id = current_user.id
+                audit_username = current_user.username
+        except Exception:
+            pass
     try:
         if not _cef_logger_inited:
             from utils.cef_logger import init_cef_logger
@@ -358,9 +359,21 @@ def audit_log(action: str, detail: str = ''):
             )
             _cef_logger_inited = True
         from utils.cef_logger import cef_log
-        cef_log(action=action, detail=detail, client_ip=client_ip, user_id=user_id, username=username)
+        cef_log(
+            action=action,
+            detail=detail,
+            client_ip=client_ip,
+            user_id=user_id,
+            username=audit_username,
+            severity=severity,
+        )
     except Exception:
         logging.exception('audit_log failed')
+
+
+def audit_log_fail(action: str, detail: str = '', *, severity: int = 6, username: str | None = None):
+    """CEF audit for failed or denied actions (Tier 1 — security / mutation failures)."""
+    audit_log(action, detail, severity=severity, username=username)
 
 
 def _log_champs_event(event_type, user_id=None, payload=None):
@@ -1807,6 +1820,11 @@ def _ensure_downstream_system_custom_columns():
         if 'custom_icon_path' not in names:
             db.session.execute(text(
                 "ALTER TABLE downstream_systems ADD COLUMN custom_icon_path VARCHAR(512)"
+            ))
+            _commit_with_retry()
+        if 'last_yara_feed_correlated_at' not in names:
+            db.session.execute(text(
+                "ALTER TABLE downstream_systems ADD COLUMN last_yara_feed_correlated_at DATETIME"
             ))
             _commit_with_retry()
     except Exception as e:

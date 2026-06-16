@@ -127,7 +127,12 @@ def run_misp_sync_if_due(
         )
     else:
         log_fn('[misp-sync] FAIL %s' % (result.get('error') or 'unknown'))
+    if isinstance(result.get('skipped'), (int, float)):
+        result['duplicates_skipped'] = int(result['skipped'])
     result['skipped'] = False
+    if not force:
+        from utils.audit_events import audit_sync_result
+        audit_sync_result('misp_sync_auto', result)
     return result
 
 

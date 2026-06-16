@@ -12,6 +12,13 @@ MSG_IOC_NOT_FOUND = "IOC not found"
 
 # --- YARA / files ---
 MSG_INVALID_FILENAME = "Invalid filename"
+MSG_YARA_FILENAME_INVALID = (
+    'Invalid rule filename. Use only letters, numbers, dots, hyphens, and underscores; '
+    'the name must end with .yar'
+)
+MSG_YARA_FILENAME_NORMALIZED = (
+    'Filename adjusted to "{filename}" (spaces and special characters replaced with underscores).'
+)
 MSG_FILENAME_REQUIRED = "Filename is required"
 MSG_FILE_NOT_FOUND = "File not found"
 

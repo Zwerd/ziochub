@@ -1,4 +1,5 @@
 """Auth routes blueprint: login, logout, change-password, profile, LDAP health, users list."""
+import json
 import logging
 import os
 
@@ -7,7 +8,7 @@ from flask_login import login_user, logout_user, current_user
 
 from sqlalchemy import func
 from extensions import db
-from models import User, UserProfile, UserSession, _utcnow
+from models import User, UserProfile, UserSession, UserNotification, _utcnow
 from utils.auth import hash_password, verify_password
 from utils.decorators import login_required
 from utils.ldap_auth import try_ldap_bind_servers, try_ldap_bind, try_ldap_mock_dev, check_ldap_reachable, is_dev_mode
@@ -81,6 +82,13 @@ def login():
     username = (request.form.get('username') or '').strip().lower()
     password = request.form.get('password') or ''
     if not username or not password:
+        from utils.audit_events import audit_log_event
+        audit_log_event(
+            'login_fail',
+            'fail',
+            username=username or None,
+            reason='missing_credentials',
+        )
         return render_template('login.html', error='Username and password are required'), 400
 
     _get_setting, _commit_with_retry, audit_log = _from_app('_get_setting', '_commit_with_retry', 'audit_log')
@@ -177,6 +185,14 @@ def login():
 
     if user is None:
         logging.warning('Login failed for username=%s (auth_mode=%s)', username, auth_mode)
+        from utils.audit_events import audit_log_event
+        audit_log_event(
+            'login_fail',
+            'fail',
+            username=username,
+            reason='invalid_credentials',
+            auth_mode=auth_mode,
+        )
         return render_template('login.html', error='Invalid username or password'), 401
 
     login_user(user)
@@ -431,3 +447,88 @@ def api_auth_me():
         'display_name': None,
         'avatar_url': None,
     })
+
+
+@bp.route('/api/inbox', methods=['GET'])
+@login_required
+def api_user_inbox():
+    """Analyst inbox: YARA/tag approval outcomes for the current user."""
+    _api_ok, _api_error, _commit_with_retry = _from_app('_api_ok', '_api_error', '_commit_with_retry')
+    try:
+        from utils.user_notifications import (
+            backfill_yara_rejection_notifications,
+            notification_to_dict,
+        )
+
+        backfill_yara_rejection_notifications(current_user.id, current_user.username)
+        _commit_with_retry()
+
+        unread_count = UserNotification.query.filter_by(
+            user_id=current_user.id,
+        ).filter(UserNotification.read_at.is_(None)).count()
+
+        rows = (
+            UserNotification.query.filter_by(user_id=current_user.id)
+            .order_by(UserNotification.created_at.desc())
+            .limit(50)
+            .all()
+        )
+        return _api_ok(data={
+            'unread_count': unread_count,
+            'notifications': [notification_to_dict(r) for r in rows],
+        })
+    except Exception as e:
+        logging.exception('api_user_inbox failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/api/inbox/mark-read', methods=['POST'])
+@login_required
+def api_user_inbox_mark_read():
+    """Mark inbox notification(s) as read. Body: { ids: [1,2] } or { all: true }."""
+    _api_ok, _api_error, _commit_with_retry = _from_app('_api_ok', '_api_error', '_commit_with_retry')
+    try:
+        from utils.user_notifications import mark_yara_rejection_seen_for_user
+
+        data = request.get_json(silent=True) or {}
+        mark_all = bool(data.get('all'))
+        ids = data.get('ids') or []
+        if isinstance(ids, (int, str)):
+            ids = [ids]
+        ids = [int(x) for x in ids if str(x).strip().isdigit()]
+
+        now = _utcnow()
+        q = UserNotification.query.filter_by(user_id=current_user.id).filter(
+            UserNotification.read_at.is_(None)
+        )
+        if not mark_all:
+            if not ids:
+                return jsonify({'success': False, 'message': 'Missing ids or all=true'}), 400
+            q = q.filter(UserNotification.id.in_(ids))
+
+        updated = 0
+        yara_filenames = []
+        for row in q.all():
+            row.read_at = now
+            updated += 1
+            if row.category == 'yara' and row.outcome == 'rejected':
+                try:
+                    payload = json.loads(row.payload or '{}')
+                except (TypeError, ValueError):
+                    payload = {}
+                fn = (payload.get('filename') or '').strip()
+                if fn:
+                    yara_filenames.append(fn)
+
+        if mark_all:
+            mark_yara_rejection_seen_for_user(current_user.id, current_user.username)
+        else:
+            for fn in yara_filenames:
+                mark_yara_rejection_seen_for_user(current_user.id, current_user.username, filename=fn)
+
+        _commit_with_retry()
+        return _api_ok(data={'updated': updated}, message='Marked as read')
+    except Exception as e:
+        db.session.rollback()
+        logging.exception('api_user_inbox_mark_read failed')
+        return _api_error(str(e), 500)

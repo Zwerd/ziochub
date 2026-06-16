@@ -185,6 +185,7 @@ class DownstreamSystem(db.Model):
     enabled = db.Column(db.Boolean, nullable=False, default=True)
     last_feed_correlated_at = db.Column(db.DateTime, nullable=True)
     last_taxii_correlated_at = db.Column(db.DateTime, nullable=True)
+    last_yara_feed_correlated_at = db.Column(db.DateTime, nullable=True)
     is_custom_vendor = db.Column(db.Boolean, nullable=False, default=False)
     custom_vendor_label = db.Column(db.String(255), nullable=True)
     custom_icon_path = db.Column(db.String(512), nullable=True)  # under static/img/vendors/
@@ -268,6 +269,26 @@ class YaraRule(db.Model):
         Index('ix_yara_rules_uploaded_at', 'uploaded_at'),
         Index('ix_yara_rules_uploaded_at_status', 'uploaded_at', 'status'),
         Index('ix_yara_rules_content_sha256', 'content_sha256'),
+    )
+
+
+class UserNotification(db.Model):
+    """In-app inbox messages for analysts (YARA/tag approval outcomes)."""
+    __tablename__ = 'user_notifications'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    category = db.Column(db.String(32), nullable=False)  # yara | tag
+    outcome = db.Column(db.String(16), nullable=False)  # approved | rejected
+    title = db.Column(db.String(512), nullable=False)
+    body = db.Column(db.Text, nullable=True)
+    payload = db.Column(db.Text, nullable=True)  # JSON metadata
+    dedup_key = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    read_at = db.Column(db.DateTime, nullable=True)
+    __table_args__ = (
+        Index('ix_user_notifications_user_read', 'user_id', 'read_at'),
+        Index('ix_user_notifications_user_created', 'user_id', 'created_at'),
+        UniqueConstraint('user_id', 'dedup_key', name='u_user_notification_dedup'),
     )
 
 

@@ -81,12 +81,12 @@
                         <span id="authAvatarPlaceholder" class="analyst-avatar-placeholder w-14 h-14 rounded-full flex items-center justify-center text-xl">👤</span>
                         {% endif %}
                     </button>
-                    <button id="adminInboxBtn" type="button" class="relative px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-amber-300 hidden" title="Admin inbox">
+                    <button id="userInboxBtn" type="button" class="relative px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-300 hidden" title="Inbox" data-i18n-title="inbox.user_title">
                         <span class="inline-flex items-center gap-1">
                             <span aria-hidden="true">🔔</span>
-                            <span class="hidden sm:inline">Inbox</span>
+                            <span class="hidden sm:inline" data-i18n="inbox.user_label">Inbox</span>
                         </span>
-                        <span id="adminInboxBadge" class="hidden absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] leading-[18px] text-center font-bold"></span>
+                        <span id="userInboxBadge" class="hidden absolute -top-2 -right-2 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[11px] leading-[18px] text-center font-bold"></span>
                     </button>
                     <a id="authAdmin" href="/admin" class="hidden px-3 py-1 bg-tertiary rounded hover:border-accent-green transition text-sm text-cyan-400" data-i18n="auth.admin">Admin</a>
                     <a id="authLogout" href="/logout" class="hidden px-3 py-1 bg-tertiary rounded hover:border-red-400/70 transition text-sm text-red-400" data-i18n="auth.logout">Logout</a>
@@ -2118,15 +2118,18 @@
     <!-- Toast Container -->
     <div id="toastContainer"></div>
 
-    <!-- Admin Inbox Modal -->
-    <div id="adminInboxModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
-        <div class="relative w-full max-w-2xl mx-4 rounded-2xl border border-white/15 bg-[#0f172a] shadow-2xl p-6 max-h-[85vh] overflow-y-auto">
-            <div class="flex items-center justify-between gap-3 mb-4">
-                <h3 class="text-xl font-bold text-amber-300">Admin Inbox</h3>
-                <button id="adminInboxClose" type="button" class="btn-cmd-neutral">Close</button>
+    <!-- Inbox Modal (user notifications + admin pending, single bell) -->
+    <div id="userInboxModal" class="hidden fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div class="inbox-modal-panel relative mx-4 rounded-2xl border border-white/15 bg-[#0f172a] shadow-2xl p-6">
+            <div class="flex items-center justify-between gap-3 mb-4 flex-shrink-0">
+                <h3 class="text-xl font-bold text-cyan-300" data-i18n="inbox.user_modal_title">Inbox</h3>
+                <div class="flex items-center gap-2">
+                    <button id="userInboxMarkAllRead" type="button" class="btn-cmd-neutral text-sm" data-i18n="inbox.mark_all_read">Mark all read</button>
+                    <button id="userInboxClose" type="button" class="btn-cmd-neutral" data-i18n="modal.close">Close</button>
+                </div>
             </div>
-            <div id="adminInboxContent" class="space-y-4">
-                <div class="text-secondary text-sm">Loading…</div>
+            <div id="userInboxContent" class="inbox-modal-scroll space-y-4">
+                <div class="text-secondary text-sm" data-i18n="inbox.loading">Loading…</div>
             </div>
         </div>
     </div>

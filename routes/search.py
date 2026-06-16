@@ -38,6 +38,23 @@ def _from_app(*names):
     return tuple(getattr(_app, n) for n in names)
 
 
+def _strip_feed_identity_fields(item: dict) -> dict:
+    """Remove analyst usernames from public feed payloads (Live Stats for anonymous viewers)."""
+    out = dict(item)
+    out['user'] = ''
+    out['analyst'] = ''
+    return out
+
+
+def _maybe_strip_feed_identity(item: dict) -> dict:
+    try:
+        if current_user.is_authenticated:
+            return item
+    except Exception:
+        pass
+    return _strip_feed_identity_fields(item)
+
+
 def _search_needles_from_query(query: str) -> list[str]:
     """Lowercased search needles: raw query plus refanger-cleaned variant when different."""
     raw = (query or '').strip()
@@ -362,6 +379,8 @@ def api_tags_suggest():
     import uuid
     try:
         if not request.is_json:
+            from utils.audit_events import audit_log_event
+            audit_log_event('tag_suggest_fail', 'fail', code='invalid_body', reason='JSON body required')
             return jsonify({'success': False, 'message': 'JSON body required'}), 400
         data = request.get_json(silent=True) or {}
         raw = data.get('tags')
@@ -369,10 +388,14 @@ def api_tags_suggest():
             raw = data.get('tag')
         tags_list = normalize_tags_from_input(raw)
         if not tags_list:
+            from utils.audit_events import audit_log_event
+            audit_log_event('tag_suggest_fail', 'fail', code='missing_tags', reason='Missing tag(s)')
             return jsonify({'success': False, 'message': 'Missing tag(s)'}), 400
 
         allow_suggest = (_get_setting('tags_allow_suggest', 'true') or 'true').lower() == 'true'
         if not allow_suggest:
+            from utils.audit_events import audit_log_event
+            audit_log_event('tag_suggest_fail', 'fail', code='disabled', reason='Tag suggestions are disabled')
             return jsonify({'success': False, 'message': 'Tag suggestions are disabled'}), 403
 
         allowed = parse_allowed_tags_setting(_get_setting('allowed_tags', '[]'))
@@ -410,6 +433,11 @@ def api_tags_suggest():
         return _api_ok(data={'added': added}, message='Suggestion submitted')
     except Exception as e:
         logging.exception('api_tags_suggest failed')
+        try:
+            from utils.audit_events import audit_log_event
+            audit_log_event('tag_suggest_fail', 'fail', code='unexpected', reason=str(e)[:200])
+        except Exception:
+            pass
         return _api_error(str(e), 500)
 
 
@@ -1374,25 +1402,29 @@ def search_ioc():
 
 
 def _attach_distribution_to_results(results):
-    """Add distribution[] (downstream coverage icons) to IOC/YARA-less search rows."""
+    """Add distribution[] (downstream coverage icons) to search rows (IOC and YARA)."""
     if not results:
         return results
     pairs = []
     for r in results:
         ft = (r.get('file_type') or '').strip()
-        if ft in ('YARA', 'Campaign'):
+        if ft == 'Campaign':
             continue
         val = (r.get('ioc') or '').strip()
         if val:
             pairs.append((ft, val))
     if not pairs:
+        for r in results:
+            ft = (r.get('file_type') or '').strip()
+            if ft == 'Campaign':
+                r['distribution'] = []
         return results
     try:
         from utils.downstream import distribution_map_for_iocs
         dmap = distribution_map_for_iocs(pairs)
         for r in results:
             ft = (r.get('file_type') or '').strip()
-            if ft in ('YARA', 'Campaign'):
+            if ft == 'Campaign':
                 r['distribution'] = []
                 continue
             key = (ft, (r.get('ioc') or '').strip())
@@ -2105,7 +2137,7 @@ def get_all_iocs():
                 item['tags'] = []
         else:
             item['tags'] = []
-        iocs.append(item)
+        iocs.append(_maybe_strip_feed_identity(item))
     out = {
         'success': True,
         'iocs': iocs,
@@ -2149,6 +2181,20 @@ def export_iocs():
     rows = q.order_by(IOC.created_at.desc()).limit(export_limit).all()
     if tag_filter:
         rows = [r for r in rows if _tag_matches(getattr(r, 'tags', None), tag_filter)]
+    try:
+        from utils.audit_events import audit_log_event
+        if current_user.is_authenticated:
+            audit_log_event(
+                'IOC_EXPORT',
+                'success',
+                type=ioc_type or 'all',
+                format=fmt,
+                count=len(rows),
+                active_only='1' if active_only else '0',
+                tag=tag_filter or None,
+            )
+    except Exception:
+        pass
     if fmt == 'json':
         out = []
         for row in rows:
@@ -2572,5 +2618,5 @@ def get_recent():
         }
         combined.append((dt, item))
     combined.sort(key=lambda x: x[0] if x[0] else datetime(1970, 1, 1), reverse=True)
-    recent = [item for _, item in combined[:limit]]
+    recent = [_maybe_strip_feed_identity(item) for _, item in combined[:limit]]
     return jsonify({'success': True, 'recent': recent, 'count': len(recent)})

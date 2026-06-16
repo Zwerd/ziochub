@@ -15,6 +15,32 @@
     const yaraFileInput = document.getElementById('yaraFileInput');
     const yaraSelectedFilename = document.getElementById('yaraSelectedFilename');
 
+    function sanitizeYaraFilename(raw) {
+        const base = String(raw || '').trim().split(/[/\\]/).pop() || '';
+        if (!base) return { sanitized: null, changed: false, raw: base };
+        let name = base;
+        if (!name.toLowerCase().endsWith('.yar')) {
+            if (name.indexOf('.') === -1) name = name + '.yar';
+            else if (!name.toLowerCase().endsWith('.yar')) return { sanitized: null, changed: false, raw: base };
+        }
+        let sanitized = name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/_+/g, '_').replace(/^[._]+|[._]+$/g, '');
+        if (!sanitized || !sanitized.toLowerCase().endsWith('.yar')) sanitized = 'rule.yar';
+        return { sanitized: sanitized, changed: sanitized !== name, raw: name };
+    }
+
+    async function yaraFileWithSafeName(file) {
+        if (!file) return { file: null, changed: false, sanitized: null };
+        const info = sanitizeYaraFilename(file.name);
+        if (!info.sanitized) return { file: file, changed: false, sanitized: null };
+        if (!info.changed) return { file: file, changed: false, sanitized: info.sanitized };
+        const content = await readFileAsText(file);
+        return {
+            file: new File([content], info.sanitized, { type: file.type || 'text/plain' }),
+            changed: true,
+            sanitized: info.sanitized
+        };
+    }
+
     function clearYaraResubmitMode() {
         global._yaraResubmitFilename = null;
         const submitBtn = document.getElementById('yaraWriteSubmitBtn');
@@ -111,7 +137,9 @@
         clearYaraSyntaxBanner('yaraUploadSyntaxResult');
         if (yaraSelectedFilename) {
             if (file) {
-                yaraSelectedFilename.textContent = t('yara.selected') + ': ' + file.name;
+                const info = sanitizeYaraFilename(file.name);
+                const displayName = info.sanitized || file.name;
+                yaraSelectedFilename.textContent = t('yara.selected') + ': ' + displayName;
                 yaraSelectedFilename.classList.remove('hidden');
             } else {
                 yaraSelectedFilename.textContent = '';
@@ -527,6 +555,16 @@
             showToast(t('toast.invalid_file_type'), 'error');
             return;
         }
+        const namePrep = await yaraFileWithSafeName(file);
+        file = namePrep.file;
+        if (namePrep.changed && namePrep.sanitized) {
+            showToast(
+                (t('yara.filename_normalized') || 'Filename adjusted to "{name}" (spaces replaced with underscores).')
+                    .replace('{name}', namePrep.sanitized),
+                'warn'
+            );
+            setYaraSelected(file);
+        }
         const ticketEl = document.getElementById(ticketElId);
         const commentEl = document.getElementById(commentElId);
         const campaignEl = document.getElementById(campaignElId);
@@ -786,7 +824,22 @@
             return;
         }
         const base = rawName.split(/[/\\]/).pop() || rawName;
-        const finalName = base.toLowerCase().endsWith('.yar') ? base : (base + '.yar');
+        const withExt = base.toLowerCase().endsWith('.yar') ? base : (base + '.yar');
+        const nameInfo = sanitizeYaraFilename(withExt);
+        if (!nameInfo.sanitized) {
+            showToast(t('yara.write_error_invalid_filename') || t('yara.write_error_empty_filename'), 'error');
+            return;
+        }
+        if (nameInfo.changed) {
+            const wf = document.getElementById('yaraWriteFilename');
+            if (wf) wf.value = nameInfo.sanitized.replace(/\.yar$/i, '');
+            showToast(
+                (t('yara.filename_normalized') || 'Filename adjusted to "{name}" (spaces replaced with underscores).')
+                    .replace('{name}', nameInfo.sanitized),
+                'warn'
+            );
+        }
+        const finalName = nameInfo.sanitized;
         const file = new File([source], finalName, { type: 'text/plain' });
         await handleYaraUpload(file, {
             ticketId: 'yaraWriteTicketId',

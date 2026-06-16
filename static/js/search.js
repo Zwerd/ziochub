@@ -173,7 +173,9 @@
             if (agg && typeof agg === 'object') {
                 aggOrder.forEach(function (row) {
                     var n = parseInt(agg[row.key], 10);
-                    if (!isFinite(n) || n <= 0) return;
+                    if (!isFinite(n)) n = 0;
+                    // Always list approved YARA rules bucket (even at 0) so analysts can browse the group.
+                    if (row.key !== 'yara' && n <= 0) return;
                     var name = (s[row.labelKey] != null && s[row.labelKey] !== '') ? s[row.labelKey] : row.key;
                     items.push({ value: 'a|' + row.key, text: name + ' (' + n + ')', count: n });
                 });
@@ -331,7 +333,7 @@
     }
 
     function renderDistributionCell(result) {
-        if (result.file_type === 'YARA' || result.file_type === 'Campaign') {
+        if (result.file_type === 'Campaign') {
             return '<span class="text-secondary">-</span>';
         }
         var list = result.distribution;

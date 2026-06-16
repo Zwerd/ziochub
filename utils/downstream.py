@@ -13,7 +13,7 @@ from typing import Any
 from sqlalchemy.exc import IntegrityError
 
 from extensions import db
-from models import DownstreamSystem, FeedSourceLastSeen, IOC, IocDownstreamEvent, _utcnow, iso_utc
+from models import DownstreamSystem, FeedSourceLastSeen, IOC, IocDownstreamEvent, YaraRule, _utcnow, iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,32 @@ _CUSTOM_ICON_DIR = _VENDORS_ICON_DIR / 'custom'
 _CHANNEL_FEED = 'feed'
 _CHANNEL_TAXII = 'taxii'
 _CHANNEL_API = 'api'
+
+YARA_IOC_TYPE = 'YARA'
+_YARA_FEED_LIST_PATH = '/feed/yara-list'
+_YARA_FEED_CONTENT_PREFIX = '/feed/yara-content/'
+
+
+def _is_yara_feed_path(feed_path: str) -> bool:
+    p = (feed_path or '').strip().lower()
+    return p == _YARA_FEED_LIST_PATH or p.startswith(_YARA_FEED_CONTENT_PREFIX)
+
+
+def yara_api_source_for_vendor(vendor: str) -> str:
+    """Map integration retry / automation vendor key to IocDownstreamEvent.api_source."""
+    v = (vendor or '').strip().lower()
+    if v == 'yara_http':
+        return 'yara_http'
+    if v in ('trellix_ex', 'trellix_cms', 'trellix_nx'):
+        return f'yara_{v}'
+    return f'yara_{v}' if v else 'yara_automation'
+
+
+def _default_vendor_for_yara_api_source(api_source: str) -> str:
+    src = (api_source or '').strip().lower()
+    if src.startswith('yara_trellix') or src == 'yara_http':
+        return 'trellix'
+    return 'generic'
 
 _REMOVE_ACTIONS = frozenset({
     'remove', 'delete', 'revoke', 'expire_remove', 'delete_remove',
@@ -603,6 +629,41 @@ def _ioc_removed_from_hub_at(row: IOC | None) -> datetime | None:
     return None
 
 
+def _yara_removed_from_hub_at(rule: YaraRule | None) -> datetime | None:
+    """When the YARA rule stopped being published in feeds (deleted or no longer approved)."""
+    if rule is None:
+        return _utcnow()
+    if (rule.status or '').strip().lower() != 'approved':
+        return rule.rejected_at or _utcnow()
+    return None
+
+
+def _resolve_yara_target_vendor(name: str, url: str, *, default_vendor_id: str) -> tuple[str, int | None, str]:
+    """Return (vendor_id, downstream_system_id, display_name) for a YARA automation target."""
+    nm = (name or '').strip() or 'Target'
+    matched = DownstreamSystem.query.filter_by(name=nm, enabled=True).first()
+    if matched:
+        return system_event_vendor_id(matched), matched.id, matched.name
+    host = ''
+    if url:
+        try:
+            from urllib.parse import urlparse
+            host = (urlparse(url).hostname or '').strip()
+        except Exception:
+            host = ''
+    if host:
+        try:
+            ipaddress.ip_address(host)
+            systems = DownstreamSystem.query.filter_by(client_ip=host, enabled=True).all()
+            if systems:
+                sys = systems[0]
+                return system_event_vendor_id(sys), sys.id, sys.name
+        except ValueError:
+            pass
+    vid = normalize_vendor_id(default_vendor_id) or 'generic'
+    return vid, None, nm
+
+
 def _mark_feed_taxii_inactive_after_pull(
     system: DownstreamSystem,
     channel: str,
@@ -625,11 +686,17 @@ def _mark_feed_taxii_inactive_after_pull(
             is_active=True,
         ).all()
         for ev in events:
-            row = IOC.query.filter(
-                IOC.type == ev.ioc_type,
-                func.lower(IOC.value) == (ev.ioc_value or '').strip().lower(),
-            ).first()
-            removed_at = _ioc_removed_from_hub_at(row)
+            if (ev.ioc_type or '').strip() == YARA_IOC_TYPE:
+                rule = YaraRule.query.filter(
+                    func.lower(YaraRule.filename) == (ev.ioc_value or '').strip().lower(),
+                ).first()
+                removed_at = _yara_removed_from_hub_at(rule)
+            else:
+                row = IOC.query.filter(
+                    IOC.type == ev.ioc_type,
+                    func.lower(IOC.value) == (ev.ioc_value or '').strip().lower(),
+                ).first()
+                removed_at = _ioc_removed_from_hub_at(row)
             if removed_at is None:
                 continue
             if pull_at >= removed_at:
@@ -896,27 +963,126 @@ def record_ioc_push_target_success(
     )
 
 
-def _correlate_system_pull(system: DownstreamSystem, channel: str, pull_at: datetime, feed_path: str) -> int:
-    wm_attr = 'last_taxii_correlated_at' if channel == _CHANNEL_TAXII else 'last_feed_correlated_at'
-    watermark = getattr(system, wm_attr) or datetime.min
+def record_yara_push_target_results(
+    filename: str,
+    results: list | None,
+    *,
+    api_source: str,
+    default_vendor_id: str | None = None,
+) -> None:
+    """Record per-target API distribution after successful YARA automation push."""
+    fn = (filename or '').strip()
+    if not fn or not results:
+        return
+    src = (api_source or '').strip().lower() or 'yara_automation'
+    default_vid = default_vendor_id or _default_vendor_for_yara_api_source(src)
+    try:
+        for row in results:
+            if not isinstance(row, dict) or not row.get('success'):
+                continue
+            name = (row.get('name') or '').strip() or 'Target'
+            url = (row.get('url') or '').strip()
+            vid, downstream_system_id, dn = _resolve_yara_target_vendor(
+                name, url, default_vendor_id=default_vid,
+            )
+            _upsert_event(
+                ioc_type=YARA_IOC_TYPE,
+                ioc_value=fn,
+                channel=_CHANNEL_API,
+                vendor_id=vid,
+                display_name=dn,
+                event_at=_utcnow(),
+                downstream_system_id=downstream_system_id,
+                api_source=src,
+            )
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+    except Exception:
+        db.session.rollback()
+        logger.debug('record_yara_push_target_results failed', exc_info=True)
+
+
+def mark_yara_push_target_results_removed(
+    filename: str,
+    results: list | None,
+    *,
+    api_source: str,
+    default_vendor_id: str | None = None,
+) -> None:
+    """Mark API distribution inactive after successful YARA automation delete."""
+    fn = (filename or '').strip()
+    if not fn or not results:
+        return
+    src = (api_source or '').strip().lower() or 'yara_automation'
+    default_vid = default_vendor_id or _default_vendor_for_yara_api_source(src)
+    ctx = {'type': YARA_IOC_TYPE, 'value': fn, 'action': 'delete'}
+    try:
+        for row in results:
+            if not isinstance(row, dict) or not row.get('success'):
+                continue
+            name = (row.get('name') or '').strip() or 'Target'
+            url = (row.get('url') or '').strip()
+            vid, downstream_system_id, dn = _resolve_yara_target_vendor(
+                name, url, default_vendor_id=default_vid,
+            )
+            mark_api_distribution_removed(
+                [ctx],
+                vendor_id=vid,
+                display_name=dn,
+                api_source=src,
+                downstream_system_id=downstream_system_id,
+            )
+    except Exception:
+        logger.debug('mark_yara_push_target_results_removed failed', exc_info=True)
+
+
+def mark_yara_removed_from_hub(filename: str) -> None:
+    """Mark all distribution events inactive when a YARA rule leaves approved feeds."""
+    fn = (filename or '').strip()
+    if not fn:
+        return
+    try:
+        from sqlalchemy import func
+
+        ts = _utcnow()
+        for ev in IocDownstreamEvent.query.filter(
+            IocDownstreamEvent.ioc_type == YARA_IOC_TYPE,
+            func.lower(IocDownstreamEvent.ioc_value) == fn.lower(),
+        ).all():
+            ev.is_active = False
+            if ts > (ev.event_at or datetime.min):
+                ev.event_at = ts
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+    except Exception:
+        db.session.rollback()
+        logger.debug('mark_yara_removed_from_hub failed', exc_info=True)
+
+
+def _correlate_yara_feed_pull(system: DownstreamSystem, pull_at: datetime, feed_path: str) -> int:
+    """Attach approved YARA rules seen on /feed/yara-list or /feed/yara-content/* pulls."""
+    if not _is_yara_feed_path(feed_path):
+        return 0
+    watermark = system.last_yara_feed_correlated_at or datetime.min
     if pull_at <= watermark:
         return 0
-
-    q = (
-        IOC.query.filter(
-            IOC.created_at <= pull_at,
-            IOC.created_at > watermark,
-            IOC.revoked.is_(False),
-        )
-        .order_by(IOC.id.asc())
-    )
     added = 0
-    for row in q.yield_per(_CORRELATE_BATCH):
+    q = (
+        YaraRule.query.filter(
+            YaraRule.status == 'approved',
+            YaraRule.uploaded_at <= pull_at,
+            YaraRule.uploaded_at > watermark,
+        )
+        .order_by(YaraRule.id.asc())
+    )
+    for rule in q.yield_per(_CORRELATE_BATCH):
         try:
             _upsert_event(
-                ioc_type=row.type,
-                ioc_value=row.value,
-                channel=channel,
+                ioc_type=YARA_IOC_TYPE,
+                ioc_value=rule.filename,
+                channel=_CHANNEL_FEED,
                 vendor_id=system_event_vendor_id(system),
                 display_name=system.name,
                 event_at=pull_at,
@@ -926,7 +1092,41 @@ def _correlate_system_pull(system: DownstreamSystem, channel: str, pull_at: date
             added += 1
         except Exception:
             continue
-    setattr(system, wm_attr, pull_at)
+    system.last_yara_feed_correlated_at = pull_at
+    return added
+
+
+def _correlate_system_pull(system: DownstreamSystem, channel: str, pull_at: datetime, feed_path: str) -> int:
+    wm_attr = 'last_taxii_correlated_at' if channel == _CHANNEL_TAXII else 'last_feed_correlated_at'
+    watermark = getattr(system, wm_attr) or datetime.min
+    added = 0
+    if pull_at > watermark:
+        q = (
+            IOC.query.filter(
+                IOC.created_at <= pull_at,
+                IOC.created_at > watermark,
+                IOC.revoked.is_(False),
+            )
+            .order_by(IOC.id.asc())
+        )
+        for row in q.yield_per(_CORRELATE_BATCH):
+            try:
+                _upsert_event(
+                    ioc_type=row.type,
+                    ioc_value=row.value,
+                    channel=channel,
+                    vendor_id=system_event_vendor_id(system),
+                    display_name=system.name,
+                    event_at=pull_at,
+                    downstream_system_id=system.id,
+                    feed_path=feed_path,
+                )
+                added += 1
+            except Exception:
+                continue
+        setattr(system, wm_attr, pull_at)
+    if channel == _CHANNEL_FEED:
+        added += _correlate_yara_feed_pull(system, pull_at, feed_path)
     system.updated_at = _utcnow()
     return added
 
@@ -1000,8 +1200,28 @@ def backfill_downstream_system(system_id: int) -> dict[str, int]:
                     feed_count += 1
             except Exception:
                 continue
+        if channel == _CHANNEL_FEED and _is_yara_feed_path(path):
+            for rule in YaraRule.query.filter(
+                YaraRule.status == 'approved',
+                YaraRule.uploaded_at <= pull_at,
+            ).all():
+                try:
+                    _upsert_event(
+                        ioc_type=YARA_IOC_TYPE,
+                        ioc_value=rule.filename,
+                        channel=_CHANNEL_FEED,
+                        vendor_id=system_event_vendor_id(system),
+                        display_name=system.name,
+                        event_at=pull_at,
+                        downstream_system_id=system.id,
+                        feed_path=path,
+                    )
+                    feed_count += 1
+                except Exception:
+                    continue
     system.last_feed_correlated_at = _utcnow()
     system.last_taxii_correlated_at = _utcnow()
+    system.last_yara_feed_correlated_at = _utcnow()
     system.updated_at = _utcnow()
     db.session.commit()
     return {'feed_events': feed_count, 'taxii_events': taxii_count}

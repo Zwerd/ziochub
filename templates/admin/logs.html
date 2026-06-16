@@ -3,36 +3,153 @@
 
 {% block admin_content %}
 <div class="mb-4">
-    <p class="text-secondary text-sm">CEF audit log. Newest lines at the bottom.</p>
+    <p class="text-secondary text-sm">CEF audit log. Newest lines at the bottom. Use filters to narrow by action, user, or free text.</p>
 </div>
 
-<div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-4xl">
-    <h3 class="text-lg font-semibold accent-blue mb-4">Audit Log (last 50 lines)</h3>
-    <div class="flex items-center gap-2 mb-3">
-        <button type="button" id="logsRefreshBtn" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition text-sm">Refresh</button>
-        <span id="logsPath" class="text-xs text-secondary"></span>
+<div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-5xl">
+    <h3 class="text-lg font-semibold accent-blue mb-4">Audit Log</h3>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+        <div>
+            <label for="logsAction" class="block text-xs text-secondary mb-1">Action</label>
+            <select id="logsAction" class="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-primary focus:border-cyan-400 focus:outline-none">
+                <option value="">All actions</option>
+            </select>
+        </div>
+        <div>
+            <label for="logsUser" class="block text-xs text-secondary mb-1">User</label>
+            <input type="text" id="logsUser" placeholder="username" autocomplete="off"
+                   class="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-primary focus:border-cyan-400 focus:outline-none">
+        </div>
+        <div>
+            <label for="logsSearch" class="block text-xs text-secondary mb-1">Search text</label>
+            <input type="text" id="logsSearch" placeholder="value, reason, file=…" autocomplete="off"
+                   class="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-primary focus:border-cyan-400 focus:outline-none">
+        </div>
+        <div>
+            <label for="logsLines" class="block text-xs text-secondary mb-1">Lines</label>
+            <select id="logsLines" class="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-primary focus:border-cyan-400 focus:outline-none">
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+                <option value="500">500</option>
+            </select>
+        </div>
     </div>
+
+    <div class="flex flex-wrap items-center gap-2 mb-3">
+        <button type="button" id="logsRefreshBtn" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition text-sm">Refresh</button>
+        <button type="button" id="logsClearFiltersBtn" class="px-4 py-2 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-accent-green transition text-sm">Clear filters</button>
+        <span id="logsMeta" class="text-xs text-secondary ml-auto"></span>
+    </div>
+
+    <details class="mb-3 bg-black/20 border border-white/10 rounded-lg">
+        <summary class="cursor-pointer px-4 py-2 text-sm font-semibold text-cyan-300 select-none">Action catalog reference</summary>
+        <div id="logsCatalog" class="px-4 pb-4 pt-1 text-xs text-secondary max-h-48 overflow-y-auto">
+            Loading catalog…
+        </div>
+    </details>
+
     <pre id="logsContent" class="p-4 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-primary overflow-x-auto overflow-y-auto max-h-[70vh] whitespace-pre-wrap break-all">Loading...</pre>
     <div id="logsError" class="mt-2 hidden text-sm text-red-400"></div>
 </div>
 
 <script>
 (function() {
+    var actionEl = document.getElementById('logsAction');
+    var userEl = document.getElementById('logsUser');
+    var searchEl = document.getElementById('logsSearch');
+    var linesEl = document.getElementById('logsLines');
+    var pre = document.getElementById('logsContent');
+    var errEl = document.getElementById('logsError');
+    var metaEl = document.getElementById('logsMeta');
+    var catalogEl = document.getElementById('logsCatalog');
+
+    function buildQuery() {
+        var params = new URLSearchParams();
+        params.set('lines', (linesEl && linesEl.value) ? linesEl.value : '50');
+        if (actionEl && actionEl.value) params.set('action', actionEl.value);
+        if (userEl && userEl.value.trim()) params.set('user', userEl.value.trim());
+        if (searchEl && searchEl.value.trim()) params.set('q', searchEl.value.trim());
+        return params.toString();
+    }
+
+    function renderCatalog(actions) {
+        if (!catalogEl) return;
+        if (!actions || !actions.length) {
+            catalogEl.textContent = 'No actions defined.';
+            return;
+        }
+        var byCat = {};
+        actions.forEach(function(a) {
+            var cat = a.category || 'Other';
+            if (!byCat[cat]) byCat[cat] = [];
+            byCat[cat].push(a);
+        });
+        var html = '';
+        Object.keys(byCat).sort().forEach(function(cat) {
+            html += '<div class="mb-2"><span class="font-semibold text-primary">' + cat + '</span><ul class="list-disc pl-5 mt-1 space-y-0.5">';
+            byCat[cat].forEach(function(a) {
+                var tier = a.tier ? ' <span class="text-amber-400">(Tier ' + a.tier + ')</span>' : '';
+                html += '<li><code class="px-1 py-0.5 rounded bg-white/10 text-cyan-200">' + a.action + '</code> — ' + (a.description || '') + tier + '</li>';
+            });
+            html += '</ul></div>';
+        });
+        catalogEl.innerHTML = html;
+    }
+
+    function populateActionSelect(actions) {
+        if (!actionEl || !actions) return;
+        var current = actionEl.value;
+        while (actionEl.options.length > 1) actionEl.remove(1);
+        actions.slice().sort(function(a, b) {
+            return (a.action || '').localeCompare(b.action || '');
+        }).forEach(function(a) {
+            var opt = document.createElement('option');
+            opt.value = a.action;
+            opt.textContent = (a.category ? a.category + ': ' : '') + a.action;
+            actionEl.appendChild(opt);
+        });
+        if (current) actionEl.value = current;
+    }
+
+    function loadCatalog() {
+        fetch('/api/admin/logs/actions')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success && data.actions) {
+                    renderCatalog(data.actions);
+                    populateActionSelect(data.actions);
+                } else if (catalogEl) {
+                    catalogEl.textContent = data.message || 'Failed to load catalog.';
+                }
+            })
+            .catch(function() {
+                if (catalogEl) catalogEl.textContent = 'Failed to load catalog.';
+            });
+    }
+
     function loadLogs() {
-        var pre = document.getElementById('logsContent');
-        var errEl = document.getElementById('logsError');
-        var pathEl = document.getElementById('logsPath');
         if (!pre) return;
         pre.textContent = 'Loading...';
         if (errEl) errEl.classList.add('hidden');
-        if (pathEl) pathEl.textContent = '';
-        fetch('/api/admin/logs/tail?lines=50')
+        if (metaEl) metaEl.textContent = '';
+        fetch('/api/admin/logs/tail?' + buildQuery())
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.success) {
                     var lines = data.lines || [];
                     pre.textContent = lines.length ? lines.join('\n') : (data.message || 'No log entries.');
-                    if (pathEl && data.path) pathEl.textContent = 'File: ' + data.path;
+                    if (metaEl) {
+                        var parts = [];
+                        if (data.path) parts.push('File: ' + data.path);
+                        if (data.filtered) {
+                            parts.push('Filtered: ' + (data.total_matched != null ? data.total_matched : '?') + ' match(es), showing last ' + lines.length);
+                        } else if (data.total_matched != null) {
+                            parts.push('Total lines in file: ' + data.total_matched);
+                        }
+                        metaEl.textContent = parts.join(' · ');
+                    }
                 } else {
                     pre.textContent = data.message || 'Failed to load logs.';
                 }
@@ -45,8 +162,29 @@
                 }
             });
     }
+
+    function clearFilters() {
+        if (actionEl) actionEl.value = '';
+        if (userEl) userEl.value = '';
+        if (searchEl) searchEl.value = '';
+        if (linesEl) linesEl.value = '50';
+        loadLogs();
+    }
+
     var btn = document.getElementById('logsRefreshBtn');
     if (btn) btn.addEventListener('click', loadLogs);
+    var clearBtn = document.getElementById('logsClearFiltersBtn');
+    if (clearBtn) clearBtn.addEventListener('click', clearFilters);
+    [actionEl, linesEl].forEach(function(el) {
+        if (el) el.addEventListener('change', loadLogs);
+    });
+    [userEl, searchEl].forEach(function(el) {
+        if (el) el.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') loadLogs();
+        });
+    });
+
+    loadCatalog();
     loadLogs();
 })();
 </script>

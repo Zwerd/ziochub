@@ -21,6 +21,7 @@
 #  Offline domain sanity: utils/offline_domain_checks.py (import verified below).
 #  GUI timestamps: utils/jinja_datetime.py (zoneinfo; host should have tzdata package on minimal Linux).
 #  Updated: 2026-06 — post-upgrade feature checks (Admin Distribution, Feed Pulse, YARA_rejected, data/dxl).
+#  Updated: 2026-06 — unified Inbox (utils/user_notifications.py, static/js/app.js, i18n).
 # ============================================================================
 set -euo pipefail
 
@@ -607,6 +608,13 @@ _verify_installed_file "templates/admin/downstream.html" "Admin → Distribution
 _verify_installed_file "templates/admin/base.html" "Admin navigation" || FEATURE_CHECK_FAILED=true
 _verify_installed_file "utils/downstream.py" "Distribution / vendor icons" || FEATURE_CHECK_FAILED=true
 _verify_installed_file "static/js/feed-pulse.js" "Feed Pulse (Connections / Push / Pull state)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "utils/user_notifications.py" "Unified Inbox (YARA/tag approval notifications)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "utils/audit_events.py" "CEF audit catalog and helpers" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "templates/admin/logs.html" "Admin → Logs (CEF audit filters)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "static/js/app.js" "Main SPA (unified Inbox bell UI)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "static/js/live-stats.js" "Live Feed (guest username privacy)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "static/i18n/en.json" "Inbox i18n (English)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "static/i18n/he.json" "Inbox i18n (Hebrew)" || FEATURE_CHECK_FAILED=true
 if $FEATURE_CHECK_FAILED; then
     echo ""
     warn "Some newer UI modules are missing under ${APP_DIR}."
@@ -712,7 +720,7 @@ if [[ ${#MISSING_MODULES[@]} -gt 0 ]]; then
 fi
 
 # Verify utils submodules (Reports, Admin Settings, CEF logging, etc.)
-REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "offline_domain_checks" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "mentorship" "ambition" "jinja_datetime" "downstream" "integration_telemetry")
+REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "offline_domain_checks" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "audit_events" "mentorship" "ambition" "jinja_datetime" "downstream" "integration_telemetry" "user_notifications")
 MISSING_UTILS=()
 
 for util in "${REQUIRED_UTILS[@]}"; do

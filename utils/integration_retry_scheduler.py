@@ -38,8 +38,10 @@ def start_integration_retry_scheduler(app) -> None:
             try:
                 with app_obj.app_context():
                     from utils.integration_retry import process_all_integration_retry_queues
+                    from utils.audit_events import audit_integration_retry_tick
 
                     summaries = process_all_integration_retry_queues(_app._get_setting, force=False)
+                    audit_integration_retry_tick(summaries)
                     for vendor, summary in summaries.items():
                         logger.info(
                             'Integration retry %s: processed=%s ok=%s fail=%s remaining=%s',
@@ -49,8 +51,20 @@ def start_integration_retry_scheduler(app) -> None:
                             summary.get('failed'),
                             summary.get('remaining'),
                         )
-            except Exception:
+            except Exception as tick_err:
                 logger.exception('Integration retry scheduler tick failed')
+                try:
+                    with app_obj.app_context():
+                        from utils.audit_events import audit_log_event
+
+                        audit_log_event(
+                            'integration_retry_auto',
+                            'fail',
+                            scope='scheduler_tick',
+                            reason=str(tick_err)[:200],
+                        )
+                except Exception:
+                    pass
             time.sleep(SCHEDULER_WAKE_SEC)
 
     t = threading.Thread(target=_loop, name='integration-retry-scheduler', daemon=True)

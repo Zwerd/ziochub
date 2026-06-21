@@ -234,7 +234,12 @@ async function maybeSuggestInvalidTags(result) {
         });
         const data = await res.json().catch(() => ({}));
         if (data && data.success) {
-            showToast(t('tags.suggested') || 'Suggestion submitted to admin for approval.', 'success');
+            const added = Array.isArray(data.added) ? data.added : [];
+            if (added.length) {
+                showToast(t('tags.suggested') || 'Suggestion submitted to admin for approval.', 'success');
+            } else {
+                showToast(t('tags.suggest_already') || 'Tag(s) are already allowed or pending approval.', 'info');
+            }
         } else {
             showToast((data && data.message) ? data.message : 'Failed to suggest tags', 'error');
         }
@@ -673,6 +678,7 @@ function attachStagingRowActionsForRow(tr, ttlSelectId, campaignSelectId, source
                         loadStats();
                         loadLiveFeed();
                     } else {
+                        if (await maybeSuggestInvalidTags(result)) return;
                         showToast(result.message || 'Import failed', 'error');
                     }
                 } catch (e) {
@@ -759,6 +765,7 @@ function attachStagingRowActions(tbody, ttlSelectId, campaignSelectId, source, t
                             loadFeedPulse();
                         }
                     } else {
+                        if (await maybeSuggestInvalidTags(result)) return;
                         showToast(result.message || 'Import failed', 'error');
                     }
                 } catch (e) {
@@ -858,6 +865,7 @@ document.getElementById('csvPreviewBtn').addEventListener('click', async () => {
             attachStagingRowActions(tbody, 'csvTTL', 'csvCampaignSelect', 'csv', 'csvTagsForAll');
             fetchStagingAnalystUsers().catch(() => {});
         } else {
+            if (await maybeSuggestInvalidTags(result)) return;
             showToast(result.message || 'Preview failed', 'error');
         }
     } catch (error) {
@@ -865,7 +873,7 @@ document.getElementById('csvPreviewBtn').addEventListener('click', async () => {
     }
 });
 
-// Unified queue: Approve All Valid (uses TTL / campaign / tags from the active mode toolbar)
+// Unified queue: Approve All Valid
 document.getElementById('unifiedApproveAllBtn').addEventListener('click', async () => {
     const tbody = getUnifiedStagingTbody();
     if (!tbody) return;
@@ -914,6 +922,7 @@ document.getElementById('unifiedApproveAllBtn').addEventListener('click', async 
                 loadFeedPulse();
             }
         } else {
+            if (await maybeSuggestInvalidTags(result)) return;
             showToast(result.message || 'Import failed', 'error');
         }
     } catch (error) {
@@ -1021,6 +1030,7 @@ document.getElementById('txtPreviewBtn').addEventListener('click', async () => {
             attachStagingRowActions(tbody, 'txtTTL', 'txtCampaignSelect', 'txt', 'txtTagsForAll');
             fetchStagingAnalystUsers().catch(() => {});
         } else {
+            if (await maybeSuggestInvalidTags(result)) return;
             showToast(result.message || 'Preview failed', 'error');
         }
     } catch (error) {

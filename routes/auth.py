@@ -429,7 +429,9 @@ def api_list_users():
 @bp.route('/api/auth/me')
 def api_auth_me():
     """Return current user info for frontend (authenticated or anonymous). Phase 4: avatar_url."""
-    (_api_ok,) = _from_app('_api_ok')
+    (_api_ok, _get_setting) = _from_app('_api_ok', '_get_setting')
+    from utils.workflow_settings import ui_workflow_flags
+    ui = ui_workflow_flags(current_user if current_user.is_authenticated else None, _get_setting)
     if current_user.is_authenticated:
         profile = UserProfile.query.filter_by(user_id=current_user.id).first()
         avatar = _avatar_url(profile)
@@ -439,6 +441,7 @@ def api_auth_me():
             'is_admin': current_user.is_admin,
             'display_name': (profile and profile.display_name) or current_user.username,
             'avatar_url': avatar,
+            'ui': ui,
         })
     return _api_ok(data={
         'authenticated': False,
@@ -446,6 +449,7 @@ def api_auth_me():
         'is_admin': False,
         'display_name': None,
         'avatar_url': None,
+        'ui': ui,
     })
 
 

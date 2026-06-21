@@ -22,6 +22,7 @@
 #  GUI timestamps: utils/jinja_datetime.py (zoneinfo; host should have tzdata package on minimal Linux).
 #  Updated: 2026-06 — post-upgrade feature checks (Admin Distribution, Feed Pulse, YARA_rejected, data/dxl).
 #  Updated: 2026-06 — unified Inbox (utils/user_notifications.py, static/js/app.js, i18n).
+#  Updated: 2026-06 — Tags governance (utils/tags.py, admin settings, submit/search staging suggest).
 # ============================================================================
 set -euo pipefail
 
@@ -612,9 +613,13 @@ _verify_installed_file "utils/user_notifications.py" "Unified Inbox (YARA/tag ap
 _verify_installed_file "utils/audit_events.py" "CEF audit catalog and helpers" || FEATURE_CHECK_FAILED=true
 _verify_installed_file "templates/admin/logs.html" "Admin → Logs (CEF audit filters)" || FEATURE_CHECK_FAILED=true
 _verify_installed_file "static/js/app.js" "Main SPA (unified Inbox bell UI)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "static/js/submit.js" "Submit IOC (tag suggest in single/bulk staging)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "static/js/search.js" "Search & Investigate (tag suggest on IOC edit)" || FEATURE_CHECK_FAILED=true
 _verify_installed_file "static/js/live-stats.js" "Live Feed (guest username privacy)" || FEATURE_CHECK_FAILED=true
-_verify_installed_file "static/i18n/en.json" "Inbox i18n (English)" || FEATURE_CHECK_FAILED=true
-_verify_installed_file "static/i18n/he.json" "Inbox i18n (Hebrew)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "templates/admin/settings.html" "Admin → Settings (Tags governance UI)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "utils/tags.py" "Tags governance (allowed list, suggest workflow)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "static/i18n/en.json" "Inbox + tags i18n (English)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "static/i18n/he.json" "Inbox + tags i18n (Hebrew)" || FEATURE_CHECK_FAILED=true
 if $FEATURE_CHECK_FAILED; then
     echo ""
     warn "Some newer UI modules are missing under ${APP_DIR}."
@@ -720,7 +725,7 @@ if [[ ${#MISSING_MODULES[@]} -gt 0 ]]; then
 fi
 
 # Verify utils submodules (Reports, Admin Settings, CEF logging, etc.)
-REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "offline_domain_checks" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "audit_events" "mentorship" "ambition" "jinja_datetime" "downstream" "integration_telemetry" "user_notifications")
+REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "offline_domain_checks" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "audit_events" "mentorship" "ambition" "jinja_datetime" "downstream" "integration_telemetry" "user_notifications" "tags")
 MISSING_UTILS=()
 
 for util in "${REQUIRED_UTILS[@]}"; do

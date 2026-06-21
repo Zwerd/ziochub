@@ -17,6 +17,21 @@ def resolve_user_id(username: str):
     return user.id if user else None
 
 
+def tag_suggestion_user_id(item: dict):
+    """Resolve user id from a tag suggestion record (prefer stored id)."""
+    if not item or not isinstance(item, dict):
+        return None
+    uid = item.get('suggested_by_user_id')
+    if uid is not None:
+        try:
+            uid = int(uid)
+            if uid > 0:
+                return uid
+        except (TypeError, ValueError):
+            pass
+    return resolve_user_id(item.get('suggested_by') or '')
+
+
 def _create_notification(*, user_id, category, outcome, title, body=None, payload=None, dedup_key=None):
     if not user_id:
         return None
@@ -66,6 +81,33 @@ def notify_yara_outcome(user_id, rule, outcome: str, *, reason=None, rejected_by
         category='yara',
         outcome=outcome,
         title=title,
+        body=body,
+        payload=payload,
+        dedup_key=dedup,
+    )
+
+
+def notify_ioc_outcome(user_id, row, outcome: str, *, reason=None, ioc_type=None, ioc_value=None, analyst=None):
+    """Create inbox notification when a pending IOC is approved or rejected."""
+    itype = (ioc_type or getattr(row, 'type', None) or '').strip()
+    val = (ioc_value or getattr(row, 'value', None) or '').strip()
+    title = f'{itype}: {val[:120]}' if itype and val else (val[:120] or itype or 'IOC')
+    if outcome == 'approved':
+        body = 'Your IOC was approved and is now distributed to feeds and integrations.'
+    else:
+        reason_text = (reason or '').strip()
+        body = reason_text or 'Your IOC submission was rejected by an administrator.'
+    payload = {
+        'type': itype,
+        'value': val,
+        'reason': (reason or '').strip() or None,
+    }
+    dedup = f'ioc:{outcome}:{itype}:{val.lower()}' if itype and val else None
+    return _create_notification(
+        user_id=user_id,
+        category='ioc',
+        outcome=outcome,
+        title=title[:512],
         body=body,
         payload=payload,
         dedup_key=dedup,
@@ -134,6 +176,19 @@ def notification_to_dict(row: UserNotification) -> dict:
         'created_at': row.created_at.isoformat() if row.created_at else None,
         'read': row.read_at is not None,
     }
+
+
+def dismiss_yara_outcome_notification(user_id, filename, outcome='rejected'):
+    """Remove stale inbox item after analyst resubmits a rejected rule."""
+    filename = (filename or '').strip()
+    if not user_id or not filename:
+        return 0
+    dedup = f'yara:{outcome}:{filename}'
+    row = UserNotification.query.filter_by(user_id=user_id, dedup_key=dedup).first()
+    if not row:
+        return 0
+    db.session.delete(row)
+    return 1
 
 
 def mark_yara_rejection_seen_for_user(user_id, username: str, filename=None):

@@ -789,6 +789,9 @@
                 clearYaraSyntaxResult();
                 invalidateYaraWriteValidation();
                 await loadYaraRejected();
+                if (typeof window.loadInboxBadge === 'function') {
+                    window.loadInboxBadge();
+                }
                 const pendingSec = document.getElementById('yaraPendingSection');
                 if (pendingSec) pendingSec.classList.remove('hidden');
                 await loadYaraPending();
@@ -1321,6 +1324,7 @@
     global.loadYaraRules = loadYaraRules;
     global.loadYaraPending = loadYaraPending;
     global.loadYaraRejected = loadYaraRejected;
+    global.editAndResubmitRejectedRule = editAndResubmitRejectedRule;
     global.openYaraMetaEditModal = openYaraMetaEditModal;
     global.setYaraMode = setYaraMode;
     setYaraMode('upload');

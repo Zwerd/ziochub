@@ -722,7 +722,7 @@ def calculate_expiration_date(ttl):
 
 
 def ioc_row_is_active(row):
-    """True if this IOC row is effective intelligence (not revoked, not past expiration)."""
+    """True if this IOC row is effective intelligence (not revoked, not past expiration). Includes pending approval."""
     if row is None:
         return False
     if getattr(row, 'revoked', False):
@@ -732,6 +732,13 @@ def ioc_row_is_active(row):
     if exp is not None and exp <= now:
         return False
     return True
+
+
+def ioc_row_is_published(row):
+    """True if IOC is active and approved for feeds, TAXII, and outbound push."""
+    if not ioc_row_is_active(row):
+        return False
+    return not getattr(row, 'pending_approval', False)
 
 
 def check_ioc_exists(ioc_type, value):
@@ -745,7 +752,8 @@ def check_ioc_exists(ioc_type, value):
 
 def apply_ioc_submission_to_existing_row(row, ioc_type, value, analyst, submission_method='single', *,
                                          ticket_id=None, comment=None, expiration_date=None,
-                                         campaign_id=None, user_id=None, tags=None, rare=None):
+                                         campaign_id=None, user_id=None, tags=None, rare=None,
+                                         pending_approval=None):
     """
     Reactivate a revoked or expired IOC row, or refresh metadata on resubmission.
     Preserves created_at and stable id for STIX; updates modified_at.
@@ -773,6 +781,8 @@ def apply_ioc_submission_to_existing_row(row, ioc_type, value, analyst, submissi
     row.tld = r.get('tld')
     row.email_domain = r.get('email_domain')
     row.rare_find_type = r.get('rare_find_type')
+    if pending_approval is not None:
+        row.pending_approval = bool(pending_approval)
 
 
 def _compute_rare_find_fields(ioc_type, value):
@@ -821,7 +831,7 @@ def _compute_rare_find_fields(ioc_type, value):
 def _create_ioc(ioc_type, value, analyst, submission_method='single', *,
                  ticket_id=None, comment=None, expiration_date=None,
                  campaign_id=None, user_id=None, tags=None, created_at=None,
-                 rare=None):
+                 rare=None, pending_approval=False):
     """
     Build an IOC model instance with all standard fields.
     `rare` should be a dict from _compute_rare_find_fields or None.
@@ -841,6 +851,7 @@ def _create_ioc(ioc_type, value, analyst, submission_method='single', *,
         tld=r.get('tld'),
         email_domain=r.get('email_domain'),
         rare_find_type=r.get('rare_find_type'),
+        pending_approval=bool(pending_approval),
     )
     if tags is not None:
         kwargs['tags'] = tags
@@ -997,6 +1008,8 @@ def index():
             achievement_popup_disabled = getattr(profile, 'achievement_popup_disabled', False)
     user_id = current_user.id if authenticated else None
     search_comment_rtl_by_script = _get_setting('search_comment_rtl_by_script', 'true').strip().lower() in ('true', '1', 'yes')
+    from utils.workflow_settings import champs_tab_enabled
+    champs_tab_on = champs_tab_enabled(_get_setting)
     return render_template(
         'index.html',
         authenticated=authenticated,
@@ -1008,6 +1021,7 @@ def index():
         achievement_popup_disabled=achievement_popup_disabled,
         user_id=user_id,
         search_comment_rtl_by_script=search_comment_rtl_by_script,
+        champs_tab_enabled=champs_tab_on,
     )
 
 
@@ -1094,6 +1108,8 @@ def health_check():
     try:
         now = _utcnow()
         test_count = IOC.query.filter(
+            IOC.revoked.is_(False),
+            IOC.pending_approval.is_(False),
             db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
         ).count()
         health_status['checks']['feeds'] = {
@@ -1764,6 +1780,29 @@ def _ensure_ioc_revocation_columns():
         print(f"[Migration] iocs revocation columns: {e}")
 
 
+def _ensure_ioc_pending_approval_column():
+    """Add pending_approval to iocs when missing (analyst approval workflow)."""
+    try:
+        result = db.session.execute(text("PRAGMA table_info(iocs)"))
+        rows = result.fetchall()
+        names = {row[1] for row in rows}
+        if 'pending_approval' not in names:
+            db.session.execute(text(
+                "ALTER TABLE iocs ADD COLUMN pending_approval BOOLEAN NOT NULL DEFAULT 0"
+            ))
+            _commit_with_retry()
+        try:
+            db.session.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_iocs_pending_approval ON iocs(pending_approval)"
+            ))
+            _commit_with_retry()
+        except Exception:
+            db.session.rollback()
+    except Exception as e:
+        db.session.rollback()
+        print(f"[Migration] iocs pending_approval: {e}")
+
+
 def _ensure_feed_source_last_seen_status_columns():
     """Add last_status_code and last_ok to feed_source_last_seen for Connections status view."""
     try:
@@ -2090,6 +2129,7 @@ def _init_db():
         _ensure_ioc_submission_method_column()
         _ensure_ioc_rare_find_columns()
         _ensure_ioc_revocation_columns()
+        _ensure_ioc_pending_approval_column()
         _ensure_feed_source_last_seen_status_columns()
         _ensure_downstream_system_custom_columns()
         _ensure_ioc_downstream_events_is_active_column()

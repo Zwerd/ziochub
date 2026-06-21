@@ -5275,9 +5275,9 @@ textarea:focus-visible {
 #searchResults td:nth-child(9)  { width: 110px; }   /* Expiration */
 #searchResults th.search-distribution-col,
 #searchResults td.search-distribution-cell {
-    width: 112px;
-    min-width: 112px;
-    max-width: 112px;
+    width: 120px;
+    min-width: 120px;
+    max-width: 120px;
     vertical-align: middle;
 }
 #searchResults th.search-distribution-col {
@@ -5287,10 +5287,14 @@ textarea:focus-visible {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    align-content: flex-start;
-    gap: 3px;
+    align-content: center;
+    gap: 4px;
     max-width: 100%;
-    line-height: 0;
+    min-height: var(--search-row-control-height, 1.5rem);
+}
+#searchResults td.search-distribution-cell .search-distribution-vendor-icon {
+    width: var(--search-row-control-height, 1.5rem) !important;
+    height: var(--search-row-control-height, 1.5rem) !important;
 }
 #searchResults th.search-actions-col,
 #searchResults td.search-actions-cell {
@@ -5314,8 +5318,10 @@ textarea:focus-visible {
     max-width: 100%;
     white-space: nowrap;
 }
-#searchResults th:nth-child(11),
-#searchResults td:nth-child(11) { width: 200px; max-width: 200px; }   /* Actions */
+#searchResults {
+    /* Match btn-cmd-sm outer box (padding + text line + neutral border) in search rows */
+    --search-row-control-height: calc(0.25rem + 0.25rem + 0.6875rem * 1.25 + 2px);
+}
 
 /* Body cells: pin to right edge on horizontal scroll */
 #searchResults tbody td.search-actions-cell {

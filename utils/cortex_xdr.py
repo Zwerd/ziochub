@@ -59,6 +59,10 @@ _NONCE_LEN = 64
 # Immediate retries for transient DNS/TLS/connection failures before queueing for scheduled retry.
 # Count comes from Admin ``cortex_xdr_retry_max_attempts`` (see ``_cortex_immediate_retries``).
 _HTTP_TRANSIENT_RETRY_DELAY_SEC = 2.0
+# Post-insert ``indicators/get`` can lag behind a successful ``insert_jsons`` (eventual consistency).
+_VERIFY_PRESENT_MAX_ATTEMPTS = 5
+_VERIFY_PRESENT_INITIAL_DELAY_SEC = 1.0
+_VERIFY_PRESENT_MAX_DELAY_SEC = 6.0
 # Bulk outbound (Approve All / CSV / TXT): multiple IOCs per API call where supported.
 CORTEX_INSERT_BATCH_SIZE = 50
 CORTEX_DELETE_BATCH_SIZE = 50
@@ -289,6 +293,8 @@ def cortex_xdr_is_retriable_failure(message: str) -> bool:
         return False
     if m in ('missing_config', 'invalid_context', 'remove_missing_value'):
         return False
+    if 'verify_not_found' in m or 'verify_absent' in m:
+        return True
     return any(marker in m for marker in _TRANSIENT_ERROR_MARKERS) or m.startswith('indicators/delete http 0')
 
 
@@ -551,6 +557,99 @@ def _indicator_exists_by_value(
     return False, 'verify_absent'
 
 
+def _indicator_exists_by_value_with_retry(
+    root: str,
+    key_id: str,
+    api_key: str,
+    verify_ssl: bool,
+    value: str,
+    *,
+    security_level: str = _DEFAULT_SECURITY_LEVEL,
+    max_attempts: int = _VERIFY_PRESENT_MAX_ATTEMPTS,
+) -> tuple[bool, str]:
+    """
+    Poll ``indicators/get`` after a successful insert.
+
+    Cortex XDR may return insert_jsons success before the IOC is visible in get;
+    without retries this produced false ``verify_not_found`` and skipped Distribution icons.
+    """
+    val = (value or '').strip()
+    if not val:
+        return False, 'verify_empty_value'
+    last_detail = 'verify_absent'
+    delay = _VERIFY_PRESENT_INITIAL_DELAY_SEC
+    attempts = max(1, int(max_attempts or 1))
+    for attempt in range(1, attempts + 1):
+        exists, detail = _indicator_exists_by_value(
+            root, key_id, api_key, verify_ssl, val, security_level=security_level,
+        )
+        if exists:
+            if attempt > 1:
+                logger.info(
+                    'Cortex XDR verify present for %r after attempt %s/%s',
+                    val[:96], attempt, attempts,
+                )
+                return True, f'{detail}_retry_{attempt}'
+            return True, detail
+        last_detail = detail
+        if attempt < attempts:
+            logger.debug(
+                'Cortex XDR verify absent for %r (attempt %s/%s); retry in %.1fs',
+                val[:96], attempt, attempts, delay,
+            )
+            time.sleep(delay)
+            delay = min(delay * 1.5, _VERIFY_PRESENT_MAX_DELAY_SEC)
+    logger.warning(
+        'Cortex XDR verify still absent for %r after %s attempt(s): %s',
+        val[:96], attempts, last_detail,
+    )
+    return False, f'{last_detail}_after_{attempts}_attempts'
+
+
+def _verify_ioc_values_present(
+    root: str,
+    key_id: str,
+    api_key: str,
+    verify_ssl: bool,
+    values: list[str],
+    *,
+    security_level: str = _DEFAULT_SECURITY_LEVEL,
+) -> dict[str, tuple[bool, str]]:
+    """Batch-friendly post-insert verify with shared retry rounds."""
+    pending = [(v or '').strip() for v in values if (v or '').strip()]
+    results: dict[str, tuple[bool, str]] = {}
+    if not pending:
+        return results
+    delay = _VERIFY_PRESENT_INITIAL_DELAY_SEC
+    for attempt in range(1, _VERIFY_PRESENT_MAX_ATTEMPTS + 1):
+        still_missing: list[str] = []
+        for val in pending:
+            if val in results:
+                continue
+            exists, detail = _indicator_exists_by_value(
+                root, key_id, api_key, verify_ssl, val, security_level=security_level,
+            )
+            if exists:
+                suffix = f'_retry_{attempt}' if attempt > 1 else ''
+                results[val] = (True, f'{detail}{suffix}')
+            else:
+                still_missing.append(val)
+        if not still_missing:
+            break
+        if attempt < _VERIFY_PRESENT_MAX_ATTEMPTS:
+            logger.debug(
+                'Cortex XDR batch verify: %s value(s) absent (attempt %s/%s); retry in %.1fs',
+                len(still_missing), attempt, _VERIFY_PRESENT_MAX_ATTEMPTS, delay,
+            )
+            time.sleep(delay)
+            delay = min(delay * 1.5, _VERIFY_PRESENT_MAX_DELAY_SEC)
+            pending = still_missing
+        else:
+            for val in still_missing:
+                results[val] = (False, 'verify_absent_after_retries')
+    return results
+
+
 def _looks_like_indicator_already_exists(data: Optional[dict[str, Any]], raw: str) -> bool:
     """True if Cortex response suggests the indicator row already exists (may be stale after our delete)."""
     parts: list[str] = [(raw or '').lower()]
@@ -737,7 +836,7 @@ def _push_insert_jsons(
         root, key_id, api_key, verify_ssl, rec, security_level=security_level,
     )
     if ok:
-        exists, verify_msg = _indicator_exists_by_value(
+        exists, verify_msg = _indicator_exists_by_value_with_retry(
             root, key_id, api_key, verify_ssl, value, security_level=security_level,
         )
         if exists:
@@ -760,7 +859,7 @@ def _push_insert_jsons(
         root, key_id, api_key, verify_ssl, rec_resync, security_level=security_level,
     )
     if ok2:
-        exists, verify_msg = _indicator_exists_by_value(
+        exists, verify_msg = _indicator_exists_by_value_with_retry(
             root, key_id, api_key, verify_ssl, value, security_level=security_level,
         )
         if exists:
@@ -957,12 +1056,14 @@ def _cortex_push_create_chunk(
 
     if ok and not err_inds:
         succeeded_ctx = [p[0] for p in pairs]
+        values = [p[2] for p in pairs if p[2]]
+        verify_map = _verify_ioc_values_present(
+            root, key_id, api_key, verify_ssl, values, security_level=security_level,
+        )
         for ctx, _rec, value in pairs:
             if not value:
                 continue
-            exists, verify_msg = _indicator_exists_by_value(
-                root, key_id, api_key, verify_ssl, value, security_level=security_level,
-            )
+            exists, verify_msg = verify_map.get(value, (False, 'verify_absent'))
             if not exists:
                 failed.append((ctx, f'verify_not_found ({verify_msg})'))
         if hash_blocklist:

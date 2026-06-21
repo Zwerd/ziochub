@@ -113,6 +113,8 @@ class IOC(db.Model):
     # - modified_at is the STIX modified timestamp (keep created_at stable)
     revoked = db.Column(db.Boolean, nullable=False, default=False)
     revoked_at = db.Column(db.DateTime, nullable=True)
+    # When True, IOC is stored but excluded from feeds/TAXII/vendor push until admin approves.
+    pending_approval = db.Column(db.Boolean, nullable=False, default=False)
     modified_at = db.Column(db.DateTime, nullable=True, default=_utcnow, onupdate=_utcnow)
     campaign_id = db.Column(db.Integer, db.ForeignKey('campaigns.id'), nullable=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)  # FK to users; NULL = legacy
@@ -129,6 +131,7 @@ class IOC(db.Model):
         Index('ix_iocs_modified_at', 'modified_at'),
         Index('ix_iocs_expiration_date', 'expiration_date'),
         Index('ix_iocs_revoked', 'revoked'),
+        Index('ix_iocs_pending_approval', 'pending_approval'),
         Index('ix_iocs_campaign_id', 'campaign_id'),
         Index('ix_iocs_analyst', 'analyst'),
     )

@@ -69,17 +69,20 @@ _TELEMETRY_PULL_PREFIXES = ('/feed', '/taxii2')
 # Vendor integrations (Integrations tab): last successful IOC/YARA push per platform (JSON per vendor)
 KEY_VENDOR_PUSH_DETAIL_CORTEX = 'telemetry_vendor_push_detail_cortex_xdr'
 KEY_VENDOR_PUSH_DETAIL_GOOGLE = 'telemetry_vendor_push_detail_google_secops'
+KEY_VENDOR_PUSH_DETAIL_NETSKOPE = 'telemetry_vendor_push_detail_netskope'
 KEY_VENDOR_PUSH_DETAIL_ESA = 'telemetry_vendor_push_detail_cisco_esa'
 
 # Vendor push attempts (last attempt, regardless of success) for Push State table
 KEY_VENDOR_PUSH_ATTEMPT_CORTEX = 'telemetry_vendor_push_attempt_cortex_xdr'
 KEY_VENDOR_PUSH_ATTEMPT_GOOGLE = 'telemetry_vendor_push_attempt_google_secops'
+KEY_VENDOR_PUSH_ATTEMPT_NETSKOPE = 'telemetry_vendor_push_attempt_netskope'
 KEY_VENDOR_PUSH_ATTEMPT_ESA = 'telemetry_vendor_push_attempt_cisco_esa'
 
 # Outbound push kinds ZIoCHub actually supports per vendor (Push State rows).
 _VENDOR_PUSH_DATA_KINDS: dict[str, tuple[str, ...]] = {
     'cortex_xdr': ('IOC',),  # Cortex XDR API: IOC/blocklist only — no YARA push
     'google_secops': ('IOC',),  # Chronicle/SecOps: IOC indicators only — no YARA / YARA-L push
+    'netskope': ('IOC',),  # Netskope SWG URL List + File Hash List
     'cisco_esa': ('IOC',),
     'misp_push': ('IOC',),
     'opendxl': ('IOC',),  # Hash reputation via TIE only
@@ -362,6 +365,7 @@ def record_vendor_integration_push(vendor_id: str, data_kind: str) -> None:
     key_map = {
         'cortex_xdr': KEY_VENDOR_PUSH_DETAIL_CORTEX,
         'google_secops': KEY_VENDOR_PUSH_DETAIL_GOOGLE,
+        'netskope': KEY_VENDOR_PUSH_DETAIL_NETSKOPE,
         'cisco_esa': KEY_VENDOR_PUSH_DETAIL_ESA,
     }
     setting_key = key_map.get(vid)
@@ -401,6 +405,8 @@ def record_vendor_push_if_applicable(vendor_id: str, ok: bool, msg: str) -> None
         return
     if vendor_id == 'google_secops' and 'skipped_incomplete_data_table_config' in m:
         return
+    if vendor_id == 'netskope' and ('skipped_incomplete_config' in m or m == 'disabled'):
+        return
     if vendor_id == 'cisco_esa' and (m.startswith('skipped') or m.startswith('nothing to')):
         return
     record_vendor_integration_push(vendor_id, 'IOC')
@@ -439,6 +445,7 @@ def record_vendor_push_attempt(vendor_id: str, *, data_kind: str = 'IOC', ok: bo
     key_map = {
         'cortex_xdr': KEY_VENDOR_PUSH_ATTEMPT_CORTEX,
         'google_secops': KEY_VENDOR_PUSH_ATTEMPT_GOOGLE,
+        'netskope': KEY_VENDOR_PUSH_ATTEMPT_NETSKOPE,
         'cisco_esa': KEY_VENDOR_PUSH_ATTEMPT_ESA,
     }
     setting_key = key_map.get(vid)
@@ -531,6 +538,7 @@ def _vendor_attempt_setting_key(vendor_id: str) -> str | None:
     m = {
         'cortex_xdr': KEY_VENDOR_PUSH_ATTEMPT_CORTEX,
         'google_secops': KEY_VENDOR_PUSH_ATTEMPT_GOOGLE,
+        'netskope': KEY_VENDOR_PUSH_ATTEMPT_NETSKOPE,
         'cisco_esa': KEY_VENDOR_PUSH_ATTEMPT_ESA,
     }
     return m.get((vendor_id or '').strip())
@@ -840,6 +848,36 @@ def _build_integration_push_state_entries(_get):
                 'last_attempt_ok': attempt_g.get('ok') if attempt_g else None,
                 'last_attempt_message': attempt_g.get('message') or None,
                 'last_attempt_count': attempt_g.get('count') if attempt_g else None,
+            })
+
+    ns_url = (_get('netskope_base_url') or '').strip()
+    ns_enabled = (_get('netskope_enabled') or 'false').strip().lower() in ('true', '1', 'yes')
+    if ns_url or ns_enabled:
+        from utils.netskope import sanitize_netskope_base_url
+        ns_name = (_get('netskope_display_name') or '').strip() or 'Netskope'
+        ns_addr = sanitize_netskope_base_url(ns_url) if ns_url else ''
+        ns_host = _host_from_url(ns_addr) if ns_addr else ''
+        ns_hip = _resolve_hostname_ip(ns_host) if ns_host else ''
+        detail_ns = _parse_vendor_push_detail_json(_get(KEY_VENDOR_PUSH_DETAIL_NETSKOPE) or '')
+        ns_vendor = vendor_meta_for_integration('netskope')
+        for kind in _push_kinds_for_vendor('netskope'):
+            attempt_ns = _vendor_attempt_for_kind(_get, 'netskope', kind)
+            rows.append({
+                'id': 'netskope_' + kind.lower(),
+                'integration_id': 'netskope',
+                'display_name': ns_name,
+                'address': ns_addr or '(not configured)',
+                'host': ns_host,
+                'host_ip': ns_hip,
+                'data_kind': kind,
+                'enabled': ns_enabled,
+                'vendor_label': ns_vendor['vendor_label'],
+                'vendor_icon_url': ns_vendor['vendor_icon_url'],
+                'last_push_at': detail_ns.get(kind) or None,
+                'last_attempt_at': attempt_ns.get('at') or None,
+                'last_attempt_ok': attempt_ns.get('ok') if attempt_ns else None,
+                'last_attempt_message': attempt_ns.get('message') or None,
+                'last_attempt_count': attempt_ns.get('count') if attempt_ns else None,
             })
 
     esa_base = (_get('esa_base_url') or '').strip()

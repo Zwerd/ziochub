@@ -81,6 +81,7 @@ def _feed_ioc_rows(ioc_type, hash_length=None, max_rows=None):
     q = IOC.query.filter(
         IOC.type == ioc_type,
         IOC.revoked.is_(False),
+        IOC.pending_approval.is_(False),
         db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now)
     )
     rows = q.limit(max_rows).all()
@@ -102,8 +103,10 @@ def _feed_ioc_rows_for_stix_bundle(ioc_type, hash_length=None, max_rows=None):
         IOC.type == ioc_type,
         db.or_(
             IOC.revoked.is_(True),
-            IOC.expiration_date.is_(None),
-            IOC.expiration_date > now,
+            db.and_(
+                IOC.pending_approval.is_(False),
+                db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now),
+            ),
         ),
     ).order_by(IOC.modified_at, IOC.id)
     rows = q.limit(max_rows).all()

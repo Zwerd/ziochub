@@ -26,7 +26,7 @@ def schedule_auxiliary_vendor_integrations(
     delay_sec: float = 0.05,
 ) -> None:
     """
-    Fire-and-forget Cortex XDR + Google SecOps hooks (when enabled in Integrations).
+    Fire-and-forget Cortex XDR + Google SecOps + Netskope hooks (when enabled in Integrations).
 
     ``contexts`` items match ``ioc_context_from_submission`` (``type``, ``value``, ``action``, …).
     Skips rows whose analyst is the MISP sync user (same loop-avoidance as IOC HTTP push).
@@ -83,6 +83,17 @@ def schedule_auxiliary_vendor_integrations(
                     )
             except Exception:
                 logger.exception('Google SecOps auxiliary IOC batch push failed')
+            try:
+                from utils.netskope import netskope_push_contexts_batch
+
+                summary_n = netskope_push_contexts_batch(filtered)
+                if summary_n.get('failed'):
+                    logger.warning(
+                        'Netskope batch push: succeeded=%s failed=%s total=%s',
+                        summary_n.get('succeeded'), summary_n.get('failed'), summary_n.get('processed'),
+                    )
+            except Exception:
+                logger.exception('Netskope auxiliary IOC batch push failed')
 
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
@@ -110,7 +121,7 @@ def schedule_outbound_ioc_event(
 
     - Uses ioc_push background thread (no request latency).
     - Telemetry is recorded by the ioc_push worker via integration_telemetry.
-    - Cortex XDR / Google SecOps: ``schedule_auxiliary_vendor_integrations`` when those flags are on.
+    - Cortex XDR / Google SecOps / Netskope: ``schedule_auxiliary_vendor_integrations`` when those flags are on.
     """
     try:
         from utils.ioc_push import ioc_context_from_submission, schedule_ioc_push_batch

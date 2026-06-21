@@ -465,7 +465,20 @@
     "admin_go": "Go to Admin",
     "admin_tags_link": "Settings → Tags",
     "admin_no_yara": "No pending YARA.",
-    "admin_no_tags": "No pending tag suggestions."
+    "admin_no_tags": "No pending tag suggestions.",
+    "tag_approved_body": "Your tag suggestion was approved and added to the allowed list.",
+    "tag_rejected_body": "Your tag suggestion was not approved.",
+    "yara_approved_body": "Your YARA rule was approved and is now active.",
+    "yara_rejected_body": "Your YARA rule was rejected by an administrator.",
+    "yara_rejected_link": "Edit & resubmit in YARA Manager →"
+  },
+  "tags": {
+    "suggest_title": "Suggest new tag(s)?",
+    "suggest_message": "These tags are not allowed yet:",
+    "suggest_ok": "Suggest",
+    "suggest_cancel": "Cancel",
+    "suggested": "Suggestion submitted to admin for approval.",
+    "suggest_already": "Tag(s) are already allowed or pending approval."
   },
   "ttl": {
     "permanent": "Permanent",

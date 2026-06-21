@@ -423,6 +423,7 @@ def api_tags_suggest():
                 'id': uuid.uuid4().hex,
                 'tag': tag,
                 'suggested_by': current_user.username or '',
+                'suggested_by_user_id': current_user.id,
                 'suggested_at': iso_utc(_utcnow()),
             })
             pending_set.add(tag)
@@ -430,6 +431,24 @@ def api_tags_suggest():
 
         _set_setting('tag_suggestions', json.dumps(suggestions, ensure_ascii=False))
         audit_log('tag_suggest', f'by={current_user.username} count={len(added)}')
+        if not added:
+            return _api_ok(
+                data={'added': added},
+                message='Tag(s) are already allowed or already pending approval.',
+            )
+        if (_get_setting('champs_scoring_method', '1') or '1').strip() == '8':
+            try:
+                _log_champs_event, refresh_champ_score_for_user = _from_app(
+                    '_log_champs_event', 'refresh_champ_score_for_user'
+                )
+                _log_champs_event(
+                    'tag_suggest',
+                    user_id=current_user.id,
+                    payload={'count': len(added), 'tags': added[:50]},
+                )
+                refresh_champ_score_for_user(current_user.id)
+            except Exception as e:
+                logger.warning('api_tags_suggest: champs tag_suggest event failed: %s', e)
         return _api_ok(data={'added': added}, message='Suggestion submitted')
     except Exception as e:
         logging.exception('api_tags_suggest failed')
@@ -2285,7 +2304,7 @@ def revoke_ioc():
         analyst_name = (row.analyst or current_user.username if current_user.is_authenticated else None) or ''
         delete_payload = {'was_expired': was_expired, 'reason': reason}
         _log_ioc_history(ioc_type, value, 'deleted', current_user.username if current_user.is_authenticated else analyst_name, delete_payload)
-        # Self-delete: same user submitted (user_id) and/or gets Champs credit (analyst)-no +1 deletion bonus
+        # Self-delete flag: other methods skip +1; Smart (#8) still scores (1 pt active self, 2 pt expired).
         deleter_un = (current_user.username or '').strip().lower()
         ioc_analyst_un = (row.analyst or '').strip().lower()
         skip_deletion_bonus = (
@@ -2552,6 +2571,26 @@ def edit_ioc():
                 refresh_champ_score_for_user(current_user.id)
             except Exception as e:
                 logger.warning('edit_ioc: ioc_tag_add event failed: %s', e)
+
+        if _get_setting('champs_scoring_method', '1') == '8':
+            old_c = (old_comment or '').strip()
+            new_c = (new_comment_val or '').strip()
+            if new_c and new_c != old_c:
+                added_chars = len(new_c) - len(old_c) if old_c else len(new_c)
+                if added_chars > 0:
+                    try:
+                        _log_champs_event(
+                            'ioc_comment_add',
+                            user_id=current_user.id,
+                            payload={
+                                'length': len(new_c),
+                                'added_chars': added_chars,
+                                'ioc_id': row.id,
+                            },
+                        )
+                        refresh_champ_score_for_user(current_user.id)
+                    except Exception as e:
+                        logger.warning('edit_ioc: ioc_comment_add event failed: %s', e)
 
         response = {'success': True, 'message': f'{ioc_type} IOC updated successfully'}
         if campaign_linked:

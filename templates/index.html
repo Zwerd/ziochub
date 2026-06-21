@@ -30,7 +30,7 @@
         [dir="rtl"] { direction: rtl; }
     </style>
 </head>
-<body class="bg-primary text-primary h-screen w-screen overflow-hidden flex flex-col" data-authenticated="{{ '1' if authenticated else '0' }}" data-user-id="{{ user_id or '' }}" data-mute-sound="{{ '1' if mute_sound else '0' }}" data-ambition-popup-disabled="{{ '1' if ambition_popup_disabled else '0' }}" data-achievement-popup-disabled="{{ '1' if achievement_popup_disabled else '0' }}" data-search-comment-rtl="{{ '1' if search_comment_rtl_by_script else '0' }}">
+<body class="bg-primary text-primary h-screen w-screen overflow-hidden flex flex-col" data-authenticated="{{ '1' if authenticated else '0' }}" data-user-id="{{ user_id or '' }}" data-mute-sound="{{ '1' if mute_sound else '0' }}" data-ambition-popup-disabled="{{ '1' if ambition_popup_disabled else '0' }}" data-achievement-popup-disabled="{{ '1' if achievement_popup_disabled else '0' }}" data-search-comment-rtl="{{ '1' if search_comment_rtl_by_script else '0' }}" data-champs-tab-enabled="{{ '1' if champs_tab_enabled else '0' }}">
     <!-- Top Bar (header-bar = solid bg, no glass override) -->
     <header class="header-bar border-b-2 border-white/10 bg-secondary sticky top-0 neon-header backdrop-blur-md flex-shrink-0 relative app-header-shell">
         <div class="navbar-container">
@@ -53,7 +53,7 @@
                     <button class="tab-button" data-tab="yara" data-i18n="tab.yara">
                         <span data-i18n="tab.yara">YARA Manager</span>
                     </button>
-                    <button class="tab-button" data-tab="champs" data-i18n="tab.champs">
+                    <button class="tab-button" data-tab="champs" data-i18n="tab.champs" {% if not champs_tab_enabled %}style="display:none" data-champs-tab-hidden="1"{% endif %}>
                         <span data-i18n="tab.champs">Champs Analysis</span>
                     </button>
                     <button class="tab-button" data-tab="campaigns" data-i18n="tab.campaign">

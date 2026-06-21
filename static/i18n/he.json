@@ -465,7 +465,20 @@
     "admin_go": "לניהול",
     "admin_tags_link": "הגדרות → תגים",
     "admin_no_yara": "אין YARA ממתין.",
-    "admin_no_tags": "אין הצעות תגים ממתינות."
+    "admin_no_tags": "אין הצעות תגים ממתינות.",
+    "tag_approved_body": "ההצעה שלך אושרה והתגית נוספה לרשימה המורשית.",
+    "tag_rejected_body": "ההצעה שלך לתגית לא אושרה.",
+    "yara_approved_body": "כלל ה-YARA שלך אושר והוא פעיל כעת.",
+    "yara_rejected_body": "כלל ה-YARA שלך נדחה על ידי מנהל.",
+    "yara_rejected_link": "ערוך ושלח מחדש ב-YARA Manager →"
+  },
+  "tags": {
+    "suggest_title": "להציע תגית חדשה?",
+    "suggest_message": "התגיות הבאות אינן מורשות עדיין:",
+    "suggest_ok": "הצע",
+    "suggest_cancel": "ביטול",
+    "suggested": "ההצעה נשלחה לאדמין לאישור.",
+    "suggest_already": "התגית כבר מורשית או ממתינה לאישור."
   },
   "ttl": {
     "permanent": "קבוע",

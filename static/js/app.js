@@ -27,7 +27,8 @@ var authState = {
     username: null,
     display_name: null,
     is_admin: false,
-    avatar_url: null
+    avatar_url: null,
+    ui: { champs_tab_enabled: true, yara_approval_required: true, ioc_approval_required: true }
 };
 var statsPollInterval = null;
 var liveFeedInterval = null;
@@ -146,15 +147,37 @@ async function loadAuthState() {
                 username: data.username || null,
                 display_name: data.display_name || data.username || null,
                 is_admin: !!data.is_admin,
-                avatar_url: data.avatar_url || null
+                avatar_url: data.avatar_url || null,
+                ui: data.ui || authState.ui || {}
             };
             window.authState = authState;
+            applyUiWorkflowSettings(authState.ui);
         }
     } catch (e) {
         console.error('Failed to load auth state:', e);
     }
     updateAuthUI();
 }
+
+function applyUiWorkflowSettings(ui) {
+    ui = ui || {};
+    var champsOn = ui.champs_tab_enabled !== false;
+    var bodyFlag = document.body && document.body.dataset && document.body.dataset.champsTabEnabled;
+    if (bodyFlag === '0') champsOn = false;
+    if (bodyFlag === '1' && ui.champs_tab_enabled === undefined) champsOn = true;
+    var champsBtn = document.querySelector('#mainNavbarTabs .tab-button[data-tab="champs"]');
+    if (champsBtn) {
+        champsBtn.style.display = champsOn ? '' : 'none';
+    }
+    window.TG_UI = ui;
+}
+
+(function initUiWorkflowFromDom() {
+    var bodyFlag = document.body && document.body.dataset && document.body.dataset.champsTabEnabled;
+    if (bodyFlag !== undefined) {
+        applyUiWorkflowSettings({ champs_tab_enabled: bodyFlag !== '0' });
+    }
+})();
 
 // ---------------------------------------------------------------------------
 // Unified Inbox (single bell): user notifications + admin pending (if admin)
@@ -167,6 +190,41 @@ function _inboxOutcomeLabel(category, outcome) {
     if (outcome === 'approved') return inbox.approved || 'Approved';
     if (outcome === 'rejected') return inbox.rejected || 'Rejected';
     return outcome || '';
+}
+
+var _YARA_REJECT_GENERIC_EN = 'Your YARA rule was rejected by an administrator.';
+
+function _inboxYaraRejectionReason(n, inboxTr) {
+    if (!n || n.category !== 'yara' || n.outcome !== 'rejected') return '';
+    const payload = (n.payload && typeof n.payload === 'object') ? n.payload : {};
+    const fromPayload = (payload.reason || '').trim();
+    if (fromPayload) return fromPayload;
+    const generic = ((inboxTr && inboxTr.yara_rejected_body) || _YARA_REJECT_GENERIC_EN).trim();
+    const fromBody = (n.body || '').trim();
+    if (!fromBody || fromBody === _YARA_REJECT_GENERIC_EN || fromBody === generic) return '';
+    return fromBody;
+}
+
+function _inboxBodyText(n, inboxTr) {
+    if (!n) return '';
+    inboxTr = inboxTr || {};
+    if (n.category === 'tag') {
+        if (n.outcome === 'approved') return inboxTr.tag_approved_body || n.body || '';
+        if (n.outcome === 'rejected') return inboxTr.tag_rejected_body || n.body || '';
+    }
+    if (n.category === 'yara') {
+        if (n.outcome === 'approved') return inboxTr.yara_approved_body || n.body || '';
+        if (n.outcome === 'rejected') {
+            const generic = (inboxTr.yara_rejected_body || _YARA_REJECT_GENERIC_EN).trim();
+            const reason = _inboxYaraRejectionReason(n, inboxTr);
+            if (reason) {
+                const reasonLabel = inboxTr.reason || 'Reason';
+                return generic + '\n' + reasonLabel + ': ' + reason;
+            }
+            return generic;
+        }
+    }
+    return (n.body || '').trim();
 }
 
 function _inboxDisplayTitle(n) {
@@ -183,10 +241,12 @@ function _inboxDisplayTitle(n) {
 function _renderAdminPendingSection(adminData, inboxTr) {
     if (!adminData || !adminData.success) return '';
     const yara = adminData.yara_pending || [];
+    const iocs = adminData.ioc_pending || [];
     const tags = adminData.tag_suggestions || [];
     const yaraCount = adminData.yara_pending_count != null ? adminData.yara_pending_count : yara.length;
+    const iocCount = adminData.ioc_pending_count != null ? adminData.ioc_pending_count : iocs.length;
     const tagCount = adminData.tag_suggestions_count != null ? adminData.tag_suggestions_count : tags.length;
-    if (!yaraCount && !tagCount) return '';
+    if (!yaraCount && !iocCount && !tagCount) return '';
     function esc(s) { return (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     const yaraHtml = `
         <div class="bg-tertiary rounded-xl border border-amber-400/20 p-4">
@@ -204,6 +264,21 @@ function _renderAdminPendingSection(adminData, inboxTr) {
                 </li>
             `).join('') + `</ul>` : `<div class="text-secondary text-sm">${esc(inboxTr.admin_no_yara || 'No pending YARA.')}</div>`}
         </div>`;
+    const iocHtml = `
+        <div class="bg-tertiary rounded-xl border border-amber-400/20 p-4 mb-4">
+            <div class="flex items-center justify-between gap-2 mb-2">
+                <h4 class="font-semibold text-amber-200">${esc(inboxTr.admin_ioc_title || 'IOC pending approvals')}</h4>
+                <button type="button" class="inbox-go-search text-cyan-300 hover:underline text-sm">${esc(inboxTr.admin_ioc_search_link || 'Search & Investigate')}</button>
+            </div>
+            <div class="text-secondary text-sm mb-2">${esc(inboxTr.pending || 'Pending')}: <span class="text-primary font-bold">${esc(iocCount)}</span></div>
+            ${iocs.length ? `<ul class="space-y-2 text-sm">` + iocs.map(r => `
+                <li class="border border-white/10 rounded-lg p-3">
+                    <div class="font-mono text-amber-200 break-all">${esc(r.type)}: ${esc(r.value)}</div>
+                    <div class="text-secondary mt-1">${esc(inboxTr.by || 'By')} <span class="text-primary">${esc(r.analyst || '—')}</span> • ${esc(typeof formatUtcToLocal === 'function' ? formatUtcToLocal(r.created_at) : (r.created_at||'').slice(0,19).replace('T',' '))}</div>
+                    ${r.comment ? `<div class="text-secondary mt-1">${esc(r.comment)}</div>` : ``}
+                </li>
+            `).join('') + `</ul>` : `<div class="text-secondary text-sm">${esc(inboxTr.admin_no_ioc || 'No pending IOCs.')}</div>`}
+        </div>`;
     const tagsHtml = `
         <div class="bg-tertiary rounded-xl border border-amber-400/20 p-4">
             <div class="flex items-center justify-between gap-2 mb-2">
@@ -218,7 +293,7 @@ function _renderAdminPendingSection(adminData, inboxTr) {
                 </li>
             `).join('') + `</ul>` : `<div class="text-secondary text-sm">${esc(inboxTr.admin_no_tags || 'No pending tag suggestions.')}</div>`}
         </div>`;
-    return yaraHtml + tagsHtml;
+    return yaraHtml + iocHtml + tagsHtml;
 }
 
 function _renderUserNotificationsSection(userData, inboxTr) {
@@ -239,14 +314,21 @@ function _renderUserNotificationsSection(userData, inboxTr) {
             ? formatUtcToLocal(n.created_at)
             : (n.created_at || '').slice(0, 19).replace('T', ' ');
         const displayTitle = _inboxDisplayTitle(n);
-        const body = (n.body || '').trim();
+        const body = _inboxBodyText(n, inboxTr);
         const showBody = body && body !== displayTitle;
+        const isYaraRejected = n.category === 'yara' && n.outcome === 'rejected';
+        const rejFilename = isYaraRejected && n.payload && n.payload.filename ? String(n.payload.filename) : '';
+        const resubmitLink = rejFilename
+            ? '<button type="button" class="inbox-go-yara-rejected text-cyan-300 hover:underline text-xs mt-2 block text-left" data-filename="' + esc(rejFilename) + '">'
+                + esc(inboxTr.yara_rejected_link || 'Edit & resubmit in YARA Manager →') + '</button>'
+            : '';
         return '<div class="border rounded-xl p-4 ' + (unread ? 'border-cyan-400/40 bg-cyan-950/20' : 'border-white/10 bg-tertiary/40') + '">'
             + '<div class="flex items-start justify-between gap-2">'
             + '<div class="min-w-0 flex-1">'
             + '<div class="text-xs uppercase tracking-wide text-secondary mb-1">' + esc(catLabel) + ' · <span class="' + outcomeCls + '">' + esc(outcomeLabel) + '</span></div>'
             + '<div class="font-semibold text-primary break-words font-mono">' + esc(displayTitle) + '</div>'
-            + (showBody ? '<div class="text-secondary text-sm mt-1">' + esc(body) + '</div>' : '')
+            + (showBody ? '<div class="text-secondary text-sm mt-1 whitespace-pre-line">' + esc(body) + '</div>' : '')
+            + resubmitLink
             + '</div>'
             + '<div class="text-xs text-secondary whitespace-nowrap shrink-0">' + esc(when) + '</div>'
             + '</div></div>';
@@ -347,6 +429,26 @@ async function goToYaraStatus() {
     }
 }
 
+async function goToYaraRejected(filename) {
+    const modal = document.getElementById('userInboxModal');
+    if (modal) modal.classList.add('hidden');
+    await switchTab('yara');
+    if (filename && typeof window.editAndResubmitRejectedRule === 'function') {
+        await window.editAndResubmitRejectedRule(filename);
+        return;
+    }
+    if (typeof window.setYaraMode === 'function') {
+        window.setYaraMode('status');
+    }
+    const rejectedSec = document.getElementById('yaraRejectedSection');
+    if (rejectedSec) {
+        rejectedSec.classList.remove('hidden');
+        setTimeout(function () {
+            rejectedSec.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }, 150);
+    }
+}
+
 function initInboxUI() {
     const btn = document.getElementById('userInboxBtn');
     const modal = document.getElementById('userInboxModal');
@@ -358,6 +460,12 @@ function initInboxUI() {
             if (e.target.closest('.inbox-go-yara-status')) {
                 e.preventDefault();
                 goToYaraStatus();
+                return;
+            }
+            const rejBtn = e.target.closest('.inbox-go-yara-rejected');
+            if (rejBtn) {
+                e.preventDefault();
+                goToYaraRejected(rejBtn.getAttribute('data-filename') || '');
             }
         });
     }
@@ -380,6 +488,7 @@ function initInboxUI() {
     if (close && modal) close.addEventListener('click', () => modal.classList.add('hidden'));
     if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.add('hidden'); });
 }
+window.loadInboxBadge = loadInboxBadge;
 
 function updateAuthUI() {
     const loginEl = document.getElementById('authLogin');
@@ -978,8 +1087,11 @@ async function initApp() {
     initInboxUI();
     try {
         if (_inboxPoll) clearInterval(_inboxPoll);
-        _inboxPoll = setInterval(loadInboxBadge, 60000);
+        _inboxPoll = setInterval(loadInboxBadge, 30000);
         loadInboxBadge();
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'visible') loadInboxBadge();
+        });
     } catch (e) { /* ignore */ }
     lazyLoad(_scriptUrls.campaigns).then(function () {
         if (typeof populateCampaignDropdowns === 'function') populateCampaignDropdowns();

@@ -8,6 +8,7 @@
 
 <nav class="settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-6">
     <button type="button" class="settings-tab-btn active" data-tab="search">Search</button>
+    <button type="button" class="settings-tab-btn" data-tab="workflow">Workflow</button>
     <button type="button" class="settings-tab-btn" data-tab="tags">Tags</button>
     <button type="button" class="settings-tab-btn" data-tab="ldap">LDAP</button>
     <button type="button" class="settings-tab-btn" data-tab="syslog">Syslog</button>
@@ -43,6 +44,51 @@
     </div>
 </div>
 
+<!-- Tab: Workflow (YARA / IOC approval + UI) -->
+<div id="settings-tab-workflow" class="settings-tab-pane hidden">
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
+        <h3 class="text-lg font-semibold accent-blue mb-2">Analyst workflow</h3>
+        <p class="text-secondary text-sm mb-6">
+            Control whether analyst submissions are distributed immediately to feeds and integrations, or require admin approval first.
+            Admins always publish immediately. Defaults: approval required for analysts; Champs tab visible.
+        </p>
+        <form id="workflowForm" class="space-y-5">
+            <div class="p-4 rounded-lg border border-white/10 bg-black/20 space-y-4">
+                <h4 class="text-sm font-semibold text-primary">YARA Manager</h4>
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="yara_analyst_auto_publish" name="yara_analyst_auto_publish" class="mt-1 rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" {% if settings.yara_analyst_auto_publish %}checked{% endif %}>
+                    <span>
+                        <span class="text-sm text-primary font-medium block">Allow analysts to publish YARA without approval</span>
+                        <span class="text-secondary text-xs">When unchecked (default), analyst uploads go to pending until an admin approves; then rules are pushed to YARA feeds and automation targets.</span>
+                    </span>
+                </label>
+            </div>
+            <div class="p-4 rounded-lg border border-white/10 bg-black/20 space-y-4">
+                <h4 class="text-sm font-semibold text-primary">Submit IOCs</h4>
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="ioc_analyst_auto_publish" name="ioc_analyst_auto_publish" class="mt-1 rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" {% if settings.ioc_analyst_auto_publish %}checked{% endif %}>
+                    <span>
+                        <span class="text-sm text-primary font-medium block">Allow analysts to distribute IOCs without approval</span>
+                        <span class="text-secondary text-xs">When unchecked (default), IOCs are saved but excluded from /feed, TAXII, MISP push, ESA, and vendor integrations until approved in Admin inbox.</span>
+                    </span>
+                </label>
+            </div>
+            <div class="p-4 rounded-lg border border-white/10 bg-black/20 space-y-4">
+                <h4 class="text-sm font-semibold text-primary">Main application UI</h4>
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="champs_tab_enabled" name="champs_tab_enabled" class="mt-1 rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" {% if settings.champs_tab_enabled %}checked{% endif %}>
+                    <span>
+                        <span class="text-sm text-primary font-medium block">Show Champs Analysis tab</span>
+                        <span class="text-secondary text-xs">When unchecked, the Champs Analysis navigation tab is hidden for all users (data and scoring are preserved).</span>
+                    </span>
+                </label>
+            </div>
+            <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save workflow settings</button>
+        </form>
+        <div id="workflowMessage" class="mt-4 hidden text-sm"></div>
+    </div>
+</div>
+
 <!-- Tab: Tags governance -->
 <div id="settings-tab-tags" class="settings-tab-pane hidden">
     <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
@@ -55,32 +101,41 @@
         <form id="tagsForm" class="space-y-4">
             <div>
                 <label class="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" id="tags_restricted_enabled" name="tags_restricted_enabled" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green">
+                    <input type="checkbox" id="tags_restricted_enabled" name="tags_restricted_enabled" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" {% if settings.tags_restricted_enabled %}checked{% endif %}>
                     <span class="text-sm text-primary font-medium">Restrict tags to Allowed list</span>
                 </label>
                 <p class="text-secondary text-xs mt-2">When enabled, submission/edit APIs reject tags not in the allowed list.</p>
             </div>
             <div>
                 <label class="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" id="tags_allow_suggest" name="tags_allow_suggest" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" checked>
+                    <input type="checkbox" id="tags_allow_suggest" name="tags_allow_suggest" class="rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" {% if settings.tags_allow_suggest %}checked{% endif %}>
                     <span class="text-sm text-primary font-medium">Allow analysts to suggest new tags</span>
                 </label>
                 <p class="text-secondary text-xs mt-2">Suggestions are queued for admin approval and do not become usable until approved.</p>
             </div>
             <div class="pt-2 border-t border-white/10">
                 <label for="allowed_tags_text" class="block text-sm font-semibold text-secondary mb-1">Allowed tags (one per line)</label>
-                <textarea id="allowed_tags_text" rows="10" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="phishing&#10;malware&#10;c2&#10;ransomware"></textarea>
-                <p class="text-secondary text-xs mt-1">Tags are normalized to lowercase and deduped on save.</p>
+                <textarea id="allowed_tags_text" rows="10" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="phishing&#10;malware&#10;c2&#10;ransomware">{{ settings.allowed_tags_text }}</textarea>
+                <p class="text-secondary text-xs mt-1">Tags are normalized to lowercase and deduped on save. After save, they appear in the summary below and in this box.</p>
+            </div>
+            <div id="allowedTagsSummary" class="rounded-lg border border-white/10 bg-black/20 p-3 {% if not settings.allowed_tags_list %}hidden{% endif %}">
+                <div class="text-xs font-semibold text-secondary mb-2">Saved allowed tags (<span id="allowedTagsCount">{{ settings.allowed_tags_list | length }}</span>)</div>
+                <div id="allowedTagsChips" class="flex flex-wrap gap-1.5">
+                    {% for tag in settings.allowed_tags_list %}
+                    <span class="inline-block px-2 py-0.5 rounded bg-cyan-900/40 border border-cyan-500/30 text-cyan-200 font-mono text-xs">{{ tag }}</span>
+                    {% endfor %}
+                </div>
             </div>
             <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Tags Settings</button>
         </form>
         <div id="tagsMessage" class="mt-4 hidden text-sm"></div>
 
         <div class="mt-8 pt-6 border-t border-white/10">
-            <div class="flex items-center justify-between gap-2 mb-3">
-                <h4 class="text-base font-semibold text-primary">Pending tag suggestions</h4>
+            <div class="flex items-center justify-between gap-2 mb-1">
+                <h4 class="text-base font-semibold text-primary">Pending tag suggestions (from analysts)</h4>
                 <button type="button" id="refreshTagSuggestions" class="px-3 py-1.5 rounded-lg font-semibold bg-tertiary border border-white/10 hover:border-accent-green transition text-sm">Refresh</button>
             </div>
+            <p class="text-secondary text-xs mb-3">Tags you add above are saved immediately as <strong class="text-primary">allowed</strong> tags. This table is only for tags analysts requested via Submit IOC — not for your admin list.</p>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm border border-white/10 rounded-lg overflow-hidden">
                     <thead class="bg-secondary">
@@ -538,6 +593,11 @@
 </div>
 
 <script>
+function bindFormSubmit(formId, handler) {
+    var form = document.getElementById(formId);
+    if (form) form.addEventListener('submit', handler);
+}
+
 document.querySelectorAll('.settings-tab-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
         var tab = this.getAttribute('data-tab');
@@ -547,42 +607,14 @@ document.querySelectorAll('.settings-tab-btn').forEach(function(btn) {
         document.querySelectorAll('.settings-tab-pane').forEach(function(p) { p.classList.add('hidden'); });
         var pane = document.getElementById('settings-tab-' + tab);
         if (pane) pane.classList.remove('hidden');
+        if (tab === 'tags' && typeof loadTagsGovernance === 'function') {
+            loadTagsGovernance();
+            loadTagSuggestions();
+        }
     });
 });
 
-document.getElementById('feedsForm').addEventListener('submit', async function(e) {
-    e.preventDefault();
-    var msgEl = document.getElementById('feedsMessage');
-    msgEl.classList.add('hidden');
-    try {
-        var res = await fetch('/api/admin/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                feeds_public_enabled: document.getElementById('feeds_public_enabled').checked ? 'true' : 'false',
-                feed_cache_enabled: document.getElementById('feed_cache_enabled').checked ? 'true' : 'false',
-                feed_cache_ttl_seconds: document.getElementById('feed_cache_ttl_seconds').value
-            })
-        });
-        var data = await res.json();
-        msgEl.classList.remove('hidden');
-        if (data.success) {
-            msgEl.classList.add('text-green-400');
-            msgEl.classList.remove('text-red-400');
-            msgEl.textContent = 'Settings saved.';
-        } else {
-            msgEl.classList.add('text-red-400');
-            msgEl.classList.remove('text-green-400');
-            msgEl.textContent = data.message || 'Failed to save.';
-        }
-    } catch (err) {
-        msgEl.classList.remove('hidden');
-        msgEl.classList.add('text-red-400');
-        msgEl.textContent = 'Network error.';
-    }
-});
-
-document.getElementById('searchForm').addEventListener('submit', async function(e) {
+bindFormSubmit('searchForm', async function(e) {
     e.preventDefault();
     var msgEl = document.getElementById('searchMessage');
     msgEl.classList.add('hidden');
@@ -613,7 +645,7 @@ document.getElementById('searchForm').addEventListener('submit', async function(
     }
 });
 
-document.getElementById('settingsForm').addEventListener('submit', async function(e) {
+bindFormSubmit('settingsForm', async function(e) {
     e.preventDefault();
     var msgEl = document.getElementById('settingsMessage');
     msgEl.classList.add('hidden');
@@ -1087,15 +1119,39 @@ document.getElementById('taxiiSyncBtn').addEventListener('click', async function
     btn.disabled = false;
 });
 
+function renderAllowedTagsSummary(tags) {
+    var summary = document.getElementById('allowedTagsSummary');
+    var countEl = document.getElementById('allowedTagsCount');
+    var chips = document.getElementById('allowedTagsChips');
+    if (!summary || !chips) return;
+    var list = Array.isArray(tags) ? tags : [];
+    if (countEl) countEl.textContent = String(list.length);
+    if (!list.length) {
+        summary.classList.add('hidden');
+        chips.innerHTML = '';
+        return;
+    }
+    summary.classList.remove('hidden');
+    chips.innerHTML = list.map(function(tag) {
+        var t = String(tag || '');
+        var esc = t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        return '<span class="inline-block px-2 py-0.5 rounded bg-cyan-900/40 border border-cyan-500/30 text-cyan-200 font-mono text-xs">' + esc + '</span>';
+    }).join('');
+}
+
 async function loadTagsGovernance() {
     try {
         var res = await fetch('/api/admin/tags');
         var data = await res.json();
         if (!data || !data.success) return;
         var cfg = data.allowed_tags || [];
-        document.getElementById('tags_restricted_enabled').checked = !!data.tags_restricted_enabled;
-        document.getElementById('tags_allow_suggest').checked = !!data.tags_allow_suggest;
-        document.getElementById('allowed_tags_text').value = (cfg || []).join('\n');
+        var restrictedEl = document.getElementById('tags_restricted_enabled');
+        var suggestEl = document.getElementById('tags_allow_suggest');
+        var textEl = document.getElementById('allowed_tags_text');
+        if (restrictedEl) restrictedEl.checked = data.tags_restricted_enabled === true || data.tags_restricted_enabled === 'true';
+        if (suggestEl) suggestEl.checked = data.tags_allow_suggest !== false && data.tags_allow_suggest !== 'false';
+        if (textEl) textEl.value = (cfg || []).join('\n');
+        renderAllowedTagsSummary(cfg);
     } catch (e) { /* ignore */ }
 }
 
@@ -1135,13 +1191,44 @@ async function loadTagSuggestions() {
     }
 }
 
-document.getElementById('tagsForm')?.addEventListener('submit', async function(e) {
+bindFormSubmit('workflowForm', async function(e) {
+    e.preventDefault();
+    var msgEl = document.getElementById('workflowMessage');
+    msgEl.classList.add('hidden');
+    try {
+        var res = await fetch('/api/admin/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                yara_analyst_auto_publish: document.getElementById('yara_analyst_auto_publish').checked ? 'true' : 'false',
+                ioc_analyst_auto_publish: document.getElementById('ioc_analyst_auto_publish').checked ? 'true' : 'false',
+                champs_tab_enabled: document.getElementById('champs_tab_enabled').checked ? 'true' : 'false'
+            })
+        });
+        var data = await res.json();
+        msgEl.classList.remove('hidden');
+        if (data.success) {
+            msgEl.classList.add('text-green-400');
+            msgEl.classList.remove('text-red-400');
+            msgEl.textContent = 'Workflow settings saved.';
+        } else {
+            msgEl.classList.add('text-red-400');
+            msgEl.classList.remove('text-green-400');
+            msgEl.textContent = data.message || 'Failed to save.';
+        }
+    } catch (err) {
+        msgEl.classList.remove('hidden');
+        msgEl.classList.add('text-red-400');
+        msgEl.textContent = 'Network error.';
+    }
+});
+
+bindFormSubmit('tagsForm', async function(e) {
     e.preventDefault();
     var msgEl = document.getElementById('tagsMessage');
     msgEl.classList.add('hidden');
     try {
         var allowedText = (document.getElementById('allowed_tags_text').value || '').trim();
-        // Accept newline or comma separated
         var normalized = allowedText.replace(/\r/g, '').split('\n').map(function(s){return s.trim();}).filter(Boolean).join(', ');
         var res = await fetch('/api/admin/settings', {
             method: 'POST',
@@ -1171,22 +1258,42 @@ document.getElementById('tagsForm')?.addEventListener('submit', async function(e
     }
 });
 
-document.getElementById('refreshTagSuggestions')?.addEventListener('click', loadTagSuggestions);
-document.getElementById('tagSuggestionsBody')?.addEventListener('click', async function(e) {
+var refreshTagSuggestionsBtn = document.getElementById('refreshTagSuggestions');
+if (refreshTagSuggestionsBtn) refreshTagSuggestionsBtn.addEventListener('click', loadTagSuggestions);
+var tagSuggestionsBody = document.getElementById('tagSuggestionsBody');
+if (tagSuggestionsBody) tagSuggestionsBody.addEventListener('click', async function(e) {
     var btn = e.target.closest('button');
     if (!btn) return;
     var action = btn.getAttribute('data-action');
     var id = btn.getAttribute('data-id');
     if (!id) return;
+    var msgEl = document.getElementById('tagsMessage');
     try {
         var url = action === 'approve' ? '/api/admin/tags/suggestions/approve' : '/api/admin/tags/suggestions/reject';
         var res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: [id] }) });
         var data = await res.json();
         if (data && data.success) {
+            if (msgEl) {
+                msgEl.classList.remove('hidden', 'text-red-400');
+                msgEl.classList.add('text-green-400');
+                msgEl.textContent = action === 'approve'
+                    ? 'Tag approved. The analyst will see this in their inbox.'
+                    : 'Tag suggestion rejected. The analyst will see this in their inbox.';
+            }
             await loadTagsGovernance();
             await loadTagSuggestions();
+        } else if (msgEl) {
+            msgEl.classList.remove('hidden', 'text-green-400');
+            msgEl.classList.add('text-red-400');
+            msgEl.textContent = (data && data.message) ? data.message : 'Action failed.';
         }
-    } catch (e2) { /* ignore */ }
+    } catch (e2) {
+        if (msgEl) {
+            msgEl.classList.remove('hidden', 'text-green-400');
+            msgEl.classList.add('text-red-400');
+            msgEl.textContent = 'Network error.';
+        }
+    }
 });
 
 // Initial load for Tags tab

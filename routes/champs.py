@@ -155,11 +155,55 @@ def _champs_excluded_usernames():
     return excluded or None
 
 
+def _inactive_champs_user_ids():
+    """User IDs with is_active=False — hidden from Champs ladder (DB rows unchanged)."""
+    return {u.id for u in User.query.filter_by(is_active=False).all()}
+
+
+def _inactive_champs_usernames():
+    """Lowercase usernames of deactivated accounts."""
+    return {
+        (u.username or '').strip().lower()
+        for u in User.query.filter_by(is_active=False).all()
+        if (u.username or '').strip()
+    }
+
+
+def _champs_row_is_visible(row, users_by_id, inactive_user_ids, inactive_usernames):
+    """True if this score row should appear on the public Champs ladder."""
+    uid = row.get('user_id')
+    if uid and uid in inactive_user_ids:
+        return False
+    analyst = (row.get('analyst') or '').strip().lower()
+    if analyst and analyst in inactive_usernames:
+        return False
+    if uid:
+        user = users_by_id.get(uid)
+        if user is not None and not getattr(user, 'is_active', True):
+            return False
+    return True
+
+
+def _filter_champs_leaderboard_rows(rows, users_by_id):
+    """Drop deactivated users from the ladder and re-rank 1..N. Does not delete any data."""
+    inactive_ids = _inactive_champs_user_ids()
+    inactive_names = _inactive_champs_usernames()
+    visible = [
+        r for r in rows
+        if _champs_row_is_visible(r, users_by_id, inactive_ids, inactive_names)
+    ]
+    for idx, r in enumerate(visible, 1):
+        r['rank'] = idx
+    return visible
+
+
 @bp.route('/analyst-stats', methods=['GET'])
 def get_analyst_stats():
     """Champs 5.0: Analyst stats; scoring method from admin setting (1-8)."""
     method = _get_setting('champs_scoring_method', '1')
     rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=method, exclude_usernames=_champs_excluded_usernames())
+    users_by_id = {u.id: u for u in User.query.all()}
+    rows = _filter_champs_leaderboard_rows(rows, users_by_id)
     analyst_list = []
     for r in rows:
         analyst_list.append({
@@ -275,8 +319,9 @@ def get_champs_leaderboard():
     if cached is not None:
         return jsonify(cached)
     excluded = _champs_excluded_usernames()
-    # Always build leaderboard from computed scores (aggregated when no date filter) so every analyst with IOCs appears
     rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=method, exclude_usernames=excluded)
+    users_by_id = {u.id: u for u in User.query.all()}
+    rows = _filter_champs_leaderboard_rows(rows, users_by_id)
     # Today's snapshot (before we update it) = "previous rank" for same-day trend (e.g. after user added IOCs)
     today = date.today()
     today_snapshot_ranks = {
@@ -304,7 +349,6 @@ def get_champs_leaderboard():
                 'old_rank': ev['new_rank'],
                 'new_rank': ev['old_rank'],
             })
-    users_by_id = {u.id: u for u in User.query.all()}
     profiles = {p.user_id: p for p in UserProfile.query.all()}
     campaign_by_user = {}
     try:
@@ -642,6 +686,10 @@ def get_champs_analyst(user_id):
     user = db.session.get(User, user_id)
     if not user:
         return jsonify({'success': False, 'message': 'User not found'}), 404
+    if not getattr(user, 'is_active', True):
+        is_admin = current_user.is_authenticated and getattr(current_user, 'is_admin', False)
+        if not is_admin:
+            return jsonify({'success': False, 'message': 'Analyst is deactivated'}), 404
     profile = UserProfile.query.filter_by(user_id=user_id).first()
     misp_user = (_get_setting('misp_sync_user', 'misp_sync') or 'misp_sync').strip() or None
     detail = get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user_id, user.username, scoring_method=method, misp_sync_username=misp_user)

@@ -194,6 +194,119 @@ def _find_existing_yara_with_same_content(content: str, exclude_filename: str | 
     return None
 
 
+def _schedule_yara_outbound_push(rule, content: str, _get_setting, audit_log) -> bool:
+    """Push approved YARA to configured automation targets (background thread). Returns True if push scheduled."""
+    fireeye_pending = False
+    try:
+        from utils.trellix_ex import trellix_ex_enabled as _trellix_ex_on
+        from utils.trellix_cms import trellix_cms_enabled as _trellix_cms_on
+        from utils.trellix_nx import trellix_nx_wmps_enabled as _nx_wmps_on
+        from utils.yara_push_targets import (
+            merged_yara_automation_appliances,
+            yara_http_push_verify_ssl,
+            yara_session_push_verify_ssl,
+        )
+
+        fe_on = _get_setting('automation_fireeye_enabled', 'false').lower() == 'true'
+        tx_on = _trellix_ex_on(_get_setting)
+        cms_on = _trellix_cms_on(_get_setting)
+        nx_wmps_on = _nx_wmps_on(_get_setting)
+        appliances = []
+        if fe_on:
+            appliances = merged_yara_automation_appliances(_get_setting)
+            if not isinstance(appliances, list):
+                appliances = []
+        has_fe_targets = fe_on and len(appliances) > 0
+        if has_fe_targets or tx_on or cms_on or nx_wmps_on:
+            from utils.yara_http_push import push_yara_to_appliances, set_fireeye_status
+
+            app_obj = current_app._get_current_object()
+            verify_fe = yara_http_push_verify_ssl(_get_setting)
+            verify_session = yara_session_push_verify_ssl(_get_setting)
+            set_fireeye_status(rule.filename, 'pending', '')
+
+            def _yara_outbound_upload():
+                with app_obj.app_context():
+                    try:
+                        combined_results = []
+                        overall = True
+                        from utils.yara_retry_enqueue import enqueue_yara_vendor_failure
+
+                        if has_fe_targets:
+                            result_fe = push_yara_to_appliances(
+                                content, rule.filename, appliances, audit_log, verify_ssl=verify_fe
+                            )
+                            combined_results.extend(result_fe.get('results', []))
+                            overall = overall and bool(result_fe.get('overall_success'))
+                            _record_yara_distribution_push(rule.filename, result_fe, 'yara_http')
+                            enqueue_yara_vendor_failure(
+                                'yara_http', rule.filename, result_fe, get_setting=_get_setting,
+                            )
+                        if tx_on:
+                            from utils.trellix_ex import push_yara_trellix_ex
+                            result_tx = push_yara_trellix_ex(
+                                content, rule.filename, _get_setting, audit_log, verify_ssl=verify_session,
+                            )
+                            combined_results.extend(result_tx.get('results', []))
+                            overall = overall and bool(result_tx.get('overall_success'))
+                            _record_yara_distribution_push(rule.filename, result_tx, 'yara_trellix_ex')
+                            enqueue_yara_vendor_failure(
+                                'trellix_ex', rule.filename, result_tx, get_setting=_get_setting,
+                            )
+                        if cms_on:
+                            from utils.trellix_cms import push_yara_trellix_cms
+                            result_cms = push_yara_trellix_cms(
+                                content, rule.filename, _get_setting, audit_log, verify_ssl=verify_session,
+                            )
+                            combined_results.extend(result_cms.get('results', []))
+                            overall = overall and bool(result_cms.get('overall_success'))
+                            _record_yara_distribution_push(rule.filename, result_cms, 'yara_trellix_cms')
+                            enqueue_yara_vendor_failure(
+                                'trellix_cms', rule.filename, result_cms, get_setting=_get_setting,
+                            )
+                        if nx_wmps_on:
+                            from utils.trellix_nx import push_yara_nx_wmps
+                            result_nxw = push_yara_nx_wmps(
+                                content, rule.filename, _get_setting, audit_log, verify_ssl=verify_session,
+                            )
+                            combined_results.extend(result_nxw.get('results', []))
+                            overall = overall and bool(result_nxw.get('overall_success'))
+                            _record_yara_distribution_push(rule.filename, result_nxw, 'yara_trellix_nx')
+                            enqueue_yara_vendor_failure(
+                                'trellix_nx', rule.filename, result_nxw, get_setting=_get_setting,
+                            )
+                        result = {'overall_success': overall, 'results': combined_results}
+                        try:
+                            from utils.integration_telemetry import record_yara_automation_results
+                            record_yara_automation_results(
+                                result, kind='push', context={'filename': rule.filename}
+                            )
+                        except Exception:
+                            logging.debug('record_yara_automation_results failed', exc_info=True)
+                        if result['overall_success']:
+                            set_fireeye_status(rule.filename, 'success', 'All automation targets updated.')
+                        else:
+                            msgs = '; '.join(
+                                r.get('name', '') + ': ' + (r.get('message') or '')
+                                for r in result.get('results', [])
+                            )
+                            set_fireeye_status(rule.filename, 'error', msgs or 'Push failed')
+                    except Exception as e:
+                        logging.exception('YARA outbound push failed for %s', rule.filename)
+                        try:
+                            from utils.yara_http_push import set_fireeye_status
+                            set_fireeye_status(rule.filename, 'error', str(e))
+                        except Exception:
+                            pass
+                        audit_log('yara_push_fail', f'file={rule.filename} error={e}')
+
+            threading.Thread(target=_yara_outbound_upload, daemon=True).start()
+            fireeye_pending = True
+    except Exception as e:
+        logging.warning('YARA outbound automation setup failed: %s', e)
+    return fireeye_pending
+
+
 @bp.route('/upload-yara', methods=['POST'])
 @login_required
 def upload_yara():
@@ -289,11 +402,17 @@ def upload_yara():
                 filename=safe_filename, analyst=analyst_name,
             )
             return jsonify({'success': False, 'message': 'Rule name already exists'}), 409
-        with open(filepath_pending, 'w', encoding='utf-8') as f:
-            f.write(file_content)
+        _get_setting = _from_app('_get_setting')[0]
+        from utils.workflow_settings import yara_analyst_requires_approval
+        needs_approval = yara_analyst_requires_approval(current_user, _get_setting)
         comment = (request.form.get('comment') or '').strip() or 'Uploaded YARA Rule'
         quality_pts = compute_yara_quality_points(file_content)
+        content_hash = yara_content_sha256(file_content)
         _commit_with_retry, _api_error, _log_champs_event = _from_app('_commit_with_retry', '_api_error', '_log_champs_event')
+        save_path = filepath_pending if needs_approval else filepath_approved
+        rule_status = 'pending' if needs_approval else 'approved'
+        with open(save_path, 'w', encoding='utf-8') as f:
+            f.write(file_content)
         try:
             db.session.add(YaraRule(
                 filename=safe_filename,
@@ -303,15 +422,15 @@ def upload_yara():
                 comment=comment,
                 campaign_id=campaign_id,
                 quality_points=quality_pts,
-                status='pending',
-                content_sha256=yara_content_sha256(file_content),
+                status=rule_status,
+                content_sha256=content_hash,
             ))
             _commit_with_retry()
         except IntegrityError:
             db.session.rollback()
-            if os.path.exists(filepath_pending):
+            if os.path.exists(save_path):
                 try:
-                    os.remove(filepath_pending)
+                    os.remove(save_path)
                 except OSError:
                     pass
             _yara_upload_fail_audit(
@@ -321,9 +440,9 @@ def upload_yara():
             return _api_error('Rule name already exists', 409)
         except (ValueError, OSError) as e:
             db.session.rollback()
-            if os.path.exists(filepath_pending):
+            if os.path.exists(save_path):
                 try:
-                    os.remove(filepath_pending)
+                    os.remove(save_path)
                 except OSError:
                     pass
             _yara_upload_fail_audit(
@@ -331,16 +450,27 @@ def upload_yara():
             )
             return _api_error(f'Database or file error: {str(e)}', 500)
         cmt = (comment or '')[:60]
-        audit_log('YARA_UPLOAD', f'file={safe_filename} analyst={username} status=pending comment="{cmt}"')
+        audit_log(
+            'YARA_UPLOAD',
+            f'file={safe_filename} analyst={username} status={rule_status} comment="{cmt}"',
+        )
         _log_champs_event('yara_upload', user_id=current_user.id, payload={'filename': safe_filename})
         refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
         refresh_champ_score_for_user(current_user.id)
+        fireeye_pending = False
+        if not needs_approval:
+            rule_row = YaraRule.query.filter_by(filename=safe_filename).first()
+            if rule_row:
+                fireeye_pending = _schedule_yara_outbound_push(rule_row, file_content, _get_setting, audit_log)
         try:
             from utils.integration_telemetry import record_api_yara_upload
             record_api_yara_upload()
         except Exception:
             pass
-        message = f'YARA rule uploaded and pending approval: {safe_filename}'
+        if needs_approval:
+            message = f'YARA rule uploaded and pending approval: {safe_filename}'
+        else:
+            message = f'YARA rule published: {safe_filename}'
         if was_normalized:
             message = MSG_YARA_FILENAME_NORMALIZED.format(filename=safe_filename) + ' ' + message
         if ticket_id:
@@ -350,6 +480,8 @@ def upload_yara():
             'message': message,
             'filename': safe_filename,
             'normalized': was_normalized,
+            'pending_approval': needs_approval,
+            'fireeye_pending': fireeye_pending,
         })
     except (UnicodeDecodeError, OSError) as e:
         _api_error, = _from_app('_api_error')
@@ -484,6 +616,7 @@ def delete_yara():
     _commit_with_retry, audit_log, refresh_champ_score_for_user, _log_ioc_history = _from_app(
         '_commit_with_retry', 'audit_log', 'refresh_champ_score_for_user', '_log_ioc_history'
     )
+    _log_champs_event = _from_app('_log_champs_event')[0]
     try:
         data = request.get_json() or {}
         filename = (data.get('filename') or '').strip()
@@ -528,7 +661,25 @@ def delete_yara():
         if reason:
             _audit_del += f' reason={reason[:120]!r}'
         audit_log('YARA_DELETE', _audit_del)
-        if owner_id is not None:
+        try:
+            _log_champs_event(
+                'yara_deletion',
+                user_id=current_user.id,
+                payload={
+                    'filename': safe,
+                    'status': (rule.status if rule else 'unknown'),
+                    'deleted_by_admin': is_admin,
+                },
+            )
+            _commit_with_retry()
+        except Exception as e:
+            logging.warning('YARA delete: champs yara_deletion event failed: %s', e)
+            db.session.rollback()
+        try:
+            refresh_champ_score_for_user(current_user.id)
+        except Exception as e:
+            logging.warning('YARA delete: refresh_champ_score for deleter failed: %s', e)
+        if owner_id is not None and owner_id != current_user.id:
             try:
                 refresh_champ_score_for_user(owner_id)
             except Exception as e:
@@ -970,169 +1121,9 @@ def approve_yara():
                     logging.warning('YARA approve: notify analyst %s failed: %s', analyst_username, e)
                     db.session.rollback()
 
-        # Outbound YARA automation: generic/NX appliances (Automations) + Trellix EX (Integrations)
-        fireeye_pending = False
+        # Outbound YARA automation
         _get_setting = _from_app('_get_setting')[0]
-        try:
-            from utils.trellix_ex import trellix_ex_enabled as _trellix_ex_on
-            from utils.trellix_cms import trellix_cms_enabled as _trellix_cms_on
-            from utils.trellix_nx import trellix_nx_wmps_enabled as _nx_wmps_on
-            from utils.yara_push_targets import (
-                merged_yara_automation_appliances,
-                yara_http_push_verify_ssl,
-                yara_session_push_verify_ssl,
-            )
-
-            fe_on = _get_setting('automation_fireeye_enabled', 'false').lower() == 'true'
-            tx_on = _trellix_ex_on(_get_setting)
-            cms_on = _trellix_cms_on(_get_setting)
-            nx_wmps_on = _nx_wmps_on(_get_setting)
-            appliances = []
-            if fe_on:
-                appliances = merged_yara_automation_appliances(_get_setting)
-                if not isinstance(appliances, list):
-                    appliances = []
-            has_fe_targets = fe_on and len(appliances) > 0
-            if has_fe_targets or tx_on or cms_on or nx_wmps_on:
-                from utils.yara_http_push import push_yara_to_appliances, set_fireeye_status
-
-                app_obj = current_app._get_current_object()
-                verify_fe = yara_http_push_verify_ssl(_get_setting)
-                verify_session = yara_session_push_verify_ssl(_get_setting)
-                set_fireeye_status(rule.filename, 'pending', '')
-
-                def _yara_outbound_upload():
-                    with app_obj.app_context():
-                        try:
-                            combined_results = []
-                            overall = True
-                            from utils.yara_retry_enqueue import enqueue_yara_vendor_failure
-
-                            if has_fe_targets:
-                                result_fe = push_yara_to_appliances(
-                                    content, rule.filename, appliances, audit_log, verify_ssl=verify_fe
-                                )
-                                combined_results.extend(result_fe.get('results', []))
-                                overall = overall and bool(result_fe.get('overall_success'))
-                                _record_yara_distribution_push(rule.filename, result_fe, 'yara_http')
-                                enqueue_yara_vendor_failure(
-                                    'yara_http', rule.filename, result_fe, get_setting=_get_setting,
-                                )
-                            if tx_on:
-                                from utils.trellix_ex import push_yara_trellix_ex
-
-                                result_tx = push_yara_trellix_ex(
-                                    content,
-                                    rule.filename,
-                                    _get_setting,
-                                    audit_log,
-                                    verify_ssl=verify_session,
-                                )
-                                combined_results.extend(result_tx.get('results', []))
-                                overall = overall and bool(result_tx.get('overall_success'))
-                                _record_yara_distribution_push(rule.filename, result_tx, 'yara_trellix_ex')
-                                enqueue_yara_vendor_failure(
-                                    'trellix_ex', rule.filename, result_tx, get_setting=_get_setting,
-                                )
-                            if cms_on:
-                                from utils.trellix_cms import push_yara_trellix_cms
-
-                                result_cms = push_yara_trellix_cms(
-                                    content,
-                                    rule.filename,
-                                    _get_setting,
-                                    audit_log,
-                                    verify_ssl=verify_session,
-                                )
-                                combined_results.extend(result_cms.get('results', []))
-                                overall = overall and bool(result_cms.get('overall_success'))
-                                _record_yara_distribution_push(rule.filename, result_cms, 'yara_trellix_cms')
-                                enqueue_yara_vendor_failure(
-                                    'trellix_cms', rule.filename, result_cms, get_setting=_get_setting,
-                                )
-                            if nx_wmps_on:
-                                from utils.trellix_nx import push_yara_nx_wmps
-
-                                result_nxw = push_yara_nx_wmps(
-                                    content,
-                                    rule.filename,
-                                    _get_setting,
-                                    audit_log,
-                                    verify_ssl=verify_session,
-                                )
-                                combined_results.extend(result_nxw.get('results', []))
-                                overall = overall and bool(result_nxw.get('overall_success'))
-                                _record_yara_distribution_push(rule.filename, result_nxw, 'yara_trellix_nx')
-                                enqueue_yara_vendor_failure(
-                                    'trellix_nx', rule.filename, result_nxw, get_setting=_get_setting,
-                                )
-                            result = {'overall_success': overall, 'results': combined_results}
-                            try:
-                                from utils.integration_telemetry import record_yara_automation_results
-
-                                record_yara_automation_results(
-                                    result, kind='push', context={'filename': rule.filename}
-                                )
-                            except Exception:
-                                logging.debug('record_yara_automation_results failed', exc_info=True)
-                            if result['overall_success']:
-                                set_fireeye_status(rule.filename, 'success', 'All automation targets updated.')
-                            else:
-                                msgs = '; '.join(
-                                    r.get('name', '') + ': ' + (r.get('message') or '')
-                                    for r in result.get('results', [])
-                                )
-                                set_fireeye_status(rule.filename, 'error', msgs or 'Push failed')
-                        except Exception as e:
-                            logging.exception('YARA outbound push failed for %s', rule.filename)
-                            err_msg = str(e)
-                            try:
-                                from utils.integration_telemetry import record_yara_automation_results
-
-                                record_yara_automation_results(
-                                    {
-                                        'overall_success': False,
-                                        'results': [
-                                            {'name': '—', 'url': '', 'success': False, 'message': err_msg}
-                                        ],
-                                    },
-                                    kind='push',
-                                    context={'filename': rule.filename},
-                                )
-                            except Exception:
-                                pass
-                            try:
-                                from utils.yara_retry_enqueue import enqueue_yara_vendor_failure
-
-                                err_res = {
-                                    'overall_success': False,
-                                    'results': [{'name': '—', 'success': False, 'message': err_msg}],
-                                }
-                                if has_fe_targets:
-                                    enqueue_yara_vendor_failure(
-                                        'yara_http', rule.filename, err_res, get_setting=_get_setting,
-                                    )
-                                if tx_on:
-                                    enqueue_yara_vendor_failure(
-                                        'trellix_ex', rule.filename, err_res, get_setting=_get_setting,
-                                    )
-                                if cms_on:
-                                    enqueue_yara_vendor_failure(
-                                        'trellix_cms', rule.filename, err_res, get_setting=_get_setting,
-                                    )
-                                if nx_wmps_on:
-                                    enqueue_yara_vendor_failure(
-                                        'trellix_nx', rule.filename, err_res, get_setting=_get_setting,
-                                    )
-                            except Exception:
-                                logging.exception('YARA exception enqueue retry failed')
-                            set_fireeye_status(rule.filename, 'error', err_msg)
-                            audit_log('yara_push_fail', f'file={rule.filename} error={e}')
-
-                threading.Thread(target=_yara_outbound_upload, daemon=True).start()
-                fireeye_pending = True
-        except Exception as e:
-            logging.warning('YARA outbound automation setup failed: %s', e)
+        fireeye_pending = _schedule_yara_outbound_push(rule, content, _get_setting, audit_log)
 
         return jsonify({
             'success': True,
@@ -1339,6 +1330,13 @@ def resubmit_yara():
         _commit_with_retry()
         audit_log('YARA_RESUBMIT', f'file={safe} analyst={rule.analyst}')
         _log_champs_event('yara_resubmit', user_id=current_user.id, payload={'filename': safe})
+        try:
+            from utils.user_notifications import dismiss_yara_outcome_notification
+            dismiss_yara_outcome_notification(current_user.id, safe, 'rejected')
+            _commit_with_retry()
+        except Exception as e:
+            logging.warning('YARA resubmit: dismiss rejection notification failed: %s', e)
+            db.session.rollback()
         return jsonify({
             'success': True,
             'message': f'Rule "{safe}" resubmitted and is pending admin approval.',

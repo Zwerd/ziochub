@@ -384,7 +384,9 @@ def update_campaign(campaign_id):
 @login_required
 def delete_campaign(campaign_id):
     """Delete a campaign after unlinking all associated IOCs and YARA rules."""
-    _commit_with_retry, audit_log = _from_app('_commit_with_retry', 'audit_log')
+    _commit_with_retry, audit_log, _log_champs_event, refresh_champ_score_for_user = _from_app(
+        '_commit_with_retry', 'audit_log', '_log_champs_event', 'refresh_champ_score_for_user'
+    )
     try:
         campaign = db.session.get(Campaign, campaign_id)
         if not campaign:
@@ -396,6 +398,18 @@ def delete_campaign(campaign_id):
         db.session.delete(campaign)
         _commit_with_retry()
         audit_log('CAMPAIGN_DELETE', f'id={campaign_id} name={campaign_name}')
+        if current_user and current_user.is_authenticated:
+            try:
+                _log_champs_event(
+                    'campaign_delete',
+                    user_id=current_user.id,
+                    payload={'campaign_id': campaign_id, 'name': (campaign_name or '')[:100]},
+                )
+                _commit_with_retry()
+                refresh_champ_score_for_user(current_user.id)
+            except Exception as e:
+                logging.warning('delete_campaign: champs campaign_delete event failed: %s', e)
+                db.session.rollback()
         return jsonify({'success': True, 'message': f'Campaign "{campaign_name}" deleted'})
     except Exception as e:
         db.session.rollback()

@@ -24,6 +24,9 @@ def dispatch_integration_retry_push(
     if vendor == 'google_secops':
         from utils.google_secops import google_secops_push_ioc_from_context
         return google_secops_push_ioc_from_context(payload, from_retry=from_retry)
+    if vendor == 'netskope':
+        from utils.netskope import netskope_push_ioc_from_context
+        return netskope_push_ioc_from_context(payload, from_retry=from_retry)
     if vendor == 'esa':
         return _retry_esa(payload, get_setting)
     if vendor == 'ioc_http':

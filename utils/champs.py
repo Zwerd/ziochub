@@ -16,19 +16,58 @@ YARA_MIN = 10
 YARA_MAX = 50
 DELETION = 1
 STREAK_DAYS = 3
+# Smart Effort (#8): cleanup / curation deletion tiers
+SMART_DELETION_MIN = 1
+SMART_DELETION_EXPIRED = 2
+SMART_DELETION_OTHER_ACTIVE = 2
+SMART_YARA_DELETION_MIN = 1
+SMART_YARA_DELETION_APPROVED = 2
+SMART_CAMPAIGN_DELETE = 1
+
+
+def _parse_activity_payload(payload):
+    if not payload:
+        return {}
+    try:
+        p = json.loads(payload) if isinstance(payload, str) else payload
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return p if isinstance(p, dict) else {}
 
 
 def _deletion_event_adds_score(payload) -> bool:
     """ioc_deletion grants +1 unless skip_deletion_bonus (self-delete own IOC)."""
-    if not payload:
-        return True
-    try:
-        p = json.loads(payload) if isinstance(payload, str) else payload
-    except (json.JSONDecodeError, TypeError):
-        return True
-    if not isinstance(p, dict):
-        return True
+    p = _parse_activity_payload(payload)
     return not bool(p.get('skip_deletion_bonus'))
+
+
+def _smart_deletion_points(payload) -> int:
+    """
+    Smart Effort (#8) IOC removal/revoke scoring — rewards platform cleanup.
+    - Expired IOC removed: 2 (janitor / stale intel cleanup)
+    - Active IOC removed (another analyst's): 2 (shared curation)
+    - Self-delete active IOC: 1 (minimum effort, still counts)
+    """
+    p = _parse_activity_payload(payload)
+    if p.get('was_expired'):
+        return SMART_DELETION_EXPIRED
+    if p.get('skip_deletion_bonus'):
+        return SMART_DELETION_MIN
+    return SMART_DELETION_OTHER_ACTIVE
+
+
+def _deletion_points_for_method(payload, scoring_method: str) -> int:
+    """Return deletion points for the active scoring method (0 if not scored)."""
+    sm = str(scoring_method or '').strip()
+    if sm == '2':
+        return 0
+    if sm == SCORING_SMART:
+        return _smart_deletion_points(payload)
+    if _deletion_event_adds_score(payload):
+        return DELETION
+    return 0
+
+
 STREAK_BONUS_PERCENT = 10
 SCORING_SMART = '8'
 # Per-badge: max days of inactivity before this badge is lost. Analyst loses badges gradually, not all at once.
@@ -235,13 +274,13 @@ SMART_BULK_METHODS = ('csv', 'txt', 'paste', 'import')
 
 
 def _smart_comment_bonus(comment: str) -> int:
-    """Return Smart Effort comment bonus by length (0 if too short)."""
+    """Return Smart Effort comment bonus by length (1 minimum for any non-empty comment)."""
     comment = (comment or '').strip()
     if not comment:
         return 0
     length = len(comment)
     if length < SMART_COMMENT_MIN_LEN:
-        return 0
+        return 1
     if length < 100:
         return 1
     if length < 300:
@@ -272,6 +311,8 @@ def _compute_smart_ioc_points(method, comment, campaign_id, analyst_key, day, co
         if tag_count >= 3:
             pts += 2
         elif tag_count >= 2:
+            pts += 1
+        elif tag_count >= 1:
             pts += 1
     return max(1, min(8, pts))
 
@@ -380,15 +421,52 @@ def _score_ioc_rows(ioc_rows, scoring_method, comment_counts=None):
     return results
 
 
+def _smart_activity_points(event_type, payload, *, smart_only=True):
+    """Return Smart Effort (#8) bonus points for a single ActivityEvent row."""
+    p = _parse_activity_payload(payload)
+
+    if event_type == 'ioc_deletion':
+        return _smart_deletion_points(p)
+
+    if event_type in ('ioc_note_add', 'ioc_comment_add'):
+        length = int(p.get('length') or 0)
+        if length >= SMART_COMMENT_MIN_LEN:
+            if length < 100:
+                return 1
+            if length < 300:
+                return 2
+            return 3
+        return 1
+    if event_type == 'ioc_campaign_link':
+        return 1 if not bool(p.get('had_campaign')) else 0
+    if event_type == 'campaign_create':
+        return 1
+    if event_type == 'ioc_tag_add':
+        return max(1, int(p.get('added_count') or 0))
+    if event_type == 'tag_suggest':
+        return max(1, int(p.get('count') or 1))
+    if event_type == 'yara_deletion':
+        status = (p.get('status') or '').strip().lower()
+        if status == 'approved':
+            return SMART_YARA_DELETION_APPROVED
+        return SMART_YARA_DELETION_MIN
+    if event_type == 'campaign_delete':
+        return SMART_CAMPAIGN_DELETE
+    return 0
+
+
 def _compute_yara_points(qp, status, scoring_method, campaign_id=None):
     """Return final YARA points for Champs.
 
-    Policy: YARA points are credited only after admin approval.
-    Non-approved rules contribute 0 points.
+    Default: YARA points only after admin approval.
+    Smart Effort (#8): pending uploads earn YARA_MIN; approved rules use quality (10-50).
     """
-    if status != 'approved':
-        return 0
     sm = str(scoring_method or '').strip()
+    st = (status or '').strip().lower()
+    if st != 'approved':
+        if sm == SCORING_SMART and st == 'pending':
+            return YARA_MIN
+        return 0
     # Method 2 (Flat): fixed points per approved rule.
     if sm == '2':
         return 10
@@ -707,9 +785,9 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
         uid, a, d, payload = r[0], (r[1] or '').strip().lower(), _ensure_date(r[2]) if r[2] else None, r[3]
         if not a or not d:
             continue
-        # Method 2 (Flat): no scoring from deletions (dry IOC/YARA only).
-        if sm != '2' and _deletion_event_adds_score(payload):
-            analyst_daily[a][d] = analyst_daily[a].get(d, 0) + _apply_decay(d, DELETION)
+        pts_del = _deletion_points_for_method(payload, sm)
+        if pts_del:
+            analyst_daily[a][d] = analyst_daily[a].get(d, 0) + _apply_decay(d, pts_del)
         prev_last = analyst_last.get(a)
         analyst_last[a] = max(prev_last, d) if prev_last else d
         analyst_user_id[a] = uid
@@ -966,9 +1044,9 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
             analyst_yara[a] = analyst_yara[a] + 1
 
     # Deletion and activity points (ActivityEvent)
-    # - ioc_deletion: deleter gets +1 per deletion (not self-delete own IOC); assigned analyst loses IOC points when row removed
-    # - ioc_note_add (Smart Effort only): reward rich, non-trivial notes
-    # - ioc_campaign_link (Smart Effort only): reward linking IOCs to campaigns (first link)
+    # - ioc_deletion: tiered cleanup scoring in Smart (#8); +1 default in other methods
+    # - yara_deletion / campaign_delete: Smart cleanup events
+    # - ioc_note_add, ioc_comment_add, ioc_campaign_link, campaign_create, ioc_tag_add, tag_suggest
     if ActivityEvent:
         users = {u.id: u.username.lower() for u in User.query.all() if u.username}
 
@@ -996,20 +1074,24 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
                 analyst_deletions[a] = analyst_deletions.get(a, 0) + 1
             d = _to_date(created_at)
             if d:
-                # Method 2 (Flat): no scoring from deletions (dry IOC/YARA only).
-                if sm != '2' and _deletion_event_adds_score(payload):
-                    analyst_daily[a][d] = analyst_daily[a].get(d, 0) + _apply_decay(d, DELETION)
+                pts_del = _deletion_points_for_method(payload, sm)
+                if pts_del:
+                    analyst_daily[a][d] = analyst_daily[a].get(d, 0) + _apply_decay(d, pts_del)
                 analyst_last[a] = max(analyst_last.get(a, d), d) if analyst_last.get(a) else d
             if uid:
                 analyst_user_id[a] = uid
 
-        # Reward notes (Smart only), campaign link, campaign create, tag add (Smart only)
+        _smart_cleanup_events = (
+            'ioc_note_add', 'ioc_comment_add', 'ioc_campaign_link',
+            'campaign_create', 'ioc_tag_add', 'tag_suggest',
+            'yara_deletion', 'campaign_delete',
+        )
         evt_q = db.session.query(
             ActivityEvent.user_id,
             ActivityEvent.event_type,
             ActivityEvent.payload,
             ActivityEvent.created_at,
-        ).filter(ActivityEvent.event_type.in_(['ioc_note_add', 'ioc_campaign_link', 'campaign_create', 'ioc_tag_add']))
+        ).filter(ActivityEvent.event_type.in_(_smart_cleanup_events))
         if start_dt is not None:
             evt_q = evt_q.filter(ActivityEvent.created_at >= start_dt)
         if end_dt is not None:
@@ -1024,26 +1106,15 @@ def compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent=None, user_id_
                 p = {}
 
             pts_extra = 0
-            # Smart (#8) Note: 1–3 pts by content length (CHAMPS_SCORING_METHODS.md: <10→1, 10–99→1, 100–299→2, 300+→3)
-            if event_type == 'ioc_note_add' and smart:
-                length = int(p.get('length') or 0)
-                if length >= SMART_COMMENT_MIN_LEN:
-                    if length < 100:
+            if smart and event_type in _smart_cleanup_events:
+                pts_extra = _smart_activity_points(event_type, p)
+            elif not smart:
+                if event_type == 'ioc_campaign_link':
+                    had_campaign = bool(p.get('had_campaign'))
+                    if not had_campaign:
                         pts_extra = 1
-                    elif length < 300:
-                        pts_extra = 2
-                    else:
-                        pts_extra = 3
-                else:
-                    pts_extra = 1  # minimal effort still counts
-            elif event_type == 'ioc_campaign_link':
-                had_campaign = bool(p.get('had_campaign'))
-                if not had_campaign:
+                elif event_type == 'campaign_create':
                     pts_extra = 1
-            elif event_type == 'campaign_create':
-                pts_extra = 1
-            elif event_type == 'ioc_tag_add' and smart:
-                pts_extra = int(p.get('added_count') or 0)
 
             if pts_extra and d:
                 # Method 2 (Flat): no extra bonuses/events.
@@ -1589,8 +1660,32 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
         ).all()
         for created_at, payload in del_evts:
             d = _ensure_date(created_at)
-            if d and _deletion_event_adds_score(payload):
-                analyst_daily[d] = analyst_daily.get(d, 0) + DELETION
+            if d:
+                pts_del = _deletion_points_for_method(payload, scoring_method)
+                if pts_del:
+                    analyst_daily[d] = analyst_daily.get(d, 0) + pts_del
+
+        if smart and user_id:
+            evt_rows = db.session.query(
+                ActivityEvent.event_type,
+                ActivityEvent.payload,
+                ActivityEvent.created_at,
+            ).filter(
+                ActivityEvent.user_id == user_id,
+                ActivityEvent.event_type.in_([
+                    'ioc_note_add', 'ioc_comment_add', 'ioc_campaign_link',
+                    'campaign_create', 'ioc_tag_add', 'tag_suggest',
+                    'yara_deletion', 'campaign_delete',
+                ]),
+                ActivityEvent.created_at >= start_dt,
+            ).all()
+            for event_type, payload, created_at in evt_rows:
+                d = _ensure_date(created_at)
+                if not d:
+                    continue
+                pts = _smart_activity_points(event_type, payload)
+                if pts:
+                    analyst_daily[d] = analyst_daily.get(d, 0) + pts
 
     # Chart: show submission counts (IOC + YARA per day) by analyst name so admin-submitted-on-behalf count
     analyst_daily_count = defaultdict(int)

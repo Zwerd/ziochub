@@ -37,6 +37,10 @@
         <img src="{{ integration_icons.google_secops }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
         <span>Google SecOps</span>
     </button>
+    <button type="button" class="push-ioc-sub-btn settings-tab-btn flex items-center gap-2" data-tab="netskope">
+        <img src="{{ integration_icons.netskope }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+        <span>Netskope</span>
+    </button>
     <button type="button" class="push-ioc-sub-btn settings-tab-btn flex items-center gap-2" data-tab="cisco-esa">
         <img src="{{ integration_icons.cisco_esa }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
         <span>Cisco ESA</span>
@@ -555,6 +559,99 @@
     </div>
 </div>
 
+<!-- Tab: Netskope cloud SWG (URL List + File Hash List) -->
+<div id="settings-tab-netskope" class="settings-tab-pane hidden">
+    <div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+        {{ integ_brand_heading(integration_icons.netskope, 'Netskope (Cloud SWG)') }}
+        <p class="text-secondary text-sm mb-4">Pushes IOCs to your <strong class="text-primary">Netskope tenant</strong> (cloud proxy) via REST API: <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">URL</strong> → URL List (<code class="px-0.5 rounded bg-white/10 text-xs">append</code> + <code class="px-0.5 rounded bg-white/10 text-xs">deploy</code>); <strong class="text-primary">Hash</strong> (MD5/SHA256) → File Hash List (V1). Revoke uses URL <code class="px-0.5 rounded bg-white/10 text-xs">replace</code> and hash cache update. Link the URL List to a Custom Category + Real-time Protection policy in Netskope.</p>
+        <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary">
+            <summary class="cursor-pointer font-semibold text-cyan-300 select-none">Setup checklist</summary>
+            <ol class="mt-3 list-decimal list-inside space-y-2 text-primary/90">
+                <li>Create an API token with URL List (V2) permissions in Netskope Admin.</li>
+                <li>Create or pick a <strong class="text-primary">URL List</strong> (Policies → Profiles → URL Lists) and note its numeric <strong class="text-primary">ID</strong>.</li>
+                <li>Optional: dedicated <strong class="text-primary">File Hash List</strong> name for ZIoCHub (V1 token; list is replaced from ZIoCHub cache on each hash push).</li>
+                <li>Attach URL List to Custom Category + block/alert policy.</li>
+                <li>Enable push here, save, then <strong class="text-primary">Test connection</strong>.</li>
+            </ol>
+        </details>
+        <form id="netskopeForm" class="space-y-0">
+            {% call integ_section('General') %}
+            <div class="integ-form-grid integ-form-grid--2">
+                {{ integ_yes_no('netskope_enabled', 'Enable outbound push', settings.netskope_enabled, 'When Yes, IOC create/revoke events push to Netskope in the background.') }}
+                {{ integ_verify_tls('netskope_verify_ssl', settings.netskope_verify_ssl) }}
+            </div>
+            <div class="integ-form-grid integ-form-grid--1 mt-3">
+                <label for="netskope_display_name" class="integ-label">Display name (Feed Pulse)</label>
+                <input type="text" id="netskope_display_name" class="integ-input" placeholder="Netskope" value="{{ settings.netskope_display_name or '' }}" autocomplete="off">
+            </div>
+            {% endcall %}
+            {% call integ_section('Tenant API') %}
+            <div class="integ-form-grid integ-form-grid--1">
+                <label for="netskope_base_url" class="integ-label">Tenant base URL</label>
+                <input type="text" id="netskope_base_url" class="integ-input" placeholder="https://yourorg.goskope.com" value="{{ settings.netskope_base_url }}" autocomplete="off">
+            </div>
+            <div class="integ-form-grid integ-form-grid--2 mt-3">
+                <div>
+                    <label for="netskope_api_token_v2" class="integ-label">API token (V2 — URL List)</label>
+                    <input type="password" id="netskope_api_token_v2" class="integ-input" placeholder="{% if settings.netskope_api_token_v2 %}••••••••{% endif %}" autocomplete="new-password">
+                </div>
+                <div>
+                    <label for="netskope_api_token_v1" class="integ-label">API token (V1 — File Hash, optional)</label>
+                    <input type="password" id="netskope_api_token_v1" class="integ-input" placeholder="{% if settings.netskope_api_token_v1 %}••••••••{% endif %}" autocomplete="new-password">
+                </div>
+            </div>
+            <div class="integ-form-grid integ-form-grid--2 mt-3">
+                <div>
+                    <label for="netskope_urllist_id" class="integ-label">URL List ID</label>
+                    <input type="text" id="netskope_urllist_id" class="integ-input" placeholder="e.g. 12" value="{{ settings.netskope_urllist_id }}" autocomplete="off">
+                </div>
+                <div>
+                    <label for="netskope_hash_list_name" class="integ-label">File Hash List name</label>
+                    <input type="text" id="netskope_hash_list_name" class="integ-input" placeholder="ZIoCHub-IOCs" value="{{ settings.netskope_hash_list_name }}" autocomplete="off">
+                </div>
+            </div>
+            <div class="mt-3 space-y-2">
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="netskope_deploy_on_push" class="mt-1 h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600"
+                           {% if settings.netskope_deploy_on_push != 'false' %}checked{% endif %}>
+                    <span class="text-sm text-secondary">Deploy URL List after each append/remove (recommended)</span>
+                </label>
+                <label class="flex items-start gap-2 cursor-pointer">
+                    <input type="checkbox" id="netskope_hash_push_enabled" class="mt-1 h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600"
+                           {% if settings.netskope_hash_push_enabled != 'false' %}checked{% endif %}>
+                    <span class="text-sm text-secondary">Push Hash IOCs (MD5/SHA256) to File Hash List</span>
+                </label>
+            </div>
+            {% endcall %}
+            {% call integ_section('Retry on failure') %}
+            {{ integ_retry_panel(
+                'Retry on failure',
+                'Transient HTTP/TLS errors are queued for automatic retry.',
+                'netskope',
+                'netskope_retry_enabled', settings.netskope_retry_enabled,
+                'netskope_retry_interval_minutes', settings.netskope_retry_interval_minutes or '15',
+                'netskope_retry_max_attempts', settings.netskope_retry_max_attempts or '3'
+            ) }}
+            {% endcall %}
+            <div class="integ-form-actions">
+                <button type="submit" class="integ-btn integ-btn--save">Save Netskope settings</button>
+                <button type="button" id="netskopePingBtn" class="integ-btn integ-btn--secondary">Check module</button>
+                <button type="button" id="netskopeTestBtn" class="integ-btn integ-btn--test">Test connection</button>
+                <label class="flex items-center gap-2 text-sm text-secondary cursor-pointer">
+                    <input type="checkbox" id="netskopeTestRoundtrip" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
+                    Include append/remove test URL
+                </label>
+                <label class="flex items-center gap-2 text-sm text-secondary cursor-pointer">
+                    <input type="checkbox" id="netskopeTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
+                    Ignore TLS for this test
+                </label>
+            </div>
+        </form>
+        <div id="netskopeMessage" class="mt-4 hidden text-sm"></div>
+        <div id="netskopeTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto max-h-64 whitespace-pre-wrap"></div>
+    </div>
+</div>
+
 {% include 'admin/partials/automation_panel_ioc_push.html' %}
 {% include 'admin/partials/integration_misp_push.html' %}
 {% include 'admin/partials/automation_panel_opendxl.html' %}
@@ -988,6 +1085,114 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
         gsTestBtn.addEventListener('click', function() {
             gsTestBtn.disabled = true;
             runGoogleSecopsTest({}).finally(function() { gsTestBtn.disabled = false; });
+        });
+    }
+})();
+
+/* Netskope cloud SWG */
+(function() {
+    var nsForm = document.getElementById('netskopeForm');
+    function netskopePayloadFromForm() {
+        var v2 = document.getElementById('netskope_api_token_v2');
+        var v1 = document.getElementById('netskope_api_token_v1');
+        var payload = {
+            netskope_enabled: document.getElementById('netskope_enabled').value,
+            netskope_display_name: (document.getElementById('netskope_display_name') || {}).value || '',
+            netskope_base_url: (document.getElementById('netskope_base_url') || {}).value || '',
+            netskope_urllist_id: (document.getElementById('netskope_urllist_id') || {}).value || '',
+            netskope_hash_list_name: (document.getElementById('netskope_hash_list_name') || {}).value || '',
+            netskope_verify_ssl: (document.getElementById('netskope_verify_ssl') || {}).value || 'true',
+            netskope_deploy_on_push: (document.getElementById('netskope_deploy_on_push') || {}).checked ? 'true' : 'false',
+            netskope_hash_push_enabled: (document.getElementById('netskope_hash_push_enabled') || {}).checked ? 'true' : 'false',
+            netskope_retry_enabled: (document.getElementById('netskope_retry_enabled') || {}).value || 'true',
+            netskope_retry_interval_minutes: (document.getElementById('netskope_retry_interval_minutes') || {}).value || '15',
+            netskope_retry_max_attempts: (document.getElementById('netskope_retry_max_attempts') || {}).value || '3'
+        };
+        if (v2 && v2.value) payload.netskope_api_token_v2 = v2.value;
+        if (v1 && v1.value) payload.netskope_api_token_v1 = v1.value;
+        return payload;
+    }
+    function renderNetskopeSteps(logEl, data) {
+        var lines = [];
+        if (data.message && !data.steps) lines.push(data.message);
+        (data.steps || []).forEach(function(s) {
+            var icon = s.status === 'ok' ? '✓' : (s.status === 'warn' ? '⚠' : '✗');
+            lines.push(icon + ' ' + (s.step || '') + '  -  ' + (s.message || ''));
+        });
+        logEl.textContent = lines.join('\n') || JSON.stringify(data, null, 2);
+        logEl.classList.toggle('text-green-300', !!data.success);
+        logEl.classList.toggle('text-red-300', !data.success);
+    }
+    if (nsForm) {
+        nsForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            var msgEl = document.getElementById('netskopeMessage');
+            msgEl.classList.add('hidden');
+            try {
+                var res = await fetch('/api/admin/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(netskopePayloadFromForm())
+                });
+                var data = await res.json();
+                msgEl.classList.remove('hidden');
+                if (data.success) {
+                    msgEl.className = 'mt-4 text-sm text-green-400';
+                    msgEl.textContent = 'Netskope settings saved.';
+                    var v2 = document.getElementById('netskope_api_token_v2');
+                    var v1 = document.getElementById('netskope_api_token_v1');
+                    if (v2 && v2.value) { v2.value = ''; v2.placeholder = '••••••••'; }
+                    if (v1 && v1.value) { v1.value = ''; v1.placeholder = '••••••••'; }
+                } else {
+                    msgEl.className = 'mt-4 text-sm text-red-400';
+                    msgEl.textContent = data.message || 'Failed to save.';
+                }
+            } catch (err) {
+                msgEl.classList.remove('hidden');
+                msgEl.className = 'mt-4 text-sm text-red-400';
+                msgEl.textContent = 'Network error.';
+            }
+        });
+    }
+    var pingBtn = document.getElementById('netskopePingBtn');
+    if (pingBtn) {
+        pingBtn.addEventListener('click', async function() {
+            var logEl = document.getElementById('netskopeTestLog');
+            logEl.classList.remove('hidden');
+            logEl.textContent = 'GET /api/admin/netskope/ping …';
+            try {
+                var res = await fetch('/api/admin/netskope/ping', { credentials: 'same-origin' });
+                var data = await res.json();
+                logEl.textContent = JSON.stringify(data, null, 2);
+            } catch (e) {
+                logEl.textContent = String(e);
+            }
+        });
+    }
+    var testBtn = document.getElementById('netskopeTestBtn');
+    if (testBtn) {
+        testBtn.addEventListener('click', async function() {
+            var logEl = document.getElementById('netskopeTestLog');
+            logEl.classList.remove('hidden');
+            logEl.textContent = 'Testing…';
+            var body = { settings: netskopePayloadFromForm() };
+            if ((document.getElementById('netskopeTestRoundtrip') || {}).checked) body.roundtrip = true;
+            if ((document.getElementById('netskopeTestIgnoreSsl') || {}).checked) body.ignore_ssl = true;
+            testBtn.disabled = true;
+            try {
+                var res = await fetch('/api/admin/netskope/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify(body)
+                });
+                var data = await res.json();
+                renderNetskopeSteps(logEl, data);
+            } catch (e) {
+                logEl.textContent = 'Network error: ' + e;
+            } finally {
+                testBtn.disabled = false;
+            }
         });
     }
 })();

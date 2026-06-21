@@ -344,7 +344,7 @@
             var tip = distributionTooltip(d);
             var src = d.icon_url || '/static/img/vendors/generic.svg';
             var inactive = d.is_active === false;
-            var cls = 'downstream-vendor-icon' + (inactive ? ' downstream-vendor-icon--inactive' : '');
+            var cls = 'downstream-vendor-icon search-distribution-vendor-icon' + (inactive ? ' downstream-vendor-icon--inactive' : '');
             return '<img src="' + escapeAttr(src) + '" alt="" class="' + cls + '" title="' + escapeAttr(tip) + '" />';
         }).join('') + '</div>';
     }
@@ -881,7 +881,14 @@
                                     body: JSON.stringify({ tags: result.invalid_tags })
                                 });
                                 const d2 = await r2.json().catch(() => ({}));
-                                if (d2 && d2.success) showToast((typeof t === 'function' && t('tags.suggested')) ? t('tags.suggested') : 'Suggestion submitted to admin for approval.', 'success');
+                                if (d2 && d2.success) {
+                                    const added = Array.isArray(d2.added) ? d2.added : [];
+                                    if (added.length) {
+                                        showToast((typeof t === 'function' && t('tags.suggested')) ? t('tags.suggested') : 'Suggestion submitted to admin for approval.', 'success');
+                                    } else {
+                                        showToast((typeof t === 'function' && t('tags.suggest_already')) ? t('tags.suggest_already') : 'Tag(s) are already allowed or pending approval.', 'info');
+                                    }
+                                }
                                 else showToast((d2 && d2.message) ? d2.message : 'Failed to suggest tags', 'error');
                                 return;
                             }

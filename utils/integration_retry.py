@@ -45,6 +45,7 @@ TRANSIENT_ERROR_MARKERS = (
 IOC_VENDORS = frozenset({
     'cortex_xdr',
     'google_secops',
+    'netskope',
     'esa',
     'ioc_http',
     'misp_push',
@@ -68,6 +69,7 @@ _NON_RETRIABLE_EXACT = frozenset({
     'remove_missing_value',
     'skipped (disabled)',
     'skipped_incomplete_data_table_config',
+    'skipped_incomplete_config',
     'pymisp is not installed',
     'empty ioc value',
     'unsupported ioc type for misp',

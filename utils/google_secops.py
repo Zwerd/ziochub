@@ -405,7 +405,7 @@ def google_secops_push_contexts_batch(
                         from utils.downstream import record_api_distribution_events
                         gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
                         record_api_distribution_events(
-                            [ctx], vendor_id='google', display_name=gs_name, api_source='google_secops',
+                            [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
                         )
                     except Exception:
                         pass
@@ -425,7 +425,7 @@ def google_secops_push_contexts_batch(
                         from utils.downstream import record_api_distribution_events
                         gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
                         record_api_distribution_events(
-                            [ctx], vendor_id='google', display_name=gs_name, api_source='google_secops',
+                            [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
                         )
                     except Exception:
                         pass
@@ -444,7 +444,7 @@ def google_secops_push_contexts_batch(
                 from utils.downstream import mark_api_distribution_removed
                 gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
                 mark_api_distribution_removed(
-                    [ctx], vendor_id='google', display_name=gs_name, api_source='google_secops',
+                    [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
                 )
             except Exception:
                 pass
@@ -515,11 +515,11 @@ def google_secops_push_ioc_from_context(
             action = (str(ioc.get('action') or 'create')).strip().lower()
             if action in ('remove', 'delete', 'revoke', 'expire_remove', 'delete_remove'):
                 mark_api_distribution_removed(
-                    [ioc], vendor_id='google', display_name=gs_name, api_source='google_secops',
+                    [ioc], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
                 )
             else:
                 record_api_distribution_events(
-                    [ioc], vendor_id='google', display_name=gs_name, api_source='google_secops',
+                    [ioc], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
                 )
         except Exception:
             pass

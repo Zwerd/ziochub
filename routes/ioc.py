@@ -893,6 +893,8 @@ def submit_ioc():
             return jsonify({'success': False, 'message': MSG_INVALID_IOC_TYPE}), 400
         
         tags_json = json.dumps(tags_list) if tags_list else '[]'
+        from utils.workflow_settings import ioc_analyst_requires_approval
+        needs_approval = ioc_analyst_requires_approval(current_user, _get_setting, analyst_username=username)
         
         # Apply refanger (auto-fix hxxp->http, [.]->., (.)->., [dot]->.)
         cleaned_value, was_changed = refanger(value)
@@ -959,6 +961,7 @@ def submit_ioc():
                     user_id=user_id,
                     tags=tags_json,
                     rare=rare,
+                    pending_approval=needs_approval,
                 )
                 reactivated = True
                 _commit_with_retry()
@@ -968,6 +971,7 @@ def submit_ioc():
                     ticket_id=ticket_id, comment=sanitize_comment(comment),
                     expiration_date=exp_date, campaign_id=campaign_id,
                     user_id=user_id, tags=tags_json, rare=rare,
+                    pending_approval=needs_approval,
                 ))
                 _commit_with_retry()
         except IntegrityError:
@@ -1000,97 +1004,24 @@ def submit_ioc():
         comment_preview = (cmt[:80] + '...') if len(cmt) > 80 else cmt
         audit_log('IOC_CREATE', f'type={ioc_type} value={value[:80]} comment="{comment_preview}" campaign={campaign_name or "-"}')
         _log_champs_event('ioc_submit', user_id=user_id, payload={'type': ioc_type, 'value': value[:100]})
-        if ioc_type == 'Hash':
-            try:
-                _get_setting = _from_app('_get_setting')[0]
-                if _get_setting('dxl_enabled', 'false').lower() == 'true':
-                    config_path = _get_setting('dxl_config_path', '').strip()
-                    if config_path:
-                        from utils.dxl_tie import push_hash_to_tie
-                        dxl_ok = push_hash_to_tie(config_path, value, audit_log)
-                        if not dxl_ok:
-                            try:
-                                from utils.integration_retry import enqueue_integration_retry
-
-                                enqueue_integration_retry(
-                                    'dxl',
-                                    {'action': 'create', 'type': 'Hash', 'value': value},
-                                    'dxl_push_failed',
-                                    get_setting=_get_setting,
-                                )
-                            except Exception:
-                                logging.exception('DXL enqueue retry failed')
-            except Exception as dxl_err:
-                logging.warning('DXL push after submit_ioc failed: %s', dxl_err)
-        # MISP push: send IOC to MISP when enabled (SOC uses ZIoCHub but feeds MISP; comment pushed if option on).
-        # Skip push when analyst is the MISP sync user to avoid loop: MISP → sync into ZIoCHub (analyst=misp_sync) → push back to MISP.
-        try:
-            _get_setting = _from_app('_get_setting')[0]
-            misp_sync_user = (_get_setting('misp_sync_user', 'misp_sync') or 'misp_sync').strip().lower()
-            if _get_setting('misp_push_enabled', 'false').lower() == 'true' and username.lower() != misp_sync_user:
-                url = _get_setting('misp_url', '').strip()
-                api_key = _get_setting('misp_api_key', '').strip()
-                if url and api_key:
-                    verify_ssl = _get_setting('misp_verify_ssl', 'false').lower() == 'true'
-                    include_comment = _get_setting('misp_push_include_comment', 'true').lower() == 'true'
-                    event_id_str = _get_setting('misp_push_default_event_id', '').strip()
-                    event_id = int(event_id_str) if event_id_str.isdigit() else None
-                    from utils.misp_push import push_ioc_to_misp
-                    cmt = (sanitize_comment(comment) or '').strip() if comment else ''
-                    ok, msg = push_ioc_to_misp(
-                        ioc_type, value, cmt or None,
-                        event_id=event_id, url=url, api_key=api_key, verify_ssl=verify_ssl,
-                        include_comment=include_comment,
-                    )
-                    if not ok:
-                        logging.warning('MISP push after submit_ioc failed: %s', msg)
-                        try:
-                            from utils.integration_retry import enqueue_integration_retry, integration_is_retriable_failure
-
-                            if integration_is_retriable_failure(msg):
-                                enqueue_integration_retry(
-                                    'misp_push',
-                                    {'action': 'create', 'type': ioc_type, 'value': value, 'comment': cmt or None},
-                                    msg,
-                                    get_setting=_get_setting,
-                                )
-                        except Exception:
-                            logging.exception('MISP push enqueue retry failed')
-        except Exception as misp_err:
-            logging.warning('MISP push after submit_ioc failed: %s', misp_err)
-        try:
-            _schedule_ioc_push_from_submission(
-                ioc_type=ioc_type,
-                value=value,
-                analyst=username,
-                ticket_id=ticket_id,
-                comment=sanitize_comment(comment) if comment else None,
-                expiration_date=exp_date,
-                campaign_id=campaign_id,
-                tags_json=tags_json,
-                submission_method='single',
-                user_id=user_id,
-            )
-        except Exception as push_err:
-            logging.warning('IOC push after submit_ioc failed: %s', push_err)
-        try:
-            _schedule_esa_from_submission(
-                ioc_type=ioc_type,
-                value=value,
-                analyst=username,
-                ticket_id=ticket_id,
-                comment=sanitize_comment(comment) if comment else None,
-                expiration_date=exp_date,
-                campaign_id=campaign_id,
-                tags_json=tags_json,
-                submission_method='single',
-                user_id=user_id,
-            )
-        except Exception as esa_err:
-            logging.warning('ESA dictionary after submit_ioc failed: %s', esa_err)
+        if not needs_approval:
+            published_row = IOC.query.filter(
+                IOC.type == ioc_type,
+                func.lower(IOC.value) == value.strip().lower(),
+            ).first()
+            if published_row:
+                from utils.ioc_publish import publish_ioc_row
+                publish_ioc_row(published_row, get_setting=_get_setting, audit_log=audit_log)
         refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
         refresh_champ_score_for_user(user_id)
-        response = {'success': True, 'message': f'{ioc_type} IOC submitted successfully'}
+        if needs_approval:
+            response = {
+                'success': True,
+                'message': f'{ioc_type} IOC submitted and pending admin approval before distribution',
+                'pending_approval': True,
+            }
+        else:
+            response = {'success': True, 'message': f'{ioc_type} IOC submitted successfully'}
         if was_changed:
             response['auto_corrected'] = True
         if warnings:
@@ -1123,11 +1054,13 @@ def ingest_ioc():
         apply_ioc_submission_to_existing_row,
         _create_ioc, _compute_rare_find_fields,
         _resolve_analyst_to_user, _log_ioc_history,
+        _get_setting,
     ) = _from_app(
         '_commit_with_retry', 'audit_log', 'check_allowlist', 'calculate_expiration_date', 'check_ioc_exists',
         'apply_ioc_submission_to_existing_row',
         '_create_ioc', '_compute_rare_find_fields',
         '_resolve_analyst_to_user', '_log_ioc_history',
+        '_get_setting',
     )
     try:
         data = request.get_json()
@@ -1191,6 +1124,10 @@ def ingest_ioc():
                 )
                 return jsonify({'success': False, 'message': 'Invalid expiration date format. Use YYYY-MM-DD or "Permanent"'}), 400
         rare = _compute_rare_find_fields(ioc_type, value)
+        from utils.workflow_settings import ioc_analyst_requires_approval
+        needs_approval = ioc_analyst_requires_approval(
+            current_user, _get_setting, analyst_username=username,
+        )
         reactivated_ingest = False
         try:
             existing = IOC.query.filter(
@@ -1211,6 +1148,7 @@ def ingest_ioc():
                     user_id=user_id_ingest,
                     tags='[]',
                     rare=rare,
+                    pending_approval=needs_approval,
                 )
                 reactivated_ingest = True
             else:
@@ -1218,6 +1156,7 @@ def ingest_ioc():
                     ioc_type, value, username, 'import',
                     ticket_id=ticket_id, comment=comment,
                     expiration_date=exp_dt, user_id=user_id_ingest, rare=rare,
+                    pending_approval=needs_approval,
                 ))
             _commit_with_retry()
             entered_by = current_user.username if (current_user and current_user.is_authenticated) else 'API'
@@ -1233,59 +1172,31 @@ def ingest_ioc():
             _commit_with_retry()
             cmt = (comment or '').strip()[:80]
             audit_log('IOC_INGEST', f'type={ioc_type} value={value[:80]} comment="{cmt}" analyst={username}')
-            if ioc_type == 'Hash':
-                try:
-                    _get_setting = _from_app('_get_setting')[0]
-                    if _get_setting('dxl_enabled', 'false').lower() == 'true':
-                        config_path = _get_setting('dxl_config_path', '').strip()
-                        if config_path:
-                            from utils.dxl_tie import push_hash_to_tie
-                            push_hash_to_tie(config_path, value, audit_log)
-                except Exception as dxl_err:
-                    logging.warning('DXL push after ingest_ioc failed: %s', dxl_err)
+            if not needs_approval:
+                published_row = existing if existing else IOC.query.filter(
+                    IOC.type == ioc_type,
+                    func.lower(IOC.value) == value.strip().lower(),
+                ).first()
+                if published_row:
+                    from utils.ioc_publish import publish_ioc_row
+                    publish_ioc_row(published_row, get_setting=_get_setting, audit_log=audit_log)
             try:
                 from utils.integration_telemetry import record_api_ioc_ingest
                 record_api_ioc_ingest()
             except Exception:
                 pass
-            try:
-                _schedule_ioc_push_from_submission(
-                    ioc_type=ioc_type,
-                    value=value,
-                    analyst=username,
-                    ticket_id=ticket_id,
-                    comment=comment if comment else None,
-                    expiration_date=exp_dt,
-                    campaign_id=None,
-                    tags_json='[]',
-                    submission_method='import',
-                    user_id=user_id_ingest,
-                )
-            except Exception as push_err:
-                logging.warning('IOC push after ingest_ioc failed: %s', push_err)
-            try:
-                _schedule_esa_from_submission(
-                    ioc_type=ioc_type,
-                    value=value,
-                    analyst=username,
-                    ticket_id=ticket_id,
-                    comment=comment if comment else None,
-                    expiration_date=exp_dt,
-                    campaign_id=None,
-                    tags_json='[]',
-                    submission_method='import',
-                    user_id=user_id_ingest,
-                )
-            except Exception as esa_err:
-                logging.warning('ESA dictionary after ingest_ioc failed: %s', esa_err)
             if user_id_ingest:
                 refresh_champ_score_for_user = _from_app('refresh_champ_score_for_user')[0]
                 refresh_champ_score_for_user(user_id_ingest)
+            msg = f'{ioc_type} IOC ingested successfully'
+            if needs_approval:
+                msg = f'{ioc_type} IOC ingested and pending admin approval before distribution'
             return jsonify({
                 'success': True,
-                'message': f'{ioc_type} IOC ingested successfully',
+                'message': msg,
                 'ioc': value,
-                'type': ioc_type
+                'type': ioc_type,
+                'pending_approval': needs_approval,
             }), 201
         except IntegrityError:
             db.session.rollback()
@@ -2105,6 +2016,8 @@ def submit_staging():
         batch_id = new_audit_batch_id()
         sanity_mode = _get_setting('sanity_check_mode', 'block_non_admin')
         is_admin = getattr(current_user, 'is_admin', False)
+        from utils.workflow_settings import ioc_analyst_requires_approval
+        needs_approval = ioc_analyst_requires_approval(current_user, _get_setting)
         data = request.get_json() or {}
         items = data.get('items') or []
         ttl = (data.get('ttl') or 'Permanent').strip()
@@ -2224,6 +2137,7 @@ def submit_staging():
                     user_id=user_id,
                     tags=item_tags_json,
                     rare=rare,
+                    pending_approval=needs_approval if not was_active_before else existing.pending_approval,
                 )
                 total_updated += 1
                 summary[ioc_type] = summary.get(ioc_type, {'updated': 0, 'new': 0})
@@ -2245,7 +2159,7 @@ def submit_staging():
                     _log_sanity_warning_history(
                         _log_ioc_history, ioc_type, ioc_value, get_sanity_warnings(ioc_value, ioc_type)
                     )
-                    if analyst.lower() != misp_sync_user:
+                    if not needs_approval and analyst.lower() != misp_sync_user:
                         _append_ioc_push_context_if_reactivated(
                             new_iocs_for_push,
                             was_active_before,
@@ -2269,6 +2183,7 @@ def submit_staging():
                     expiration_date=exp_date, created_at=created_at,
                     campaign_id=campaign_id, user_id=user_id, rare=rare,
                     tags=item_tags_json,
+                    pending_approval=needs_approval,
                 ))
                 payload_hist = _ioc_created_history_payload(
                     entered_by=current_user.username or '',
@@ -2282,10 +2197,10 @@ def submit_staging():
                 _log_ioc_history(ioc_type, ioc_value, 'created', analyst, payload_hist)
                 _log_sanity_warning_history(_log_ioc_history, ioc_type, ioc_value, get_sanity_warnings(ioc_value, ioc_type))
                 total_new += 1
-                if ioc_type == 'Hash':
+                if ioc_type == 'Hash' and not needs_approval:
                     new_hashes_for_dxl.append(ioc_value)
                 # Only push to MISP if analyst is not the MISP sync user (avoid loop: MISP → sync → push back)
-                if analyst.lower() != misp_sync_user:
+                if not needs_approval and analyst.lower() != misp_sync_user:
                     new_iocs_for_misp.append((ioc_type, ioc_value, comment or ''))
                     new_iocs_for_push.append(ioc_context_from_submission(
                         ioc_type=ioc_type,
@@ -2309,51 +2224,51 @@ def submit_staging():
             db.session.rollback()
             raise
 
-        # MISP push: send new IOCs to MISP when enabled (SOC uses ZIoCHub but feeds MISP)
-        try:
-            _get_setting = _from_app('_get_setting')[0]
-            if _get_setting('misp_push_enabled', 'false').lower() == 'true' and new_iocs_for_misp:
-                url = _get_setting('misp_url', '').strip()
-                api_key = _get_setting('misp_api_key', '').strip()
-                if url and api_key:
-                    verify_ssl = _get_setting('misp_verify_ssl', 'false').lower() == 'true'
-                    include_comment = _get_setting('misp_push_include_comment', 'true').lower() == 'true'
-                    event_id_str = _get_setting('misp_push_default_event_id', '').strip()
-                    event_id = int(event_id_str) if event_id_str.isdigit() else None
-                    from utils.misp_push import push_ioc_to_misp
-                    for ioc_type, ioc_value, comment in new_iocs_for_misp:
-                        ok, msg = push_ioc_to_misp(
-                            ioc_type, ioc_value, comment or None,
-                            event_id=event_id, url=url, api_key=api_key, verify_ssl=verify_ssl,
-                            include_comment=include_comment,
-                        )
-                        if not ok:
-                            logging.warning('MISP push after staging failed for %s %s: %s', ioc_type, ioc_value[:50], msg)
-                        elif event_id is None:
-                            event_id = int(msg.split()[-1]) if msg.split()[-1].isdigit() else event_id
-        except Exception as misp_err:
-            logging.warning('MISP push after submit_staging failed: %s', misp_err)
+        # Outbound distribution (skipped when analyst approval workflow is active)
+        if not needs_approval:
+            try:
+                _get_setting = _from_app('_get_setting')[0]
+                if _get_setting('misp_push_enabled', 'false').lower() == 'true' and new_iocs_for_misp:
+                    url = _get_setting('misp_url', '').strip()
+                    api_key = _get_setting('misp_api_key', '').strip()
+                    if url and api_key:
+                        verify_ssl = _get_setting('misp_verify_ssl', 'false').lower() == 'true'
+                        include_comment = _get_setting('misp_push_include_comment', 'true').lower() == 'true'
+                        event_id_str = _get_setting('misp_push_default_event_id', '').strip()
+                        event_id = int(event_id_str) if event_id_str.isdigit() else None
+                        from utils.misp_push import push_ioc_to_misp
+                        for ioc_type, ioc_value, comment in new_iocs_for_misp:
+                            ok, msg = push_ioc_to_misp(
+                                ioc_type, ioc_value, comment or None,
+                                event_id=event_id, url=url, api_key=api_key, verify_ssl=verify_ssl,
+                                include_comment=include_comment,
+                            )
+                            if not ok:
+                                logging.warning('MISP push after staging failed for %s %s: %s', ioc_type, ioc_value[:50], msg)
+                            elif event_id is None:
+                                event_id = int(msg.split()[-1]) if msg.split()[-1].isdigit() else event_id
+            except Exception as misp_err:
+                logging.warning('MISP push after submit_staging failed: %s', misp_err)
 
-        try:
-            _schedule_ioc_push_batch(new_iocs_for_push)
-        except Exception as ioc_push_err:
-            logging.warning('IOC push after submit_staging failed: %s', ioc_push_err)
-        try:
-            _schedule_esa_batch(new_iocs_for_push)
-        except Exception as esa_err:
-            logging.warning('ESA dictionary after submit_staging failed: %s', esa_err)
+            try:
+                _schedule_ioc_push_batch(new_iocs_for_push)
+            except Exception as ioc_push_err:
+                logging.warning('IOC push after submit_staging failed: %s', ioc_push_err)
+            try:
+                _schedule_esa_batch(new_iocs_for_push)
+            except Exception as esa_err:
+                logging.warning('ESA dictionary after submit_staging failed: %s', esa_err)
 
-        # DXL: push new hashes to TIE if enabled
-        try:
-            _get_setting = _from_app('_get_setting')[0]
-            if _get_setting('dxl_enabled', 'false').lower() == 'true' and new_hashes_for_dxl:
-                config_path = _get_setting('dxl_config_path', '').strip()
-                if config_path:
-                    from utils.dxl_tie import push_hash_to_tie
-                    for hash_value in new_hashes_for_dxl:
-                        push_hash_to_tie(config_path, hash_value, audit_log)
-        except Exception as dxl_err:
-            logging.warning('DXL push after submit_staging failed: %s', dxl_err)
+            try:
+                _get_setting = _from_app('_get_setting')[0]
+                if _get_setting('dxl_enabled', 'false').lower() == 'true' and new_hashes_for_dxl:
+                    config_path = _get_setting('dxl_config_path', '').strip()
+                    if config_path:
+                        from utils.dxl_tie import push_hash_to_tie
+                        for hash_value in new_hashes_for_dxl:
+                            push_hash_to_tie(config_path, hash_value, audit_log)
+            except Exception as dxl_err:
+                logging.warning('DXL push after submit_staging failed: %s', dxl_err)
 
         summary_parts = []
         for ioc_type, counts in summary.items():
@@ -2364,8 +2279,10 @@ def submit_staging():
                 parts.append(f"{counts['updated']} updated")
             if parts:
                 summary_parts.append(f"{ioc_type}s ({', '.join(parts)})")
-        message = f"Imported: {', '.join(summary_parts)}" if summary_parts else "No items imported"
         imported = total_new + total_updated
+        message = f"Imported: {', '.join(summary_parts)}" if summary_parts else "No items imported"
+        if needs_approval and imported > 0:
+            message += ' (pending admin approval before distribution)'
         severity = 4 if rows_requested > 0 and imported == 0 else None
         audit_log_event(
             'IOC_STAGING_SUBMIT',
@@ -2386,6 +2303,8 @@ def submit_staging():
         except Exception as refresh_err:
             logging.warning('submit_staging: refresh_champ_score failed (data saved): %s', refresh_err)
         resp = {'success': True, 'message': message, 'summary': summary, 'total': total_new + total_updated}
+        if needs_approval:
+            resp['pending_approval'] = True
         if total_new > 0:
             try:
                 resp.update(_detect_champs_changes(champs_before, current_user.id, current_user.username.lower()))

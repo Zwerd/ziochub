@@ -54,6 +54,7 @@ VENDOR_CATALOG: list[dict[str, str]] = [
     {'id': 'mcafee', 'label': 'OpenDXL / Trellix TIE'},
     {'id': 'microsoft', 'label': 'Microsoft'},
     {'id': 'misp', 'label': 'MISP'},
+    {'id': 'netskope', 'label': 'Netskope'},
     {'id': 'palo_alto', 'label': 'Palo Alto Networks'},
     {'id': 'radware', 'label': 'Radware'},
     {'id': 'rapid7', 'label': 'Rapid7'},
@@ -342,6 +343,7 @@ def build_feed_client_lookup_by_ip() -> dict[str, dict[str, Any]]:
 _INTEGRATION_VENDOR_MAP: dict[str, str] = {
     'cortex_xdr': 'cortex',
     'google_secops': 'google_secops',
+    'netskope': 'netskope',
     'cisco_esa': 'cisco',
     'misp_push': 'misp',
     'misp_pull': 'misp',
@@ -356,6 +358,7 @@ _INTEGRATION_VENDOR_MAP: dict[str, str] = {
 INTEGRATION_SYSTEM_LABELS: dict[str, str] = {
     'cortex_xdr': 'Vendor integration',
     'google_secops': 'Vendor integration',
+    'netskope': 'Vendor integration',
     'cisco_esa': 'Vendor integration',
     'misp_push': 'Vendor integration',
     'misp_pull': 'Inbound pull',
@@ -369,6 +372,7 @@ INTEGRATION_SYSTEM_LABELS: dict[str, str] = {
 INTEGRATION_VENDOR_LABELS: dict[str, str] = {
     'cortex_xdr': 'Cortex XDR',
     'google_secops': 'Google SecOps',
+    'netskope': 'Netskope',
     'cisco_esa': 'Cisco ESA',
     'misp_push': 'MISP',
     'misp_pull': 'MISP',
@@ -406,7 +410,7 @@ def integration_icon_url(integration_id: str) -> str:
 def integration_icons_for_admin() -> dict[str, str]:
     """Resolved icon URLs for Integrations sub-tabs (Push IOC / Push YARA / Import)."""
     ids = (
-        'cortex_xdr', 'google_secops', 'cisco_esa', 'misp_push', 'misp_pull', 'opendxl',
+        'cortex_xdr', 'google_secops', 'netskope', 'cisco_esa', 'misp_push', 'misp_pull', 'opendxl',
         'trellix', 'trellix_ex', 'trellix_cms', 'trellix_nx',
     )
     return {iid: integration_icon_url(iid) for iid in ids}

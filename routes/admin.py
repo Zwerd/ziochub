@@ -63,7 +63,7 @@ SCORING_METHODS = [
     {'id': '5', 'name': 'Time Decay', 'description': 'Recent activity counts full; older activity is discounted (e.g. last 7 days 100%, 8-30 days 50%, 31-90 days 25%). Emphasizes current contribution.'},
     {'id': '6', 'name': 'Quality', 'description': 'Base points plus bonus for comment, tags, campaign, ticket ID, and TTL. Rewards rich metadata and curation over bulk submission.'},
     {'id': '7', 'name': 'Goal-Based', 'description': 'Points (or contribution share) count mainly when contributing to an active team goal. Aligns scoring with current team targets.'},
-    {'id': '8', 'name': 'Smart (Effort)', 'description': 'Rewards genuine effort over bulk ingestion. IOCs: single submit = 2 pts base, bulk (CSV/TXT/Paste) = 1 pt base. +1 for meaningful comment (unique per batch; duplicated comments ignored). +1 for campaign link. Range: 1-4 pts/IOC. YARA: 10 base pts on upload; full quality score (10-50) unlocks only after admin approval. Badges decay fast (1-7 days of inactivity).'},
+    {'id': '8', 'name': 'Smart (Effort)', 'description': 'Rewards genuine analyst effort over bulk ingestion. IOCs: single=2 pts base, bulk=1 pt base (grouped by metadata). Bonuses for comment, tags, campaign. YARA: 10 pts on upload, 10-50 after approval. Cleanup: IOC delete 1-2 pts (expired/other=2), YARA delete 1-2, campaign delete +1. Notes, tag suggest, campaign link/create scored. Badges decay fast (1-7 days).'},
 ]
 
 
@@ -79,7 +79,7 @@ def _from_app(*names):
 # - allowed_tags (JSON list)
 # - tags_restricted_enabled (true/false)
 # - tags_allow_suggest (true/false)
-# - tag_suggestions (JSON list of {id, tag, suggested_by, suggested_at})
+# - tag_suggestions (JSON list of {id, tag, suggested_by, suggested_by_user_id, suggested_at})
 # ---------------------------------------------------------------------------
 
 
@@ -98,13 +98,27 @@ def _save_tag_suggestions(_set_setting, items: list[dict]) -> None:
     _set_setting('tag_suggestions', json.dumps(items or [], ensure_ascii=False))
 
 
+def _set_settings_batch(settings: dict) -> None:
+    """Persist multiple system settings in one commit."""
+    from models import SystemSetting
+
+    _commit_with_retry, = _from_app('_commit_with_retry')
+    for key, value in settings.items():
+        s = SystemSetting.query.filter_by(key=key).first()
+        if s:
+            s.value = value
+        else:
+            db.session.add(SystemSetting(key=key, value=value))
+    _commit_with_retry()
+
+
 @bp.route('/inbox', methods=['GET'])
 @admin_required
 def admin_inbox():
-    """Admin inbox snapshot: pending YARA approvals + pending tag suggestions."""
+    """Admin inbox snapshot: pending YARA + IOC approvals + pending tag suggestions."""
     _api_ok, _api_error, _get_setting = _from_app('_api_ok', '_api_error', '_get_setting')
     try:
-        from models import YaraRule
+        from models import YaraRule, IOC
         from sqlalchemy import func
         # YARA pending
         yara_pending_count = YaraRule.query.filter_by(status='pending').count()
@@ -124,22 +138,140 @@ def admin_inbox():
             'comment': (r.comment or '')[:200],
         } for r in yara_pending_rows]
 
+        ioc_pending_count = IOC.query.filter_by(pending_approval=True, revoked=False).count()
+        ioc_pending_rows = (
+            IOC.query.filter_by(pending_approval=True, revoked=False)
+            .order_by(IOC.created_at.desc())
+            .limit(20)
+            .all()
+        )
+        ioc_pending = [{
+            'type': r.type,
+            'value': r.value,
+            'analyst': r.analyst or '',
+            'created_at': iso_utc(r.created_at) or '',
+            'ticket_id': r.ticket_id or '',
+            'comment': (r.comment or '')[:200],
+        } for r in ioc_pending_rows]
+
         # Tags suggestions
         suggestions = _load_tag_suggestions(_get_setting)
         suggestions_sorted = sorted(suggestions, key=lambda x: (x.get('suggested_at') or ''), reverse=True)
         tag_suggestions_count = len(suggestions_sorted)
         tag_suggestions = suggestions_sorted[:20]
 
-        total = int(yara_pending_count) + int(tag_suggestions_count)
+        total = int(yara_pending_count) + int(ioc_pending_count) + int(tag_suggestions_count)
         return _api_ok(data={
             'total_pending': total,
             'yara_pending_count': yara_pending_count,
             'yara_pending': yara_pending,
+            'ioc_pending_count': ioc_pending_count,
+            'ioc_pending': ioc_pending,
             'tag_suggestions_count': tag_suggestions_count,
             'tag_suggestions': tag_suggestions,
         })
     except Exception as e:
         logging.exception('admin_inbox failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/ioc/approve', methods=['POST'])
+@admin_required
+def admin_ioc_approve():
+    """Approve a pending IOC — publish to feeds and outbound integrations."""
+    _api_ok, _api_error, _commit_with_retry, audit_log, _get_setting = _from_app(
+        '_api_ok', '_api_error', '_commit_with_retry', 'audit_log', '_get_setting',
+    )
+    try:
+        from models import IOC, _utcnow
+        from sqlalchemy import func
+        from utils.ioc_publish import publish_ioc_row
+        from utils.user_notifications import notify_ioc_outcome
+
+        data = request.get_json(silent=True) or {}
+        ioc_type = (data.get('type') or '').strip()
+        value = (data.get('value') or '').strip()
+        if not ioc_type or not value:
+            return _api_error('type and value are required', 400)
+        row = IOC.query.filter(
+            IOC.type == ioc_type,
+            func.lower(IOC.value) == value.lower(),
+            IOC.pending_approval.is_(True),
+        ).first()
+        if not row:
+            return _api_error('IOC not found or not pending approval', 404)
+        row.pending_approval = False
+        row.modified_at = _utcnow()
+        _commit_with_retry()
+        audit_log('IOC_APPROVE', f'type={ioc_type} value={value[:80]} by={current_user.username}')
+        publish_ioc_row(row, get_setting=_get_setting, audit_log=audit_log)
+        if row.user_id:
+            try:
+                notify_ioc_outcome(row.user_id, row, 'approved')
+                _commit_with_retry()
+            except Exception as e:
+                logging.warning('IOC approve: notify user failed: %s', e)
+                db.session.rollback()
+        return _api_ok(message=f'Approved {ioc_type} IOC for distribution.')
+    except Exception as e:
+        db.session.rollback()
+        logging.exception('admin_ioc_approve failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/ioc/reject', methods=['POST'])
+@admin_required
+def admin_ioc_reject():
+    """Reject a pending IOC — remove row (not distributed)."""
+    _api_ok, _api_error, _commit_with_retry, audit_log, _log_ioc_history = _from_app(
+        '_api_ok', '_api_error', '_commit_with_retry', 'audit_log', '_log_ioc_history',
+    )
+    try:
+        from models import IOC, _utcnow
+        from sqlalchemy import func
+        from utils.refanger import sanitize_comment
+        from utils.user_notifications import notify_ioc_outcome
+
+        data = request.get_json(silent=True) or {}
+        ioc_type = (data.get('type') or '').strip()
+        value = (data.get('value') or '').strip()
+        reason = sanitize_comment((data.get('reason') or '').strip()) or None
+        if not ioc_type or not value:
+            return _api_error('type and value are required', 400)
+        row = IOC.query.filter(
+            IOC.type == ioc_type,
+            func.lower(IOC.value) == value.lower(),
+            IOC.pending_approval.is_(True),
+        ).first()
+        if not row:
+            return _api_error('IOC not found or not pending approval', 404)
+        owner_id = row.user_id
+        analyst = row.analyst
+        snap_type, snap_value = row.type, row.value
+        _log_ioc_history(
+            ioc_type, value, 'deleted', current_user.username,
+            {'reason': reason or 'Rejected by admin', 'rejected_pending': True},
+        )
+        db.session.delete(row)
+        _commit_with_retry()
+        audit_log(
+            'IOC_REJECT',
+            f'type={ioc_type} value={value[:80]} by={current_user.username} reason="{ (reason or "")[:120] }"',
+        )
+        if owner_id:
+            try:
+                notify_ioc_outcome(
+                    owner_id, row, 'rejected', reason=reason,
+                    ioc_type=snap_type, ioc_value=snap_value, analyst=analyst,
+                )
+                _commit_with_retry()
+            except Exception as e:
+                logging.warning('IOC reject: notify user failed: %s', e)
+                db.session.rollback()
+        return _api_ok(message=f'Rejected pending {ioc_type} IOC.')
+    except Exception as e:
+        db.session.rollback()
+        logging.exception('admin_ioc_reject failed')
         return _api_error(str(e), 500)
 
 
@@ -279,18 +411,19 @@ def admin_tags_suggestions_approve():
                         allowed_set.add(tag_norm)
                     approved.append(tag_norm or tag)
                 try:
-                    from utils.user_notifications import notify_tag_outcome, resolve_user_id
-                    uid = resolve_user_id(item.get('suggested_by') or '')
+                    from utils.user_notifications import notify_tag_outcome, tag_suggestion_user_id
+                    uid = tag_suggestion_user_id(item)
                     if uid:
                         notify_tag_outcome(uid, tag_norm or tag, 'approved')
                 except Exception:
                     logging.exception('admin_tags_suggestions_approve: notify failed')
             else:
                 keep.append(item)
-        _set_setting('allowed_tags', json.dumps(allowed, ensure_ascii=False))
-        _save_tag_suggestions(_set_setting, keep)
-        _commit_with_retry, = _from_app('_commit_with_retry')
-        _commit_with_retry()
+        import json as _json
+        _set_settings_batch({
+            'allowed_tags': _json.dumps(allowed, ensure_ascii=False),
+            'tag_suggestions': _json.dumps(keep, ensure_ascii=False),
+        })
         audit_log('admin_tags_approve', f'by={current_user.username} count={len(approved)}')
         return _api_ok(data={'approved': approved, 'allowed_tags': allowed}, message='Approved')
     except Exception as e:
@@ -321,15 +454,16 @@ def admin_tags_suggestions_reject():
         keep = [item for item in suggestions if str(item.get('id') or '').strip() not in ids]
         for item in rejected_items:
             try:
-                from utils.user_notifications import notify_tag_outcome, resolve_user_id
-                uid = resolve_user_id(item.get('suggested_by') or '')
+                from utils.user_notifications import notify_tag_outcome, tag_suggestion_user_id
+                uid = tag_suggestion_user_id(item)
                 if uid:
                     notify_tag_outcome(uid, item.get('tag') or '', 'rejected')
             except Exception:
                 logging.exception('admin_tags_suggestions_reject: notify failed')
-        _save_tag_suggestions(_set_setting, keep)
-        _commit_with_retry, = _from_app('_commit_with_retry')
-        _commit_with_retry()
+        import json as _json
+        _set_settings_batch({
+            'tag_suggestions': _json.dumps(keep, ensure_ascii=False),
+        })
         audit_log('admin_tags_reject', f'by={current_user.username} count={len(ids)}')
         return _api_ok(message='Rejected')
     except Exception as e:
@@ -500,6 +634,10 @@ _SETTINGS_DEFAULTS = {
     'trellix_cms_f_type': 'common',
     'trellix_cms_content_type': 'base',
     'sanity_check_mode': 'block_non_admin',
+    # Analyst workflow: false = require admin approval before feeds/push (default)
+    'yara_analyst_auto_publish': 'false',
+    'ioc_analyst_auto_publish': 'false',
+    'champs_tab_enabled': 'true',
     'search_comment_rtl_by_script': 'true',  # In search results: if comment has more Hebrew/Arabic than other text, show RTL
     # Tags governance (admin-controlled taxonomy)
     # - allowed_tags: JSON array of tags (lowercase recommended)
@@ -585,6 +723,20 @@ _SETTINGS_DEFAULTS = {
     'google_secops_credentials_json': '',
     'google_secops_verify_ssl': 'true',
     'google_secops_display_name': '',
+    'netskope_enabled': 'false',
+    'netskope_base_url': '',
+    'netskope_api_token_v2': '',
+    'netskope_api_token_v1': '',
+    'netskope_urllist_id': '',
+    'netskope_hash_list_name': '',
+    'netskope_hash_push_enabled': 'true',
+    'netskope_deploy_on_push': 'true',
+    'netskope_verify_ssl': 'true',
+    'netskope_display_name': '',
+    'netskope_hash_cache_json': '[]',
+    'netskope_retry_enabled': 'true',
+    'netskope_retry_interval_minutes': '15',
+    'netskope_retry_max_attempts': '3',
 }
 
 
@@ -1013,6 +1165,7 @@ def save_settings():
         trellix_ex_keys = ('trellix_ex_enabled',)
         trellix_cms_keys = ('trellix_cms_enabled',)
         sanity_keys = ('sanity_check_mode',)
+        workflow_keys = ('yara_analyst_auto_publish', 'ioc_analyst_auto_publish', 'champs_tab_enabled')
         feed_keys = ('feeds_public_enabled', 'feed_cache_enabled', 'feed_cache_ttl_seconds')
         search_keys = ('search_comment_rtl_by_script', 'gui_display_timezone')
         tags_keys = ('allowed_tags', 'tags_restricted_enabled', 'tags_allow_suggest')
@@ -1025,6 +1178,7 @@ def save_settings():
         integration_retry_keys = (
             'cortex_xdr_retry_enabled', 'cortex_xdr_retry_interval_minutes', 'cortex_xdr_retry_max_attempts',
             'google_secops_retry_enabled', 'google_secops_retry_interval_minutes', 'google_secops_retry_max_attempts',
+            'netskope_retry_enabled', 'netskope_retry_interval_minutes', 'netskope_retry_max_attempts',
             'esa_retry_enabled', 'esa_retry_interval_minutes', 'esa_retry_max_attempts',
             'ioc_http_retry_enabled', 'ioc_http_retry_interval_minutes', 'ioc_http_retry_max_attempts',
             'misp_push_retry_enabled', 'misp_push_retry_interval_minutes', 'misp_push_retry_max_attempts',
@@ -1067,11 +1221,24 @@ def save_settings():
             'google_secops_data_table_id',
             'google_secops_credentials_json',
             'google_secops_verify_ssl',
+            'netskope_enabled',
+            'netskope_display_name',
+            'netskope_base_url',
+            'netskope_api_token_v2',
+            'netskope_api_token_v1',
+            'netskope_urllist_id',
+            'netskope_hash_list_name',
+            'netskope_hash_push_enabled',
+            'netskope_deploy_on_push',
+            'netskope_verify_ssl',
+            'netskope_retry_enabled',
+            'netskope_retry_interval_minutes',
+            'netskope_retry_max_attempts',
         )
         sections = []
         for key in (
             session_keys + ldap_keys + misp_keys + taxii_keys + syslog_keys + dxl_keys + automation_keys + trellix_ex_keys
-            + trellix_cms_keys + sanity_keys + feed_keys + search_keys + tags_keys + ioc_push_keys + esa_keys
+            + trellix_cms_keys + sanity_keys + workflow_keys + feed_keys + search_keys + tags_keys + ioc_push_keys + esa_keys
             + vendor_ioc_keys + integration_retry_keys
         ):
             if key in data:
@@ -1187,6 +1354,11 @@ def save_settings():
                         'cortex_xdr_retry_enabled',
                         'google_secops_enabled',
                         'google_secops_verify_ssl',
+                        'netskope_enabled',
+                        'netskope_verify_ssl',
+                        'netskope_hash_push_enabled',
+                        'netskope_deploy_on_push',
+                        'netskope_retry_enabled',
                     ):
                         _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
                     elif key == 'cortex_xdr_retry_interval_minutes':
@@ -1232,6 +1404,12 @@ def save_settings():
                     elif key == 'cortex_xdr_base_url':
                         from utils.cortex_xdr import sanitize_cortex_base_url
                         _set_setting(key, sanitize_cortex_base_url(str(val)))
+                    elif key == 'netskope_base_url':
+                        from utils.netskope import sanitize_netskope_base_url
+                        _set_setting(key, sanitize_netskope_base_url(str(val)))
+                    elif key in ('netskope_api_token_v2', 'netskope_api_token_v1'):
+                        if str(val).strip():
+                            _set_setting(key, str(val).strip())
                     else:
                         _set_setting(key, str(val).strip())
                 elif key in esa_keys:
@@ -1268,6 +1446,8 @@ def save_settings():
                 elif key == 'taxii_pull_interval':
                     from utils.taxii_sync_runner import normalize_taxii_pull_interval
                     _set_setting(key, str(normalize_taxii_pull_interval(val)))
+                elif key in workflow_keys:
+                    _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
                 else:
                     _set_setting(key, str(val).strip())
                 if key in ldap_keys and 'LDAP' not in sections:
@@ -1292,6 +1472,8 @@ def save_settings():
                     sections.append('Vendor IOC')
                 elif key in sanity_keys and 'Sanity' not in sections:
                     sections.append('Sanity')
+                elif key in workflow_keys and 'Workflow' not in sections:
+                    sections.append('Workflow')
                 elif key in feed_keys and 'Feeds' not in sections:
                     sections.append('Feeds')
                 elif key in search_keys and 'Search' not in sections:
@@ -1837,6 +2019,114 @@ def google_secops_test():
         return jsonify({'success': bool(result.get('success')), **result}), 200
     except Exception as e:
         return _google_secops_test_json_error(e)
+
+
+_NETSKOPE_TEST_SETTING_KEYS = (
+    'netskope_base_url',
+    'netskope_api_token_v2',
+    'netskope_api_token_v1',
+    'netskope_urllist_id',
+    'netskope_hash_list_name',
+    'netskope_hash_push_enabled',
+    'netskope_deploy_on_push',
+    'netskope_verify_ssl',
+)
+
+
+def _merge_netskope_test_settings(saved: dict, override) -> dict:
+    merged = dict(saved)
+    if not isinstance(override, dict):
+        return merged
+    for key in _NETSKOPE_TEST_SETTING_KEYS:
+        if key not in override:
+            continue
+        val = override[key]
+        if val is None:
+            continue
+        s = str(val).strip()
+        if key in ('netskope_api_token_v2', 'netskope_api_token_v1') and not s:
+            continue
+        if key == 'netskope_base_url':
+            from utils.netskope import sanitize_netskope_base_url
+            s = sanitize_netskope_base_url(s)
+        elif key in ('netskope_hash_push_enabled', 'netskope_deploy_on_push', 'netskope_verify_ssl'):
+            merged[key] = 'true' if s.lower() in ('true', '1', 'yes') else 'false'
+            continue
+        merged[key] = s
+    return merged
+
+
+def _netskope_settings_from_db(_get_setting) -> dict:
+    keys = (
+        'netskope_enabled',
+        'netskope_base_url',
+        'netskope_api_token_v2',
+        'netskope_api_token_v1',
+        'netskope_urllist_id',
+        'netskope_hash_list_name',
+        'netskope_hash_push_enabled',
+        'netskope_deploy_on_push',
+        'netskope_verify_ssl',
+    )
+    return {k: (_get_setting(k, '') or '') for k in keys}
+
+
+def _netskope_test_json_error(exc: Exception):
+    logging.exception('api_admin_netskope_test failed')
+    err_msg = str(exc).strip() or type(exc).__name__
+    return jsonify({
+        'success': False,
+        'message': err_msg,
+        'error_type': type(exc).__name__,
+        'steps': [{'step': 'server', 'status': 'fail', 'message': err_msg}],
+    }), 200
+
+
+@bp.route('/netskope/ping', methods=['GET'])
+@admin_required
+def netskope_ping():
+    try:
+        from utils import netskope as ns
+        return jsonify({'success': True, 'module': getattr(ns, '__file__', '?'), 'message': 'netskope module loaded'}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 200
+
+
+@bp.route('/netskope/test', methods=['POST'])
+@admin_required
+def netskope_test():
+    try:
+        _get_setting, = _from_app('_get_setting')
+        from utils.netskope import netskope_test_connection
+
+        data = request.get_json(silent=True) or {}
+        ignore_ssl = data.get('ignore_ssl')
+        roundtrip = data.get('roundtrip') in (True, 'true', '1', 1, 'yes')
+        settings = _merge_netskope_test_settings(
+            _netskope_settings_from_db(_get_setting),
+            data.get('settings'),
+        )
+        if ignore_ssl is not None:
+            verify_ssl = not (str(ignore_ssl).lower() in ('true', '1', 'yes'))
+        else:
+            verify_ssl = (settings.get('netskope_verify_ssl', 'true') or 'true').lower() in ('true', '1', 'yes')
+
+        result = netskope_test_connection(settings, verify_ssl=verify_ssl, roundtrip=roundtrip)
+        if not isinstance(result, dict):
+            raise TypeError(f'netskope_test_connection returned {type(result).__name__}, expected dict')
+
+        try:
+            audit_log, = _from_app('audit_log')
+            audit_log(
+                'admin_netskope_test',
+                f'by={current_user.username} ok={result.get("success")} roundtrip={roundtrip}',
+            )
+        except Exception:
+            logging.exception('audit_log admin_netskope_test failed')
+
+        return jsonify({'success': bool(result.get('success')), **result}), 200
+    except Exception as e:
+        return _netskope_test_json_error(e)
 
 
 @bp.route('/trellix-ex/test', methods=['POST'])
@@ -2913,6 +3203,13 @@ def _build_admin_settings_form_context():
         'google_secops_data_table_id': _get_setting('google_secops_data_table_id', ''),
         'google_secops_credentials_json': _get_setting('google_secops_credentials_json', ''),
         'google_secops_verify_ssl': _get_setting('google_secops_verify_ssl', 'true'),
+        'tags_restricted_enabled': (_get_setting('tags_restricted_enabled', 'false') or 'false').lower() == 'true',
+        'tags_allow_suggest': (_get_setting('tags_allow_suggest', 'true') or 'true').lower() != 'false',
+        'allowed_tags_list': parse_allowed_tags_setting(_get_setting('allowed_tags', '[]')),
+        'allowed_tags_text': '\n'.join(parse_allowed_tags_setting(_get_setting('allowed_tags', '[]'))),
+        'yara_analyst_auto_publish': (_get_setting('yara_analyst_auto_publish', 'false') or 'false').lower() == 'true',
+        'ioc_analyst_auto_publish': (_get_setting('ioc_analyst_auto_publish', 'false') or 'false').lower() == 'true',
+        'champs_tab_enabled': (_get_setting('champs_tab_enabled', 'true') or 'true').lower() != 'false',
     }
 
 

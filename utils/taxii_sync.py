@@ -317,17 +317,27 @@ def sync_to_db(
     taxii_username: str,
     default_ttl_days: int | None = None,
     geoip_reader=None,
+    *,
+    ioc_import_mode: str = 'pending',
+    get_setting_fn=None,
 ) -> dict:
     from extensions import db
     from models import IOC, IocHistory
     from sqlalchemy import func
+    from utils.ioc_import_mode import normalize_ioc_import_mode
+
+    mode = normalize_ioc_import_mode(ioc_import_mode, 'pending')
 
     added = 0
     skipped = 0
     errors = 0
     invalid = 0
+    blocked = 0
+    pending_added = 0
     added_samples: list[dict] = []
+    pending_samples: list[dict] = []
     invalid_samples: list[dict] = []
+    publish_keys: list[tuple[str, str]] = []
 
     exp_date = None
     if default_ttl_days and default_ttl_days > 0:
@@ -354,6 +364,12 @@ def sync_to_db(
             skipped += 1
             continue
 
+        if mode == 'block':
+            blocked += 1
+            continue
+
+        pending_approval = mode == 'pending'
+
         comment_parts = []
         if name:
             comment_parts.append(f'[TAXII] {name}')
@@ -371,6 +387,8 @@ def sync_to_db(
                 comment=comment[:1000],
                 expiration_date=exp_date,
                 user_id=taxii_user_id,
+                submission_method='import',
+                pending_approval=pending_approval,
                 country_code=agg.get('country_code'),
                 tld=agg.get('tld'),
                 email_domain=agg.get('email_domain'),
@@ -381,11 +399,21 @@ def sync_to_db(
                 ioc_value=value,
                 event_type='created',
                 username=taxii_username,
-                payload=json.dumps({'source': 'taxii', 'stix_id': stix_id}),
+                payload=json.dumps({
+                    'source': 'taxii',
+                    'stix_id': stix_id,
+                    'pending_approval': pending_approval,
+                }),
             ))
             added += 1
-            if len(added_samples) < 100:
-                added_samples.append({'type': tg_type, 'value': value})
+            if pending_approval:
+                pending_added += 1
+                if len(pending_samples) < 100:
+                    pending_samples.append({'type': tg_type, 'value': value})
+            else:
+                publish_keys.append((tg_type, value))
+                if len(added_samples) < 100:
+                    added_samples.append({'type': tg_type, 'value': value})
         except Exception as e:
             _log.warning('TAXII sync insert error for %s: %s', value[:80], e)
             errors += 1
@@ -398,12 +426,34 @@ def sync_to_db(
             _log.exception('TAXII sync commit failed: %s', e)
             return {
                 'added': 0, 'skipped': skipped, 'errors': added + errors, 'error': str(e),
-                'added_samples': [], 'invalid_samples': [],
+                'blocked': blocked, 'pending_added': 0,
+                'added_samples': [], 'pending_samples': [], 'invalid_samples': invalid_samples,
             }
 
+        if mode == 'auto' and publish_keys and get_setting_fn:
+            try:
+                from utils.ioc_publish import publish_ioc_row
+                for tg_type, value in publish_keys:
+                    pub_row = IOC.query.filter(
+                        IOC.type == tg_type,
+                        func.lower(IOC.value) == value.lower(),
+                    ).first()
+                    if pub_row and not pub_row.pending_approval:
+                        publish_ioc_row(pub_row, get_setting=get_setting_fn)
+            except Exception as e:
+                _log.warning('TAXII IOC publish after sync failed: %s', e)
+
     return {
-        'added': added, 'skipped': skipped, 'errors': errors, 'invalid': invalid,
-        'added_samples': added_samples, 'invalid_samples': invalid_samples,
+        'added': added,
+        'skipped': skipped,
+        'errors': errors,
+        'invalid': invalid,
+        'blocked': blocked,
+        'pending_added': pending_added,
+        'added_samples': added_samples,
+        'pending_samples': pending_samples,
+        'invalid_samples': invalid_samples,
+        'ioc_import_mode': mode,
     }
 
 
@@ -530,18 +580,32 @@ def run_sync(settings: dict, log_lines: list | None = None) -> dict:
             return {'success': False, 'error': err, 'fetched': 0}
         log('Fetch indicators from TAXII', 'ok', f'Fetched {len(indicators)} indicators')
 
+        ioc_mode = settings.get('taxii_ioc_import_mode') or 'pending'
+        log('Import policy', 'ok', f'IOC={ioc_mode}')
+
         geoip_reader = None
         try:
             from app import geoip_reader as _gr
             geoip_reader = _gr
         except ImportError:
             pass
-        result = sync_to_db(indicators, user_id, username, default_ttl, geoip_reader=geoip_reader)
+        get_setting_fn = None
+        try:
+            from app import _get_setting
+            get_setting_fn = _get_setting
+        except ImportError:
+            pass
+        result = sync_to_db(
+            indicators, user_id, username, default_ttl, geoip_reader=geoip_reader,
+            ioc_import_mode=ioc_mode, get_setting_fn=get_setting_fn,
+        )
         result['success'] = True
         result['fetched'] = len(indicators)
         log(
             'Insert into ZIoCHub', 'ok',
-            f"Added: {result.get('added', 0)}, skipped: {result.get('skipped', 0)}, errors: {result.get('errors', 0)}",
+            f"mode={ioc_mode} added={result.get('added', 0)} "
+            f"pending={result.get('pending_added', 0)} blocked={result.get('blocked', 0)} "
+            f"skipped={result.get('skipped', 0)} errors={result.get('errors', 0)}",
         )
         return result
     finally:

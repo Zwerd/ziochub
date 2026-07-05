@@ -22,7 +22,7 @@
 #  GUI timestamps: utils/jinja_datetime.py (zoneinfo; host should have tzdata package on minimal Linux).
 #  Updated: 2026-06 — post-upgrade feature checks (Admin Distribution, Feed Pulse, YARA_rejected, data/dxl).
 #  Updated: 2026-06 — unified Inbox (utils/user_notifications.py, static/js/app.js, i18n).
-#  Updated: 2026-06 — Tags governance (utils/tags.py, admin settings, submit/search staging suggest).
+#  Updated: 2026-06 — PostgreSQL-only fresh install; SQLite→PG migration on --upgrade.
 # ============================================================================
 set -euo pipefail
 
@@ -120,6 +120,15 @@ show_help() {
     echo "Options:"
     echo "  --offline     Install from local wheel files in ./packages/ directory"
     echo "                (no internet required). Use package_offline.sh to prepare."
+    echo "  --use-existing-postgresql"
+    echo "                Do not install PostgreSQL packages. Expect a running local"
+    echo "                cluster (production / IT-managed). setup.sh only creates"
+    echo "                role, database, and data/ziochub.env."
+    echo "                (Auto-detected when PostgreSQL is running or ziochub.env"
+    echo "                already has PG credentials — flag is optional.)"
+    echo "  --postgresql-debs-dir PATH"
+    echo "                Offline lab: path to postgresql-debs/*.deb when extracted"
+    echo "                outside the app directory (recommended: separate folders)."
     echo "  --upgrade     Upgrade an existing installation. Preserves database,"
     echo "                IOC files, YARA rules, SSL certificates, and allowlist.txt."
     echo "  --check, --preflight"
@@ -131,15 +140,27 @@ show_help() {
     echo "Modes:"
     echo "  Fresh install (online)    sudo ./setup.sh"
     echo "  Fresh install (offline)   sudo ./setup.sh --offline"
+    echo "  Production upgrade        sudo ./setup.sh --offline --upgrade"
+    echo "                            (auto-detects PostgreSQL when running or in ziochub.env)"
     echo "  Upgrade (online)          sudo ./setup.sh --upgrade"
-    echo "  Upgrade (offline)         sudo ./setup.sh --upgrade --offline"
+    echo "  Upgrade (offline)         sudo ./setup.sh --offline --upgrade"
+    echo ""
+    echo "PostgreSQL (read before install):"
+    echo "  • There is ONE setup.sh (application ZIP only). PostgreSQL ZIP has .deb files only."
+    echo "  • Recommended layout on target:"
+    echo "      ziochub_app/          ← application ZIP"
+    echo "      ziochub_postgresql/   ← PostgreSQL ZIP (contains postgresql-debs/)"
+    echo "    cd ziochub_app && sudo ./setup.sh --offline \\"
+    echo "      --postgresql-debs-dir ../ziochub_postgresql/postgresql-debs"
+    echo "  • Production: IT installs PostgreSQL; setup auto-detects it on upgrade."
+    echo "    Explicit flag still works: --use-existing-postgresql"
     echo ""
     echo "What the installer does:"
     echo "  1. Runs pre-flight checks (Python, systemd, openssl, required files)"
     echo "  2. Creates system user 'ziochub'"
     echo "  3. Copies application files to /opt/ziochub"
     echo "  4. Creates Python venv and installs dependencies"
-    echo "  5. Initializes the SQLite database"
+    echo "  5. Provisions PostgreSQL and initializes the application schema"
     echo "  6. Generates a self-signed SSL certificate (requires openssl)"
     echo "  7. Asks which HTTPS port to use (8443 default, or 443 with security note)"
     echo "  8. Installs and enables systemd services:"
@@ -147,6 +168,7 @@ show_help() {
     echo "       - ziochub-cleaner.service, ziochub-cleaner.timer"
     echo "       - ziochub-backup.service, ziochub-backup.timer"
     echo "       - ziochub-misp-sync.service, ziochub-misp-sync.timer"
+    echo "       - ziochub-taxii-sync.service, ziochub-taxii-sync.timer"
     echo ""
     echo "HTTPS port:"
     echo "  Default is 8443. You can choose 443 (requires setcap; see security note in installer)"
@@ -154,7 +176,8 @@ show_help() {
     echo ""
     echo "Paths:"
     echo "  Application   /opt/ziochub"
-    echo "  Database      /opt/ziochub/data/ziochub.db"
+    echo "  Database      PostgreSQL (local); credentials in /opt/ziochub/data/ziochub.env"
+    echo "  Legacy SQLite /opt/ziochub/data/ziochub.db (upgrade migration only; archived after migrate)"
     echo "  IOC files     /opt/ziochub/data/Main/"
     echo "  YARA rules    /opt/ziochub/data/YARA/"
     echo "  SSL certs     /opt/ziochub/data/ssl/"
@@ -169,12 +192,25 @@ show_help() {
 OFFLINE=false
 UPGRADE=false
 CHECK_ONLY=false
+USE_EXISTING_PG=false
+USE_EXISTING_PG_AUTO=false
+POSTGRESQL_DEBS_DIR=""
+_expect_pg_debs_dir=false
 for arg in "$@"; do
+    if $_expect_pg_debs_dir; then
+        POSTGRESQL_DEBS_DIR="$arg"
+        _expect_pg_debs_dir=false
+        continue
+    fi
     [[ "$arg" == "--help" || "$arg" == "-h" ]] && show_help
     [[ "$arg" == "--offline" ]] && OFFLINE=true
     [[ "$arg" == "--upgrade" ]] && UPGRADE=true
     [[ "$arg" == "--check" || "$arg" == "--preflight" ]] && CHECK_ONLY=true
+    [[ "$arg" == "--use-existing-postgresql" ]] && USE_EXISTING_PG=true
+    [[ "$arg" == "--postgresql-debs-dir" ]] && _expect_pg_debs_dir=true
+    [[ "$arg" == --postgresql-debs-dir=* ]] && POSTGRESQL_DEBS_DIR="${arg#--postgresql-debs-dir=}"
 done
+[[ "$_expect_pg_debs_dir" == true ]] && fail "--postgresql-debs-dir requires a path argument"
 
 # ── Constants (needed before --check and before root check) ─────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -183,6 +219,30 @@ APP_GROUP="ziochub"
 APP_DIR="/opt/ziochub"
 DATA_DIR="${APP_DIR}/data"
 VENV_DIR="${APP_DIR}/venv"
+ENV_FILE="${DATA_DIR}/ziochub.env"
+
+# Legacy SQLite pending migration: do not let "import app" seed PostgreSQL during setup
+if [[ -f "${DATA_DIR}/ziochub.db" ]]; then
+    export ZIOCHUB_SKIP_DB_INIT=1
+fi
+
+# PostgreSQL provisioning helpers (also used by backup_ziochub.sh patterns)
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/scripts/postgres_install.sh" 2>/dev/null || {
+    fail "Missing scripts/postgres_install.sh — rebuild the installer package."
+}
+if [[ -n "${POSTGRESQL_DEBS_DIR}" ]]; then
+    POSTGRESQL_DEBS_DIR="$(cd "${POSTGRESQL_DEBS_DIR}" 2>/dev/null && pwd || true)"
+    [[ -z "${POSTGRESQL_DEBS_DIR}" ]] && fail "Invalid --postgresql-debs-dir path"
+    export ZIOCHUB_POSTGRESQL_DEBS_DIR="${POSTGRESQL_DEBS_DIR}"
+fi
+
+# Auto-detect existing PostgreSQL: production/IT cluster or install already migrated to PG.
+# Makes `sudo ./setup.sh --offline --upgrade` behave like --use-existing-postgresql when appropriate.
+if ! $USE_EXISTING_PG && ziochub_detect_use_existing_postgresql "${ENV_FILE}"; then
+    USE_EXISTING_PG=true
+    USE_EXISTING_PG_AUTO=true
+fi
 
 if ! $CHECK_ONLY; then
     [[ $EUID -ne 0 ]] && fail "This script must be run as root (sudo ./setup.sh)"
@@ -190,6 +250,7 @@ fi
 
 # ── Fix permissions (ZIP extraction may strip +x from .sh files) ───────────
 chmod +x "${SCRIPT_DIR}/"*.sh 2>/dev/null || true
+chmod +x "${SCRIPT_DIR}/scripts/"*.sh 2>/dev/null || true
 
 # ── Must NOT run from installed dir (upgrade would copy old over old) ───────
 if ! $CHECK_ONLY; then
@@ -389,6 +450,30 @@ else
     PREFLIGHT_WARNINGS+=("GeoIP database not found (optional). IP geolocation will be disabled.")
 fi
 
+# PostgreSQL scripts (required for install)
+if [[ -f "${SCRIPT_DIR}/scripts/postgres_install.sh" ]] && [[ -f "${SCRIPT_DIR}/scripts/migrate_sqlite_to_postgres.py" ]]; then
+    ok "PostgreSQL install/migration scripts found"
+else
+    PREFLIGHT_ERRORS+=("Missing scripts/postgres_install.sh or scripts/migrate_sqlite_to_postgres.py")
+fi
+
+if pg_isready -h 127.0.0.1 -q 2>/dev/null || command -v psql &>/dev/null; then
+    ok "PostgreSQL detected (running or client tools present)"
+    if $USE_EXISTING_PG_AUTO; then
+        ok "Using existing PostgreSQL (--use-existing-postgresql auto-detected)"
+    fi
+elif $USE_EXISTING_PG; then
+    PREFLIGHT_ERRORS+=("PostgreSQL not reachable — install and start PostgreSQL before setup, or omit --use-existing-postgresql and provide postgresql-debs/ from package_postgresql_debs.sh")
+elif $OFFLINE; then
+    _pg_debs_check="$(ziochub_postgresql_debs_dir 2>/dev/null || echo "${SCRIPT_DIR}/postgresql-debs")"
+    if [[ -d "${_pg_debs_check}" ]] && ls "${_pg_debs_check}/"*.deb &>/dev/null 2>&1; then
+        ok "PostgreSQL .deb packages found: ${_pg_debs_check}"
+    else
+        PREFLIGHT_WARNINGS+=("PostgreSQL .deb not found. Production: IT + --use-existing-postgresql. Lab: extract PostgreSQL ZIP to ziochub_postgresql/ and use --postgresql-debs-dir ../ziochub_postgresql/postgresql-debs")
+    fi
+fi
+unset _pg_debs_check
+
 # ── 6. Disk space check ─────────────────────────────────────────────────────
 AVAILABLE_SPACE=$(df -BM /opt 2>/dev/null | awk 'NR==2 {gsub("M",""); print $4}')
 if [[ -n "$AVAILABLE_SPACE" ]] && [[ "$AVAILABLE_SPACE" -gt 500 ]]; then
@@ -445,20 +530,19 @@ if [[ -d "${APP_DIR}" ]] && [[ -f "${APP_DIR}/app.py" ]]; then
 fi
 
 if $EXISTING_INSTALL && ! $UPGRADE; then
-    echo ""
-    warn "Existing ZIoCHub installation detected at ${APP_DIR}"
-    echo ""
-    info "Options:"
-    echo "    1. Run with --upgrade to update the existing installation"
-    echo "    2. Run uninstall.sh first to remove the old installation"
-    echo ""
-    read -p "Continue with upgrade? [y/N] " -n 1 -r
-    echo ""
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        UPGRADE=true
+    _upgrade_cmd="sudo ./setup.sh --upgrade"
+    $OFFLINE && _upgrade_cmd="sudo ./setup.sh --offline --upgrade"
+    if [[ -f "${DATA_DIR}/ziochub.db" ]]; then
+        fail "Existing ZIoCHub installation detected at ${APP_DIR} (legacy SQLite: ${DATA_DIR}/ziochub.db)." \
+             "You must re-run with --upgrade to update and migrate to PostgreSQL:" \
+             "  ${_upgrade_cmd}" \
+             "PostgreSQL is auto-detected when running; offline lab may need --postgresql-debs-dir." \
+             "To remove the old install first: sudo ./uninstall.sh --backup"
     else
-        info "Aborted. Use: sudo ./setup.sh --upgrade"
-        exit 0
+        fail "Existing ZIoCHub installation detected at ${APP_DIR}." \
+             "You must re-run with --upgrade (do not run a fresh install over an existing one):" \
+             "  ${_upgrade_cmd}" \
+             "To remove the old install first: sudo ./uninstall.sh --backup"
     fi
 fi
 
@@ -466,6 +550,11 @@ fi
 echo ""
 if $UPGRADE; then
     info "ZIoCHub Production Installer (UPGRADE MODE)"
+    if $USE_EXISTING_PG_AUTO; then
+        info "PostgreSQL: existing cluster (auto-detected)"
+    elif $USE_EXISTING_PG; then
+        info "PostgreSQL: existing cluster (--use-existing-postgresql)"
+    fi
 else
     info "ZIoCHub Production Installer (FRESH INSTALL)"
 fi
@@ -483,6 +572,8 @@ if $UPGRADE; then
     systemctl stop ziochub-backup.service 2>/dev/null || true
     systemctl stop ziochub-misp-sync.timer 2>/dev/null || true
     systemctl stop ziochub-misp-sync.service 2>/dev/null || true
+    systemctl stop ziochub-taxii-sync.timer 2>/dev/null || true
+    systemctl stop ziochub-taxii-sync.service 2>/dev/null || true
     ok "Services stopped."
 fi
 
@@ -725,7 +816,7 @@ if [[ ${#MISSING_MODULES[@]} -gt 0 ]]; then
 fi
 
 # Verify utils submodules (Reports, Admin Settings, CEF logging, etc.)
-REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "offline_domain_checks" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "audit_events" "mentorship" "ambition" "jinja_datetime" "downstream" "integration_telemetry" "user_notifications" "tags")
+REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "offline_domain_checks" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "audit_events" "mentorship" "ambition" "jinja_datetime" "downstream" "integration_telemetry" "user_notifications" "tags" "db_config" "schema_migrations")
 MISSING_UTILS=()
 
 for util in "${REQUIRED_UTILS[@]}"; do
@@ -787,13 +878,8 @@ chmod 750 "${APP_DIR}"
 chmod -R u+rwX,g+rX,o-rwx "${DATA_DIR}"
 ok "Ownership and data permissions set."
 
-info "Initializing database as ${APP_USER}..."
-# Importing app runs _init_db() once at module load; avoid calling _init_db() again to prevent duplicate migration messages
-if sudo -u "${APP_USER}" env PATH="${VENV_DIR}/bin:${PATH}" bash -c "cd ${APP_DIR} && python3 -c 'import app'" 2>/dev/null; then
-    ok "Database initialized."
-else
-    warn "Database init skipped or failed (service will create on first run)."
-fi
+# ── 5c. PostgreSQL + application database ───────────────────────────────────
+# (Schema init runs after ziochub.env is written — see section 5e below)
 
 # ── 5d. SSL certificate generation ─────────────────────────────────────────
 SSL_DIR="${DATA_DIR}/ssl"
@@ -943,14 +1029,29 @@ if [[ -z "${HTTPS_PORT}" ]]; then
     ok "HTTPS port set to: ${HTTPS_PORT}"
 fi
 
-# Write env file so systemd units can use it
+# Write env file (HTTPS port + PostgreSQL credentials) for systemd / app
 mkdir -p "${DATA_DIR}"
-ENV_FILE="${DATA_DIR}/ziochub.env"
-echo "# ZIoCHub HTTPS port (generated by setup.sh)" > "${ENV_FILE}"
-echo "ZIOCHUB_PORT=${HTTPS_PORT}" >> "${ENV_FILE}"
-chown "${APP_USER}:${APP_GROUP}" "${ENV_FILE}"
-chmod 640 "${ENV_FILE}"
-ok "Port configuration written to ${ENV_FILE}"
+ziochub_install_postgresql_packages "$OFFLINE" "$USE_EXISTING_PG"
+ziochub_ensure_postgresql_service
+
+ziochub_read_pg_password_from_env_file "${ENV_FILE}"
+if [[ -z "${ZIOCHUB_PG_PASSWORD:-}" ]]; then
+    ZIOCHUB_PG_PASSWORD="$(ziochub_pg_generate_password)"
+fi
+ziochub_create_postgresql_role_and_db "${ZIOCHUB_PG_PASSWORD}"
+ziochub_write_database_env "${ENV_FILE}" "${HTTPS_PORT}" "${ZIOCHUB_PG_PASSWORD}"
+ok "Database configuration written to ${ENV_FILE}"
+
+if [[ -f "${DATA_DIR}/ziochub.db" ]]; then
+    ziochub_run_sqlite_migration_if_needed "${APP_DIR}" "${VENV_DIR}"
+else
+    unset ZIOCHUB_SKIP_DB_INIT
+    ziochub_init_application_database "${APP_DIR}" "${VENV_DIR}"
+    if $UPGRADE && [[ -f "${DATA_DIR}/ziochub.env" ]]; then
+        ziochub_postgresql_health_check "${APP_DIR}" "${VENV_DIR}"
+    fi
+fi
+unset ZIOCHUB_SKIP_DB_INIT
 
 # Allow binding to port 443 (or other <1024) as non-root: setcap on the venv Python
 if [[ "${HTTPS_PORT}" =~ ^[0-9]+$ ]] && [[ "${HTTPS_PORT}" -lt 1024 ]]; then
@@ -985,6 +1086,10 @@ if [[ -f "${SCRIPT_DIR}/ziochub-misp-sync.service" ]] && [[ -f "${SCRIPT_DIR}/zi
     cp "${SCRIPT_DIR}/ziochub-misp-sync.service" /etc/systemd/system/
     cp "${SCRIPT_DIR}/ziochub-misp-sync.timer"   /etc/systemd/system/
 fi
+if [[ -f "${SCRIPT_DIR}/ziochub-taxii-sync.service" ]] && [[ -f "${SCRIPT_DIR}/ziochub-taxii-sync.timer" ]]; then
+    cp "${SCRIPT_DIR}/ziochub-taxii-sync.service" /etc/systemd/system/
+    cp "${SCRIPT_DIR}/ziochub-taxii-sync.timer"   /etc/systemd/system/
+fi
 
 systemctl daemon-reload
 
@@ -997,6 +1102,10 @@ fi
 if [[ -f /etc/systemd/system/ziochub-misp-sync.timer ]]; then
     systemctl enable ziochub-misp-sync.timer
     systemctl start ziochub-misp-sync.timer 2>/dev/null || true
+fi
+if [[ -f /etc/systemd/system/ziochub-taxii-sync.timer ]]; then
+    systemctl enable ziochub-taxii-sync.timer
+    systemctl start ziochub-taxii-sync.timer 2>/dev/null || true
 fi
 
 systemctl restart ziochub.service
@@ -1022,7 +1131,8 @@ info "Service user     : ${APP_USER}"
 echo ""
 info "Paths:"
 echo "    Application   : ${APP_DIR}"
-echo "    Database      : ${DATA_DIR}/ziochub.db"
+echo "    Database      : PostgreSQL ${ZIOCHUB_PG_DB} @ ${ZIOCHUB_PG_HOST}:${ZIOCHUB_PG_PORT}"
+echo "    DB config     : ${ENV_FILE}"
 echo "    IOC files     : ${DATA_DIR}/Main/"
 echo "    YARA rules    : ${DATA_DIR}/YARA/"
 echo "    SSL certs     : ${DATA_DIR}/ssl/"
@@ -1040,7 +1150,10 @@ fi
 
 if $UPGRADE; then
     info "Your data was preserved:"
-    echo "    - Database: ${DATA_DIR}/ziochub.db"
+    echo "    - Database: PostgreSQL (${ZIOCHUB_PG_DB})"
+    if [[ -f "${DATA_DIR}/ziochub.db" ]]; then
+        echo "    - Legacy SQLite pending migration: ${DATA_DIR}/ziochub.db"
+    fi
     echo "    - IOC files: ${DATA_DIR}/Main/"
     echo "    - YARA rules: ${DATA_DIR}/YARA/"
     echo "    - SSL certs: ${DATA_DIR}/ssl/"

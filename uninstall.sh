@@ -57,7 +57,8 @@ show_help() {
     echo "    - Python source code (app.py, utils/, routes/, scripts/, templates/, static/)"
     echo "    - Documentation (docs/, if present)"
     echo "    - Virtual environment (venv/)"
-    echo "    - SQLite database (data/ziochub.db)"
+    echo "    - SQLite database (legacy; migrated to PostgreSQL on upgrade)"
+    echo "    - PostgreSQL database (local cluster; credentials in ziochub.env)"
     echo "    - IOC files (data/Main/)"
     echo "    - YARA rules (data/YARA/, data/YARA_pending/, data/YARA_rejected/)"
     echo "    - OpenDXL provisioning (data/dxl/)"
@@ -203,6 +204,23 @@ fi
 if $DO_BACKUP && [[ -d "${DATA_DIR}" ]]; then
     info "Backing up data to ${BACKUP_DIR}..."
     mkdir -p "${BACKUP_DIR}"
+    if [[ -f "${DATA_DIR}/ziochub.env" ]]; then
+        set -a
+        # shellcheck disable=SC1090
+        source "${DATA_DIR}/ziochub.env"
+        set +a
+    fi
+    if command -v pg_dump &>/dev/null && [[ -n "${ZIOCHUB_PG_PASSWORD:-}" ]]; then
+        export PGPASSWORD="${ZIOCHUB_PG_PASSWORD}"
+        pg_dump -h "${ZIOCHUB_PG_HOST:-127.0.0.1}" -p "${ZIOCHUB_PG_PORT:-5432}" \
+            -U "${ZIOCHUB_PG_USER:-ziochub}" -d "${ZIOCHUB_PG_DB:-ziochub}" \
+            -Fc -f "${BACKUP_DIR}/ziochub.pgdump" 2>/dev/null || warn "pg_dump failed"
+        pg_dump -h "${ZIOCHUB_PG_HOST:-127.0.0.1}" -p "${ZIOCHUB_PG_PORT:-5432}" \
+            -U "${ZIOCHUB_PG_USER:-ziochub}" -d "${ZIOCHUB_PG_DB:-ziochub}" \
+            -f "${BACKUP_DIR}/ziochub.sql" 2>/dev/null || true
+        unset PGPASSWORD
+        ok "PostgreSQL dump saved (if cluster was reachable)"
+    fi
     cp -a "${DATA_DIR}/." "${BACKUP_DIR}/" 2>/dev/null || true
     echo "ZIoCHub data backup" > "${BACKUP_DIR}/MANIFEST.txt"
     echo "Date: $(date)" >> "${BACKUP_DIR}/MANIFEST.txt"
@@ -306,7 +324,8 @@ echo "    - All systemd services, timers, and override directories"
 echo "    - All ZIoCHub processes"
 echo "    - ${APP_DIR}/ (application code, templates, static, Python venv)"
 echo "      (includes all pip dependencies: yara-python, google-auth, requests, …)"
-echo "    - ${DATA_DIR}/ziochub.db (SQLite database)"
+    echo "    - ${DATA_DIR}/ziochub.db (legacy SQLite, if present)"
+    echo "    - PostgreSQL database ${ZIOCHUB_PG_DB:-ziochub} (cluster not removed; drop manually if needed)"
 echo "    - ${DATA_DIR}/Main/ (IOC files)"
 echo "    - ${DATA_DIR}/YARA/, YARA_pending/, YARA_rejected/ (YARA rules)"
 echo "    - ${DATA_DIR}/dxl/ (OpenDXL client files, if present)"
@@ -320,7 +339,8 @@ echo ""
 if $DO_BACKUP && [[ -d "${BACKUP_DIR}" ]]; then
     info "Data backup preserved at: ${BACKUP_DIR}"
     echo "    To inspect: ls -la ${BACKUP_DIR}"
-    echo "    To restore: sudo ./setup.sh && sudo cp -a ${BACKUP_DIR}/. /opt/ziochub/data/"
+    echo "    To restore DB: create PostgreSQL DB, then pg_restore -d ziochub ${BACKUP_DIR}/ziochub.pgdump"
+    echo "    To restore files: sudo ./setup.sh && sudo cp -a ${BACKUP_DIR}/. /opt/ziochub/data/"
     echo ""
 fi
 

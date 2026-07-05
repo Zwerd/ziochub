@@ -49,8 +49,8 @@
     <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
         <h3 class="text-lg font-semibold accent-blue mb-2">Analyst workflow</h3>
         <p class="text-secondary text-sm mb-6">
-            Control whether analyst submissions are distributed immediately to feeds and integrations, or require admin approval first.
-            Admins always publish immediately. Defaults: approval required for analysts; Champs tab visible.
+            Control whether analyst submissions are stored and distributed to feeds and integrations.
+            Admins always publish immediately. Default for analysts: auto-publish. Inbound pulls (MISP, TAXII, AdversaryGraph) are configured separately under Integrations → Import.
         </p>
         <form id="workflowForm" class="space-y-5">
             <div class="p-4 rounded-lg border border-white/10 bg-black/20 space-y-4">
@@ -64,14 +64,15 @@
                 </label>
             </div>
             <div class="p-4 rounded-lg border border-white/10 bg-black/20 space-y-4">
-                <h4 class="text-sm font-semibold text-primary">Submit IOCs</h4>
-                <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" id="ioc_analyst_auto_publish" name="ioc_analyst_auto_publish" class="mt-1 rounded border-white/20 bg-tertiary text-cyan-500 focus:ring-accent-green" {% if settings.ioc_analyst_auto_publish %}checked{% endif %}>
-                    <span>
-                        <span class="text-sm text-primary font-medium block">Allow analysts to distribute IOCs without approval</span>
-                        <span class="text-secondary text-xs">When unchecked (default), IOCs are saved but excluded from /feed, TAXII, MISP push, ESA, and vendor integrations until approved in Admin inbox.</span>
-                    </span>
-                </label>
+                <h4 class="text-sm font-semibold text-primary">Submit IOCs (analysts)</h4>
+                {% set ioc_mode = settings.ioc_analyst_submission_mode | default('auto') %}
+                <label for="ioc_analyst_submission_mode" class="block text-sm font-semibold text-secondary mb-1">Analyst IOC submission policy</label>
+                <select id="ioc_analyst_submission_mode" name="ioc_analyst_submission_mode" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="auto" {% if ioc_mode == 'auto' %}selected{% endif %}>Auto — publish to feeds and integrations immediately</option>
+                    <option value="pending" {% if ioc_mode == 'pending' %}selected{% endif %}>Pending — admin approval required before distribution</option>
+                    <option value="block" {% if ioc_mode == 'block' %}selected{% endif %}>Block — reject analyst IOC submissions</option>
+                </select>
+                <p class="text-secondary text-xs mt-2">Default: auto (no admin approval). Pending IOCs are excluded from /feed, TAXII export, and vendor integrations until approved in the admin Inbox.</p>
             </div>
             <div class="p-4 rounded-lg border border-white/10 bg-black/20 space-y-4">
                 <h4 class="text-sm font-semibold text-primary">Main application UI</h4>
@@ -1201,7 +1202,7 @@ bindFormSubmit('workflowForm', async function(e) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 yara_analyst_auto_publish: document.getElementById('yara_analyst_auto_publish').checked ? 'true' : 'false',
-                ioc_analyst_auto_publish: document.getElementById('ioc_analyst_auto_publish').checked ? 'true' : 'false',
+                ioc_analyst_submission_mode: document.getElementById('ioc_analyst_submission_mode').value,
                 champs_tab_enabled: document.getElementById('champs_tab_enabled').checked ? 'true' : 'false'
             })
         });

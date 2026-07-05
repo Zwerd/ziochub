@@ -331,6 +331,23 @@ def _stix_date_added_iso(dt):
     return dt.replace(tzinfo=timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
 
 
+def _stix_ioc_membership_filter(now, *, include_revoked: bool):
+    """IOC rows exported via STIX/TAXII (same rules as plain feeds: no pending approval)."""
+    if include_revoked:
+        return db.or_(
+            IOC.revoked.is_(True),
+            db.and_(
+                IOC.pending_approval.is_(False),
+                db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now),
+            ),
+        )
+    return db.and_(
+        IOC.revoked.is_(False),
+        IOC.pending_approval.is_(False),
+        db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now),
+    )
+
+
 def _feed_stix_objects_page(
     added_after=None,
     offset=0,
@@ -348,20 +365,7 @@ def _feed_stix_objects_page(
     """
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     q = IOC.query.filter(IOC.type != 'YARA')
-    if include_revoked:
-        # Include revoked objects so TAXII clients can synchronize removals.
-        # Expired-but-not-revoked should not be emitted as active, so we include:
-        #   active OR revoked
-        q = q.filter(db.or_(
-            IOC.revoked.is_(True),
-            IOC.expiration_date.is_(None),
-            IOC.expiration_date > now,
-        ))
-    else:
-        q = q.filter(
-            IOC.revoked.is_(False),
-            db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now),
-        )
+    q = q.filter(_stix_ioc_membership_filter(now, include_revoked=include_revoked))
     if added_after is not None:
         q = q.filter(IOC.modified_at >= added_after)
     if match_types is not None and 'indicator' not in match_types:
@@ -405,17 +409,7 @@ def _feed_stix_object_by_id(object_id, *, include_revoked: bool = False):
         return None, None
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     q = IOC.query.filter(IOC.type != 'YARA')
-    if include_revoked:
-        q = q.filter(db.or_(
-            IOC.revoked.is_(True),
-            IOC.expiration_date.is_(None),
-            IOC.expiration_date > now,
-        ))
-    else:
-        q = q.filter(
-            IOC.revoked.is_(False),
-            db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now),
-        )
+    q = q.filter(_stix_ioc_membership_filter(now, include_revoked=include_revoked))
     q = q.order_by(IOC.modified_at, IOC.id)
     for row in q.all():
         if _stix_id_for_ioc(row) == object_id.strip():
@@ -445,17 +439,7 @@ def _feed_stix_manifest_page(
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     media_type = 'application/stix+json;version=2.1'
     q = IOC.query.filter(IOC.type != 'YARA')
-    if include_revoked:
-        q = q.filter(db.or_(
-            IOC.revoked.is_(True),
-            IOC.expiration_date.is_(None),
-            IOC.expiration_date > now,
-        ))
-    else:
-        q = q.filter(
-            IOC.revoked.is_(False),
-            db.or_(IOC.expiration_date.is_(None), IOC.expiration_date > now),
-        )
+    q = q.filter(_stix_ioc_membership_filter(now, include_revoked=include_revoked))
     if added_after is not None:
         q = q.filter(IOC.modified_at >= added_after)
     if match_types is not None and 'indicator' not in match_types:

@@ -223,7 +223,8 @@ def _schedule_yara_outbound_push(rule, content: str, _get_setting, audit_log) ->
             app_obj = current_app._get_current_object()
             verify_fe = yara_http_push_verify_ssl(_get_setting)
             verify_session = yara_session_push_verify_ssl(_get_setting)
-            set_fireeye_status(rule.filename, 'pending', '')
+            rule_filename = rule.filename
+            set_fireeye_status(rule_filename, 'pending', '')
 
             def _yara_outbound_upload():
                 with app_obj.app_context():
@@ -234,71 +235,71 @@ def _schedule_yara_outbound_push(rule, content: str, _get_setting, audit_log) ->
 
                         if has_fe_targets:
                             result_fe = push_yara_to_appliances(
-                                content, rule.filename, appliances, audit_log, verify_ssl=verify_fe
+                                content, rule_filename, appliances, audit_log, verify_ssl=verify_fe
                             )
                             combined_results.extend(result_fe.get('results', []))
                             overall = overall and bool(result_fe.get('overall_success'))
-                            _record_yara_distribution_push(rule.filename, result_fe, 'yara_http')
+                            _record_yara_distribution_push(rule_filename, result_fe, 'yara_http')
                             enqueue_yara_vendor_failure(
-                                'yara_http', rule.filename, result_fe, get_setting=_get_setting,
+                                'yara_http', rule_filename, result_fe, get_setting=_get_setting,
                             )
                         if tx_on:
                             from utils.trellix_ex import push_yara_trellix_ex
                             result_tx = push_yara_trellix_ex(
-                                content, rule.filename, _get_setting, audit_log, verify_ssl=verify_session,
+                                content, rule_filename, _get_setting, audit_log, verify_ssl=verify_session,
                             )
                             combined_results.extend(result_tx.get('results', []))
                             overall = overall and bool(result_tx.get('overall_success'))
-                            _record_yara_distribution_push(rule.filename, result_tx, 'yara_trellix_ex')
+                            _record_yara_distribution_push(rule_filename, result_tx, 'yara_trellix_ex')
                             enqueue_yara_vendor_failure(
-                                'trellix_ex', rule.filename, result_tx, get_setting=_get_setting,
+                                'trellix_ex', rule_filename, result_tx, get_setting=_get_setting,
                             )
                         if cms_on:
                             from utils.trellix_cms import push_yara_trellix_cms
                             result_cms = push_yara_trellix_cms(
-                                content, rule.filename, _get_setting, audit_log, verify_ssl=verify_session,
+                                content, rule_filename, _get_setting, audit_log, verify_ssl=verify_session,
                             )
                             combined_results.extend(result_cms.get('results', []))
                             overall = overall and bool(result_cms.get('overall_success'))
-                            _record_yara_distribution_push(rule.filename, result_cms, 'yara_trellix_cms')
+                            _record_yara_distribution_push(rule_filename, result_cms, 'yara_trellix_cms')
                             enqueue_yara_vendor_failure(
-                                'trellix_cms', rule.filename, result_cms, get_setting=_get_setting,
+                                'trellix_cms', rule_filename, result_cms, get_setting=_get_setting,
                             )
                         if nx_wmps_on:
                             from utils.trellix_nx import push_yara_nx_wmps
                             result_nxw = push_yara_nx_wmps(
-                                content, rule.filename, _get_setting, audit_log, verify_ssl=verify_session,
+                                content, rule_filename, _get_setting, audit_log, verify_ssl=verify_session,
                             )
                             combined_results.extend(result_nxw.get('results', []))
                             overall = overall and bool(result_nxw.get('overall_success'))
-                            _record_yara_distribution_push(rule.filename, result_nxw, 'yara_trellix_nx')
+                            _record_yara_distribution_push(rule_filename, result_nxw, 'yara_trellix_nx')
                             enqueue_yara_vendor_failure(
-                                'trellix_nx', rule.filename, result_nxw, get_setting=_get_setting,
+                                'trellix_nx', rule_filename, result_nxw, get_setting=_get_setting,
                             )
                         result = {'overall_success': overall, 'results': combined_results}
                         try:
                             from utils.integration_telemetry import record_yara_automation_results
                             record_yara_automation_results(
-                                result, kind='push', context={'filename': rule.filename}
+                                result, kind='push', context={'filename': rule_filename}
                             )
                         except Exception:
                             logging.debug('record_yara_automation_results failed', exc_info=True)
                         if result['overall_success']:
-                            set_fireeye_status(rule.filename, 'success', 'All automation targets updated.')
+                            set_fireeye_status(rule_filename, 'success', 'All automation targets updated.')
                         else:
                             msgs = '; '.join(
                                 r.get('name', '') + ': ' + (r.get('message') or '')
                                 for r in result.get('results', [])
                             )
-                            set_fireeye_status(rule.filename, 'error', msgs or 'Push failed')
+                            set_fireeye_status(rule_filename, 'error', msgs or 'Push failed')
                     except Exception as e:
-                        logging.exception('YARA outbound push failed for %s', rule.filename)
+                        logging.exception('YARA outbound push failed for %s', rule_filename)
                         try:
                             from utils.yara_http_push import set_fireeye_status
-                            set_fireeye_status(rule.filename, 'error', str(e))
+                            set_fireeye_status(rule_filename, 'error', str(e))
                         except Exception:
                             pass
-                        audit_log('yara_push_fail', f'file={rule.filename} error={e}')
+                        audit_log('yara_push_fail', f'file={rule_filename} error={e}')
 
             threading.Thread(target=_yara_outbound_upload, daemon=True).start()
             fireeye_pending = True

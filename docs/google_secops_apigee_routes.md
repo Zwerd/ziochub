@@ -1,9 +1,13 @@
-# ZIoCHub → Apigee: URL routing spec (Data Table IOC sync)
+# ZIoCHub → Apigee: URL routing spec (Data Table + Reference Lists IOC sync)
 
 **Base URL (admin):** `google_secops_gateway_base_url`  
-Example: `https://my-apigee.internal/secops-proxy` (trailing `/` is stripped; no `//v1beta`)
+Example: `https://my-apigee.internal/secops-proxy` (trailing `/` is stripped)
 
-**Path variables (from ZIoCHub settings):**
+**One gateway base** serves both push targets with the **same authentication** (API key or OAuth2):
+- Data Table → `/v1beta/projects/…/dataTables/…`
+- Reference Lists → `/v2/lists/…`
+
+**Path variables (Data Table only):**
 
 - `{number}` = GCP project number  
 - `{loc}` = location/region  
@@ -29,6 +33,17 @@ Example: `https://my-apigee.internal/secops-proxy` (trailing `/` is stripped; no
 
 **Optional (admin test only):**  
 `GET /v1beta/projects/.../dataTables/{table_id}` (no `dataTableRows`)
+
+---
+
+**Optional (Reference Lists — ``v2/lists``):**
+
+| Op | Method | Path (after Backstory / gateway host) |
+|----|--------|----------------------------------------|
+| **GET** | `GET` | `/v2/lists/{list_name}?view=FULL` |
+| **UPDATE lines** | `PATCH` | `/v2/lists?update_mask=list.lines` |
+
+Body uses Chronicle Reference List schema (`list.name`, `list.lines`, `list.content_type`). ZIoCHub appends one line per IOC (URLs as REGEX with escaped `/`).
 
 ---
 

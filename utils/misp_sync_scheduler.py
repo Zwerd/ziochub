@@ -1,10 +1,11 @@
 """
 In-app MISP pull scheduler (daemon thread).
 
-Production may also use ``ziochub-misp-sync.timer`` (systemd); both call the same
-``run_misp_sync_if_due_with_lock`` logic. The timer/job and this scheduler wake
-every ~5 minutes; the admin ``misp_pull_interval`` setting controls how often an
-actual MISP pull runs.
+Production uses ``ziochub-misp-sync.timer`` (systemd) when ``ZIOCHUB_USE_SYSTEMD_SYNC=1``
+is set on ``ziochub.service`` — the in-app scheduler is then skipped so Gunicorn workers
+do not each run a duplicate sync thread.
+
+Lab / ``python3 app.py`` without that env var keeps this scheduler enabled.
 """
 from __future__ import annotations
 
@@ -21,6 +22,15 @@ _start_lock = threading.Lock()
 
 
 def start_misp_sync_scheduler(app) -> None:
+    from utils.inapp_sync_policy import inapp_misp_sync_enabled
+
+    if not inapp_misp_sync_enabled():
+        logger.info(
+            'In-app MISP sync scheduler disabled '
+            '(production: ziochub-misp-sync.timer; dev: set ZIOCHUB_INAPP_MISP_SYNC=1)'
+        )
+        return
+
     global _started
     with _start_lock:
         if _started:

@@ -610,7 +610,7 @@
     "connections_feed_modal_title": "לקוחות פיד ו-TAXII",
     "connections_feed_modal_sub": "לקוחות שמשכו בהצלחה פידים בטקסט רגיל (/feed/…) או TAXII 2 (/taxii2/…). טלמטריה מצומצמת לפי IP ונתיב.",
     "pull_state_modal_title": "מצב משיכה",
-    "pull_state_modal_sub": "מתי ZIoCHub התחבר לאחרונה למערכת חיצונית כדי למשוך IOCs (כיום MISP). בדיקה אוטומטית כל 5 דקות; המרווח מוגדר ב-Admin → Settings → MISP.",
+    "pull_state_modal_sub": "מתי ZIoCHub התחבר לאחרונה למערכת חיצונית כדי למשוך IOCs (MISP, AdversaryGraph, TAXII מרוחק). בדיקה אוטומטית כל 5 דקות; המרווחים מוגדרים ב-Admin → Integrations → Import (pull).",
     "pull_col_system": "מערכת",
     "pull_col_address": "כתובת",
     "pull_col_interval": "מרווח",

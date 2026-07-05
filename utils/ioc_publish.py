@@ -117,3 +117,15 @@ def publish_ioc_row(row, *, get_setting, audit_log=None, submission_method: str 
         )
     except Exception as esa_err:
         logging.warning('ESA on publish_ioc_row failed: %s', esa_err)
+
+    try:
+        from utils.downstream import reactivate_feed_taxii_distribution
+        reactivate_feed_taxii_distribution(ioc_type, value)
+    except Exception as dist_err:
+        logging.warning('Feed/TAXII distribution reactivate on publish_ioc_row failed: %s', dist_err)
+
+    try:
+        from utils.feed_cache import invalidate_feed_cache_after_ioc_change
+        invalidate_feed_cache_after_ioc_change()
+    except Exception as cache_err:
+        logging.warning('Feed cache invalidate on publish_ioc_row failed: %s', cache_err)

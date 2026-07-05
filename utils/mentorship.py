@@ -14,7 +14,7 @@ import json
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import func, case, and_, distinct
+from sqlalchemy import func, case, and_, distinct, extract
 
 from extensions import db
 
@@ -355,8 +355,8 @@ def _bulk_analyst_stats(start_dt, end_dt, prev_start_dt, prev_end_dt):
     day_hour_rows = db.session.query(
         IOC.user_id,
         func.date(IOC.created_at).label('day'),
-        func.strftime('%H', IOC.created_at).label('hour'),
-        func.strftime('%w', IOC.created_at).label('weekday'),
+        extract('hour', IOC.created_at).label('hour'),
+        extract('dow', IOC.created_at).label('weekday'),
     ).filter(
         IOC.user_id.in_(user_ids),
         IOC.created_at >= start_dt,

@@ -28,6 +28,7 @@ _icon_url_cache: dict[str, str] = {}
 VENDOR_CATALOG: list[dict[str, str]] = [
     {'id': 'akamai', 'label': 'Akamai'},
     {'id': 'anomali', 'label': 'Anomali'},
+    {'id': 'adversarygraph', 'label': 'AdversaryGraph'},
     {'id': 'armis', 'label': 'Armis'},
     {'id': 'carbon_black', 'label': 'VMware Carbon Black'},
     {'id': 'cato', 'label': 'Cato Networks'},
@@ -347,6 +348,7 @@ _INTEGRATION_VENDOR_MAP: dict[str, str] = {
     'cisco_esa': 'cisco',
     'misp_push': 'misp',
     'misp_pull': 'misp',
+    'adversarygraph_pull': 'adversarygraph',
     'opendxl': 'mcafee',
     'trellix': 'trellix',
     'fireeye_yara': 'trellix',
@@ -362,6 +364,7 @@ INTEGRATION_SYSTEM_LABELS: dict[str, str] = {
     'cisco_esa': 'Vendor integration',
     'misp_push': 'Vendor integration',
     'misp_pull': 'Inbound pull',
+    'adversarygraph_pull': 'Inbound pull',
     'opendxl': 'Vendor integration',
     'fireeye_yara': 'FireEye / Trellix YARA',
     'trellix_nx': 'Trellix NX YARA',
@@ -376,6 +379,7 @@ INTEGRATION_VENDOR_LABELS: dict[str, str] = {
     'cisco_esa': 'Cisco ESA',
     'misp_push': 'MISP',
     'misp_pull': 'MISP',
+    'adversarygraph_pull': 'AdversaryGraph',
     'opendxl': 'OpenDXL / Trellix TIE',
     'trellix': 'Trellix',
     'trellix_ex': 'Trellix',
@@ -410,7 +414,8 @@ def integration_icon_url(integration_id: str) -> str:
 def integration_icons_for_admin() -> dict[str, str]:
     """Resolved icon URLs for Integrations sub-tabs (Push IOC / Push YARA / Import)."""
     ids = (
-        'cortex_xdr', 'google_secops', 'netskope', 'cisco_esa', 'misp_push', 'misp_pull', 'opendxl',
+        'cortex_xdr', 'google_secops', 'netskope', 'cisco_esa', 'misp_push', 'misp_pull',
+        'adversarygraph_pull', 'opendxl',
         'trellix', 'trellix_ex', 'trellix_cms', 'trellix_nx',
     )
     return {iid: integration_icon_url(iid) for iid in ids}
@@ -516,6 +521,87 @@ def create_downstream_system(
     return row
 
 
+def _distribution_entry_preferred(new: dict[str, Any], old: dict[str, Any]) -> bool:
+    """True when *new* should replace *old* in Search distribution dedupe."""
+    if new.get('is_active') and not old.get('is_active'):
+        return True
+    if old.get('is_active') and not new.get('is_active'):
+        return False
+    return (new.get('event_at') or '') >= (old.get('event_at') or '')
+
+
+def _dedupe_distribution_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Collapse duplicate distribution icons for Search (same downstream system + channel).
+    display_name is not part of the logical key — renames must not show multiple vendor icons.
+    """
+    if not entries:
+        return []
+    buckets: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for d in entries:
+        sid = d.get('downstream_system_id')
+        ch = (d.get('channel') or '').lower()
+        api_src = d.get('api_source') or ''
+        if sid:
+            key = ('sys', sid, ch, api_src)
+        else:
+            key = (
+                'anon',
+                d.get('vendor_id') or '',
+                ch,
+                api_src,
+                d.get('display_name') or '',
+            )
+        prev = buckets.get(key)
+        if prev is None or _distribution_entry_preferred(d, prev):
+            buckets[key] = d
+    out = list(buckets.values())
+    out.sort(key=lambda x: x.get('event_at') or '')
+    return out
+
+
+def consolidate_downstream_distribution_events(
+    system_id: int,
+    *,
+    display_name: str | None = None,
+) -> int:
+    """
+    Merge duplicate IocDownstreamEvent rows for one downstream system (e.g. after rename).
+    Returns the number of rows deleted.
+    """
+    events = IocDownstreamEvent.query.filter_by(downstream_system_id=system_id).all()
+    if not events:
+        return 0
+    dn = (display_name or '').strip()
+    groups: dict[tuple[str, str, str, str | None], list[IocDownstreamEvent]] = defaultdict(list)
+    for ev in events:
+        key = (ev.ioc_type, ev.ioc_value, ev.channel, ev.api_source or None)
+        groups[key].append(ev)
+    removed = 0
+    for group in groups.values():
+        if len(group) == 1:
+            ev = group[0]
+            if dn and ev.display_name != dn:
+                ev.display_name = dn
+            continue
+        keeper = max(
+            group,
+            key=lambda e: (
+                bool(getattr(e, 'is_active', True)),
+                e.event_at or datetime.min,
+                e.id or 0,
+            ),
+        )
+        if dn:
+            keeper.display_name = dn
+        keeper.is_active = any(bool(getattr(e, 'is_active', True)) for e in group)
+        for ev in group:
+            if ev.id != keeper.id:
+                db.session.delete(ev)
+                removed += 1
+    return removed
+
+
 def update_downstream_system(
     system_id: int,
     *,
@@ -580,6 +666,7 @@ def update_downstream_system(
         if old_path and old_path != row.custom_icon_path:
             _delete_icon_file(old_path)
 
+    consolidate_downstream_distribution_events(system_id, display_name=row.name)
     row.updated_at = _utcnow()
     db.session.commit()
     return row
@@ -625,12 +712,48 @@ def _ioc_removed_from_hub_at(row: IOC | None) -> datetime | None:
     """When the IOC stopped being published in feeds (manual revoke or TTL expiry)."""
     if row is None:
         return None
+    if getattr(row, 'pending_approval', False):
+        return getattr(row, 'modified_at', None) or getattr(row, 'created_at', None) or _utcnow()
     if getattr(row, 'revoked', False):
         return getattr(row, 'revoked_at', None) or _utcnow()
     exp = getattr(row, 'expiration_date', None)
     if exp is not None and exp <= _utcnow():
         return exp
     return None
+
+
+def reactivate_feed_taxii_distribution(
+    ioc_type: str,
+    ioc_value: str,
+    *,
+    event_at: datetime | None = None,
+) -> None:
+    """Mark feed/TAXII distribution events active again after IOC re-publish (same type+value)."""
+    tt = (ioc_type or '').strip()
+    vv = (ioc_value or '').strip()
+    if not tt or not vv:
+        return
+    ts = event_at or _utcnow()
+    try:
+        from sqlalchemy import func
+
+        updated = False
+        for ev in IocDownstreamEvent.query.filter(
+            IocDownstreamEvent.ioc_type == tt,
+            func.lower(IocDownstreamEvent.ioc_value) == vv.lower(),
+            IocDownstreamEvent.channel.in_((_CHANNEL_FEED, _CHANNEL_TAXII)),
+        ).all():
+            ev.is_active = True
+            if ts > (ev.event_at or datetime.min):
+                ev.event_at = ts
+            updated = True
+        if updated:
+            db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+    except Exception:
+        db.session.rollback()
+        logger.debug('reactivate_feed_taxii_distribution failed', exc_info=True)
 
 
 def _yara_removed_from_hub_at(rule: YaraRule | None) -> datetime | None:
@@ -702,6 +825,10 @@ def _mark_feed_taxii_inactive_after_pull(
                 ).first()
                 removed_at = _ioc_removed_from_hub_at(row)
             if removed_at is None:
+                if not ev.is_active:
+                    ev.is_active = True
+                    if pull_at > (ev.event_at or datetime.min):
+                        ev.event_at = pull_at
                 continue
             if pull_at >= removed_at:
                 ev.is_active = False
@@ -751,6 +878,8 @@ def distribution_map_for_iocs(pairs: list[tuple[str, str]]) -> dict[tuple[str, s
         if key not in out:
             continue
         out[key].append(_event_to_distribution_dict(ev))
+    for key in out:
+        out[key] = _dedupe_distribution_entries(out[key])
     return out
 
 
@@ -1108,8 +1237,12 @@ def _correlate_system_pull(system: DownstreamSystem, channel: str, pull_at: date
         q = (
             IOC.query.filter(
                 IOC.created_at <= pull_at,
-                IOC.created_at > watermark,
                 IOC.revoked.is_(False),
+                IOC.pending_approval.is_(False),
+                db.or_(
+                    IOC.created_at > watermark,
+                    IOC.modified_at > watermark,
+                ),
             )
             .order_by(IOC.id.asc())
         )
@@ -1227,5 +1360,6 @@ def backfill_downstream_system(system_id: int) -> dict[str, int]:
     system.last_taxii_correlated_at = _utcnow()
     system.last_yara_feed_correlated_at = _utcnow()
     system.updated_at = _utcnow()
+    consolidate_downstream_distribution_events(system_id, display_name=system.name)
     db.session.commit()
     return {'feed_events': feed_count, 'taxii_events': taxii_count}

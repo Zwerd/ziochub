@@ -1,9 +1,7 @@
 """
-ZIoCHub - IOC & YARA Management (SQLite backend).
+ZIoCHub - IOC & YARA Management (PostgreSQL backend; SQLite legacy for upgrade migration).
 
-MIGRATION: Before first run with SQLite, manually backup your data/ folder:
-    - Copy the entire data/ directory (e.g. data/ -> data_backup_YYYYMMDD/)
-    - Migration runs once on startup when the DB is empty and imports from data/Main/*.txt and data/Main/yara.txt
+MIGRATION: Before major DB changes, run backup_ziochub.sh or setup.sh upgrade from SQLite.
 """
 import json
 import os
@@ -18,10 +16,12 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, s
 from flask_login import LoginManager, current_user, logout_user
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func, or_, text
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 
 from constants import DEFAULT_IOC_LIMIT, DEFAULT_PAGE_SIZE, IOC_FILES, VERSION
 from extensions import db
+from utils.db_config import build_database_url, is_postgresql_engine, is_sqlite_engine
+from utils.schema_migrations import enable_sqlite_wal, table_column_names, bool_default_sql
 from utils.http_identity import install_ziochub_user_agent
 
 try:
@@ -107,8 +107,18 @@ def _get_secret_key():
 
 app.config['SECRET_KEY'] = _get_secret_key()
 app.config['MAX_CONTENT_LENGTH'] = (_config and getattr(_config, 'MAX_CONTENT_LENGTH', None)) or 16 * 1024 * 1024
-_db_path = (_config and getattr(_config, 'DB_PATH', None)) or os.path.join(_data_dir, 'ziochub.db')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + _db_path
+# DB URI: build_database_url loads data/ziochub.env when present, else legacy data/ziochub.db (SQLite).
+try:
+    _db_uri, _db_backend = build_database_url(data_directory=_data_dir)
+except RuntimeError as _db_err:
+    if os.environ.get('ZIOCHUB_ALLOW_SQLITE_DEV', '').lower() in ('1', 'true', 'yes'):
+        _db_path = (_config and getattr(_config, 'DB_PATH', None)) or os.path.join(_data_dir, 'ziochub.db')
+        _db_uri = 'sqlite:///' + _db_path.replace('\\', '/')
+        _db_backend = 'sqlite'
+    else:
+        raise _db_err
+app.config['SQLALCHEMY_DATABASE_URI'] = _db_uri
+app.config['ZIOCHUB_DB_BACKEND'] = _db_backend
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['DATA_YARA'] = DATA_YARA
 app.config['DATA_YARA_PENDING'] = DATA_YARA_PENDING
@@ -180,7 +190,15 @@ login_manager.login_view = 'auth.login'
 
 @login_manager.user_loader
 def load_user(user_id):
-    return db.session.get(User, int(user_id)) if user_id else None
+    try:
+        if not user_id:
+            return None
+        return db.session.get(User, int(user_id))
+    except (TypeError, ValueError):
+        return None
+    except Exception:
+        db.session.rollback()
+        return None
 
 
 @app.context_processor
@@ -297,9 +315,12 @@ def _api_500_json(exc):
         path = (request.path or '') if request else ''
     except Exception:
         path = ''
+    try:
+        logging.error('HTTP 500 on %s: %s', path or '?', exc, exc_info=exc)
+    except Exception:
+        pass
     if path.startswith('/api/'):
         try:
-            logging.exception('API 500: %s', exc)
             detail = str(exc).strip() if exc else ''
             msg = 'Internal server error. Check server logs.'
             if detail:
@@ -319,19 +340,45 @@ def _api_500_json(exc):
 
 
 def _commit_with_retry(max_attempts=3):
-    """Commit the current session; retry on SQLite 'database is locked' (offline-safe)."""
+    """Commit the current session; retry on SQLite lock or PG sequence drift after migration."""
+    pg_seq_repaired = False
     for attempt in range(max_attempts):
         try:
             db.session.commit()
             return
+        except IntegrityError as e:
+            err = str(getattr(e, 'orig', e)).lower()
+            if (
+                not pg_seq_repaired
+                and is_postgresql_engine(db.engine)
+                and 'duplicate key value violates unique constraint' in err
+                and '_pkey' in err
+            ):
+                db.session.rollback()
+                try:
+                    import models  # noqa: F401
+                    from utils.schema_migrations import reset_all_postgres_sequences
+                    reset_all_postgres_sequences(db.session, db.metadata)
+                    pg_seq_repaired = True
+                except Exception:
+                    db.session.rollback()
+            raise
         except OperationalError as e:
             err = str(e).lower()
-            if 'locked' not in err and 'busy' not in err:
+            if not is_sqlite_engine(db.engine) or ('locked' not in err and 'busy' not in err):
                 raise
             db.session.rollback()
             if attempt + 1 == max_attempts:
                 raise
             time.sleep(0.05 * (attempt + 1))
+
+
+def _table_column_names(table_name: str) -> set[str]:
+    return table_column_names(db.engine, table_name)
+
+
+def _bool_default(false: bool = True) -> str:
+    return bool_default_sql(db.engine, false=false)
 
 def audit_log(action: str, detail: str = '', *, severity: int = 5, username: str | None = None):
     """Write CEF-formatted audit log (local 48h rotation + optional UDP syslog)."""
@@ -867,7 +914,7 @@ def _get_setting(key: str, default: str = '') -> str:
     try:
         s = SystemSetting.query.filter_by(key=key).first()
         return (s.value or default) if s else default
-    except OperationalError:
+    except (OperationalError, ProgrammingError):
         try:
             _ensure_system_settings_table()
             s = SystemSetting.query.filter_by(key=key).first()
@@ -903,6 +950,10 @@ def _champs_excluded_usernames():
     excluded = set()
     if _get_setting('misp_exclude_from_champs', 'true').lower() == 'true':
         sync_user = (_get_setting('misp_sync_user', 'misp_sync') or 'misp_sync').strip()
+        if sync_user:
+            excluded.add(sync_user.lower())
+    if _get_setting('adversarygraph_exclude_from_champs', 'true').lower() == 'true':
+        sync_user = (_get_setting('adversarygraph_sync_user', 'adversarygraph_sync') or 'adversarygraph_sync').strip()
         if sync_user:
             excluded.add(sync_user.lower())
     return excluded or None
@@ -1062,7 +1113,7 @@ def health_check():
         db.session.execute(text('SELECT 1'))
         health_status['checks']['database'] = {
             'status': 'connected',
-            'path': _db_path
+            'backend': app.config.get('ZIOCHUB_DB_BACKEND', 'unknown'),
         }
     except Exception as e:
         health_status['status'] = 'unhealthy'
@@ -1073,10 +1124,18 @@ def health_check():
     
     # Check database tables exist
     try:
-        tables = db.session.execute(text(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('iocs', 'campaigns', 'yara_rules')"
-        )).fetchall()
-        table_names = [row[0] for row in tables]
+        if is_sqlite_engine(db.engine):
+            tables = db.session.execute(text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('iocs', 'campaigns', 'yara_rules')"
+            )).fetchall()
+            table_names = [row[0] for row in tables]
+        else:
+            from sqlalchemy import inspect
+            table_names = [
+                t for t in ('iocs', 'campaigns', 'yara_rules')
+                if t in inspect(db.engine).get_table_names()
+            ]
+        health_status['checks']['database']['backend'] = app.config.get('ZIOCHUB_DB_BACKEND', 'unknown')
         health_status['checks']['database']['tables'] = table_names
         if len(table_names) < 3:
             health_status['status'] = 'degraded'
@@ -1543,71 +1602,10 @@ def _startup_diagnostic():
         print(f"[DIAGNOSTIC] Failed to list {target_dir}: {e}")
 
 
-def _ensure_yara_campaign_id_column():
-    """If yara_rules table exists without campaign_id, add it (migration safety)."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(yara_rules)"))
-        rows = result.fetchall()
-        has_campaign_id = any((row[1] == 'campaign_id' for row in rows))
-        if not has_campaign_id:
-            db.session.execute(text(
-                "ALTER TABLE yara_rules ADD COLUMN campaign_id INTEGER REFERENCES campaigns(id)"
-            ))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] yara_rules campaign_id check/add: {e}")
-
-
-def _ensure_yara_quality_points_column():
-    """Add quality_points to yara_rules for Champs YARA scoring (10-50 per rule)."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(yara_rules)"))
-        rows = result.fetchall()
-        has_qp = any((row[1] == 'quality_points' for row in rows))
-        if not has_qp:
-            db.session.execute(text("ALTER TABLE yara_rules ADD COLUMN quality_points INTEGER"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] yara_rules quality_points check/add: {e}")
-
-
-def _ensure_yara_status_column():
-    """Add status to yara_rules for approval workflow (pending | approved | rejected)."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(yara_rules)"))
-        rows = result.fetchall()
-        has_status = any((row[1] == 'status' for row in rows))
-        if not has_status:
-            db.session.execute(text(
-                "ALTER TABLE yara_rules ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'approved'"
-            ))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] yara_rules status check/add: {e}")
-
-
-def _ensure_yara_content_sha256_column():
-    """Add content_sha256 for duplicate detection (same rule body, different filename)."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(yara_rules)"))
-        rows = result.fetchall()
-        has_h = any((row[1] == 'content_sha256' for row in rows))
-        if not has_h:
-            db.session.execute(text("ALTER TABLE yara_rules ADD COLUMN content_sha256 VARCHAR(64)"))
-            _commit_with_retry()
-        try:
-            db.session.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_yara_rules_content_sha256 ON yara_rules(content_sha256)"
-            ))
-            _commit_with_retry()
-        except Exception:
-            db.session.rollback()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] yara_rules content_sha256 check/add: {e}")
+def _run_schema_upgrades():
+    """Idempotent column/index migrations (SQLite legacy + PostgreSQL production)."""
+    from utils.inline_schema_upgrades import run_inline_schema_upgrades
+    run_inline_schema_upgrades(db.session, db.engine, _commit_with_retry)
 
 
 def _backfill_yara_content_sha256():
@@ -1640,40 +1638,6 @@ def _backfill_yara_content_sha256():
         print(f"[Migration] yara_rules content_sha256 backfill: {e}")
 
 
-def _ensure_yara_rejection_columns():
-    """Add rejection workflow columns to yara_rules (soft reject + analyst resubmit)."""
-    cols = {
-        'rejected_at': 'DATETIME',
-        'rejected_by': 'VARCHAR(255)',
-        'rejection_reason': 'TEXT',
-        'rejection_seen_at': 'DATETIME',
-    }
-    try:
-        result = db.session.execute(text("PRAGMA table_info(yara_rules)"))
-        existing = {row[1] for row in result.fetchall()}
-        for name, sql_type in cols.items():
-            if name not in existing:
-                db.session.execute(text(f"ALTER TABLE yara_rules ADD COLUMN {name} {sql_type}"))
-        _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] yara_rules rejection columns check/add: {e}")
-
-
-def _ensure_yara_original_filename_column():
-    """Add original_filename (client basename as uploaded) for display/documentation."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(yara_rules)"))
-        rows = result.fetchall()
-        has_o = any((row[1] == 'original_filename' for row in rows))
-        if not has_o:
-            db.session.execute(text("ALTER TABLE yara_rules ADD COLUMN original_filename VARCHAR(512)"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] yara_rules original_filename check/add: {e}")
-
-
 def _backfill_yara_original_filename():
     """Set original_filename from storage filename when missing (legacy rows)."""
     try:
@@ -1690,185 +1654,6 @@ def _backfill_yara_original_filename():
     except Exception as e:
         db.session.rollback()
         print(f"[Migration] yara_rules original_filename backfill: {e}")
-
-
-def _ensure_ioc_submission_method_column():
-    """Add submission_method to iocs if missing (single|csv|txt|paste|import)."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(iocs)"))
-        rows = result.fetchall()
-        if not any(row[1] == 'submission_method' for row in rows):
-            db.session.execute(text("ALTER TABLE iocs ADD COLUMN submission_method VARCHAR(16) DEFAULT 'single'"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] iocs submission_method check/add: {e}")
-
-
-def _ensure_ioc_tags_column():
-    """If iocs table exists without tags column, add it (migration safety)."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(iocs)"))
-        rows = result.fetchall()
-        has_tags = any((row[1] == 'tags' for row in rows))
-        if not has_tags:
-            db.session.execute(text("ALTER TABLE iocs ADD COLUMN tags TEXT DEFAULT '[]'"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] iocs tags check/add: {e}")
-
-
-def _ensure_ioc_rare_find_columns():
-    """Add Rare Find columns to iocs if missing (country_code, tld, email_domain, rare_find_type)."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(iocs)"))
-        rows = result.fetchall()
-        names = {row[1] for row in rows}
-        if 'country_code' not in names:
-            db.session.execute(text("ALTER TABLE iocs ADD COLUMN country_code VARCHAR(8)"))
-            _commit_with_retry()
-        if 'tld' not in names:
-            db.session.execute(text("ALTER TABLE iocs ADD COLUMN tld VARCHAR(32)"))
-            _commit_with_retry()
-        if 'email_domain' not in names:
-            db.session.execute(text("ALTER TABLE iocs ADD COLUMN email_domain VARCHAR(255)"))
-            _commit_with_retry()
-        if 'rare_find_type' not in names:
-            db.session.execute(text("ALTER TABLE iocs ADD COLUMN rare_find_type VARCHAR(32)"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] iocs rare_find columns: {e}")
-
-
-def _ensure_ioc_revocation_columns():
-    """
-    Add revocation + modified timestamps to iocs:
-    - revoked (BOOLEAN NOT NULL DEFAULT 0)
-    - revoked_at (DATETIME NULL)
-    - modified_at (DATETIME NULL)  -- STIX/TAXII versioning; keep created_at stable
-    Backfill modified_at from created_at for existing rows.
-    """
-    try:
-        result = db.session.execute(text("PRAGMA table_info(iocs)"))
-        rows = result.fetchall()
-        names = {row[1] for row in rows}
-        if 'revoked' not in names:
-            db.session.execute(text("ALTER TABLE iocs ADD COLUMN revoked BOOLEAN NOT NULL DEFAULT 0"))
-            _commit_with_retry()
-        if 'revoked_at' not in names:
-            db.session.execute(text("ALTER TABLE iocs ADD COLUMN revoked_at DATETIME"))
-            _commit_with_retry()
-        if 'modified_at' not in names:
-            db.session.execute(text("ALTER TABLE iocs ADD COLUMN modified_at DATETIME"))
-            _commit_with_retry()
-        # Backfill modified_at so STIX 'modified' is stable for old rows
-        try:
-            db.session.execute(text("UPDATE iocs SET modified_at = created_at WHERE modified_at IS NULL"))
-            _commit_with_retry()
-        except Exception:
-            db.session.rollback()
-        try:
-            db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_iocs_revoked ON iocs(revoked)"))
-            db.session.execute(text("CREATE INDEX IF NOT EXISTS ix_iocs_modified_at ON iocs(modified_at)"))
-            _commit_with_retry()
-        except Exception:
-            db.session.rollback()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] iocs revocation columns: {e}")
-
-
-def _ensure_ioc_pending_approval_column():
-    """Add pending_approval to iocs when missing (analyst approval workflow)."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(iocs)"))
-        rows = result.fetchall()
-        names = {row[1] for row in rows}
-        if 'pending_approval' not in names:
-            db.session.execute(text(
-                "ALTER TABLE iocs ADD COLUMN pending_approval BOOLEAN NOT NULL DEFAULT 0"
-            ))
-            _commit_with_retry()
-        try:
-            db.session.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_iocs_pending_approval ON iocs(pending_approval)"
-            ))
-            _commit_with_retry()
-        except Exception:
-            db.session.rollback()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] iocs pending_approval: {e}")
-
-
-def _ensure_feed_source_last_seen_status_columns():
-    """Add last_status_code and last_ok to feed_source_last_seen for Connections status view."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(feed_source_last_seen)"))
-        rows = result.fetchall()
-        names = {row[1] for row in rows}
-        if 'last_status_code' not in names:
-            db.session.execute(text("ALTER TABLE feed_source_last_seen ADD COLUMN last_status_code INTEGER"))
-            _commit_with_retry()
-        if 'last_ok' not in names:
-            db.session.execute(text("ALTER TABLE feed_source_last_seen ADD COLUMN last_ok BOOLEAN"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] feed_source_last_seen status columns: {e}")
-
-
-def _ensure_ioc_downstream_events_is_active_column():
-    """Add is_active to ioc_downstream_events (gray vs colorful Distribution icons in Search)."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(ioc_downstream_events)"))
-        rows = result.fetchall()
-        if not rows:
-            return
-        if any((row[1] == 'is_active' for row in rows)):
-            return
-        db.session.execute(text(
-            "ALTER TABLE ioc_downstream_events ADD COLUMN is_active BOOLEAN NOT NULL DEFAULT 1"
-        ))
-        _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] ioc_downstream_events is_active: {e}")
-
-
-def _ensure_downstream_system_custom_columns():
-    """Custom vendor name + uploaded icon path on downstream_systems."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(downstream_systems)"))
-        rows = result.fetchall()
-        if not rows:
-            return
-        names = {row[1] for row in rows}
-        if 'is_custom_vendor' not in names:
-            db.session.execute(text(
-                "ALTER TABLE downstream_systems ADD COLUMN is_custom_vendor BOOLEAN NOT NULL DEFAULT 0"
-            ))
-            _commit_with_retry()
-        if 'custom_vendor_label' not in names:
-            db.session.execute(text(
-                "ALTER TABLE downstream_systems ADD COLUMN custom_vendor_label VARCHAR(255)"
-            ))
-            _commit_with_retry()
-        if 'custom_icon_path' not in names:
-            db.session.execute(text(
-                "ALTER TABLE downstream_systems ADD COLUMN custom_icon_path VARCHAR(512)"
-            ))
-            _commit_with_retry()
-        if 'last_yara_feed_correlated_at' not in names:
-            db.session.execute(text(
-                "ALTER TABLE downstream_systems ADD COLUMN last_yara_feed_correlated_at DATETIME"
-            ))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] downstream_systems custom vendor columns: {e}")
 
 
 def _ensure_admin_user():
@@ -1901,261 +1686,63 @@ def _ensure_system_settings_table():
         print(f"[Migration] system_settings: {e}")
 
 
-def _ensure_ioc_history_type_value_index():
-    """Create index on ioc_history (ioc_type, ioc_value) for fast history lookup by IOC."""
+def _backfill_ioc_user_ids():
+    """Assign legacy IOC rows without user_id to admin (id=1) when present."""
     try:
-        db.session.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_ioc_history_type_value ON ioc_history(ioc_type, ioc_value)"
-        ))
-        _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] ioc_history type_value index: {e}")
-
-
-def _ensure_ioc_notes_type_value_index():
-    """Create index on ioc_notes (ioc_type, ioc_value) for fast notes lookup by IOC."""
-    try:
-        db.session.execute(text(
-            "CREATE INDEX IF NOT EXISTS ix_ioc_notes_type_value ON ioc_notes(ioc_type, ioc_value)"
-        ))
-        _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] ioc_notes type_value index: {e}")
-
-
-def _ensure_champ_scores_streak_days_column():
-    """Add streak_days to champ_scores if missing (e.g. table created before column was added)."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(champ_scores)"))
-        rows = result.fetchall()
-        if not rows:
+        from utils.schema_migrations import table_column_names, table_exists
+        if not table_exists(db.engine, 'iocs') or 'user_id' not in table_column_names(db.engine, 'iocs'):
             return
-        has_col = any((row[1] == 'streak_days' for row in rows))
-        if not has_col:
-            db.session.execute(text("ALTER TABLE champ_scores ADD COLUMN streak_days INTEGER NOT NULL DEFAULT 0"))
+        if db.session.get(User, 1):
+            db.session.execute(text('UPDATE iocs SET user_id = 1 WHERE user_id IS NULL'))
             _commit_with_retry()
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        print(f"[Migration] champ_scores streak_days: {e}")
-
-
-def _ensure_user_last_login_column():
-    """Add last_login_at to users if missing."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(users)"))
-        rows = result.fetchall()
-        has_col = any((row[1] == 'last_login_at' for row in rows))
-        if not has_col:
-            db.session.execute(text("ALTER TABLE users ADD COLUMN last_login_at DATETIME"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] users last_login_at: {e}")
-
-
-def _ensure_user_must_change_password_column():
-    """Add must_change_password to users if missing; set True for default admin."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(users)"))
-        rows = result.fetchall()
-        has_col = any((row[1] == 'must_change_password' for row in rows))
-        if not has_col:
-            db.session.execute(text("ALTER TABLE users ADD COLUMN must_change_password BOOLEAN NOT NULL DEFAULT 0"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] users must_change_password: {e}")
-
-
-def _ensure_ioc_user_id_column():
-    """Add user_id to iocs if missing; assign existing IOCs to admin (id=1)."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(iocs)"))
-        rows = result.fetchall()
-        has_user_id = any((row[1] == 'user_id' for row in rows))
-        if not has_user_id:
-            db.session.execute(text("ALTER TABLE iocs ADD COLUMN user_id INTEGER REFERENCES users(id)"))
-            _commit_with_retry()
-        admin = db.session.get(User, 1)
-        if admin:
-            db.session.execute(text("UPDATE iocs SET user_id = 1 WHERE user_id IS NULL"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] iocs user_id check/add: {e}")
-
-
-def _ensure_team_goal_type_column():
-    """Add goal_type to team_goals if missing."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(team_goals)"))
-        rows = result.fetchall()
-        if not rows:
-            return
-        has_goal_type = any((row[1] == 'goal_type' for row in rows))
-        if not has_goal_type:
-            db.session.execute(text("ALTER TABLE team_goals ADD COLUMN goal_type VARCHAR(32) DEFAULT 'ioc_add' NOT NULL"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] team_goals goal_type: {e}")
-
-
-def _ensure_team_goal_description_column():
-    """Add description to team_goals if missing."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(team_goals)"))
-        rows = result.fetchall()
-        if not rows:
-            return
-        has_desc = any((row[1] == 'description' for row in rows))
-        if not has_desc:
-            db.session.execute(text("ALTER TABLE team_goals ADD COLUMN description TEXT"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] team_goals description: {e}")
-
-
-def _ensure_user_profile_preferences_columns():
-    """Add mute_sound, ambition_popup_disabled, achievement_popup_disabled to user_profiles if missing."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(user_profiles)"))
-        rows = result.fetchall()
-        if not rows:
-            return
-        names = [row[1] for row in rows]
-        if 'mute_sound' not in names:
-            db.session.execute(text("ALTER TABLE user_profiles ADD COLUMN mute_sound BOOLEAN NOT NULL DEFAULT 0"))
-            _commit_with_retry()
-        if 'ambition_popup_disabled' not in names:
-            db.session.execute(text("ALTER TABLE user_profiles ADD COLUMN ambition_popup_disabled BOOLEAN NOT NULL DEFAULT 0"))
-            _commit_with_retry()
-        if 'achievement_popup_disabled' not in names:
-            db.session.execute(text("ALTER TABLE user_profiles ADD COLUMN achievement_popup_disabled BOOLEAN NOT NULL DEFAULT 0"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] user_profiles preferences: {e}")
-
-
-def _ensure_campaign_dir_column():
-    """Add dir (ltr/rtl) to campaigns if missing."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(campaigns)"))
-        rows = result.fetchall()
-        if not rows:
-            return
-        has_dir = any((row[1] == 'dir' for row in rows))
-        if not has_dir:
-            db.session.execute(text("ALTER TABLE campaigns ADD COLUMN dir VARCHAR(8) DEFAULT 'ltr'"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] campaigns dir: {e}")
-
-
-def _ensure_campaign_created_by_column():
-    """Add created_by (user_id) to campaigns if missing."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(campaigns)"))
-        rows = result.fetchall()
-        if not rows:
-            return
-        has_created_by = any((row[1] == 'created_by' for row in rows))
-        if not has_created_by:
-            db.session.execute(text("ALTER TABLE campaigns ADD COLUMN created_by INTEGER REFERENCES users(id)"))
-            _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] campaigns created_by: {e}")
-
-
-def _ensure_campaign_reference_image_ext_column():
-    """Add reference_image_ext (jpg/png/...) to campaigns for optional reference screenshot."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(campaigns)"))
-        rows = result.fetchall()
-        if not rows:
-            return
-        if any((row[1] == 'reference_image_ext' for row in rows)):
-            return
-        db.session.execute(text(
-            "ALTER TABLE campaigns ADD COLUMN reference_image_ext VARCHAR(8)"
-        ))
-        _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] campaigns reference_image_ext: {e}")
-
-
-def _ensure_campaign_tags_column():
-    """Add tags (JSON array text) to campaigns for campaign-level tag propagation to IOCs."""
-    try:
-        result = db.session.execute(text("PRAGMA table_info(campaigns)"))
-        rows = result.fetchall()
-        if not rows:
-            return
-        if any((row[1] == 'tags' for row in rows)):
-            return
-        db.session.execute(text("ALTER TABLE campaigns ADD COLUMN tags TEXT DEFAULT '[]'"))
-        _commit_with_retry()
-    except Exception as e:
-        db.session.rollback()
-        print(f"[Migration] campaigns tags: {e}")
 
 
 def _init_db():
     """Create tables and run legacy migration if DB is empty."""
     with app.app_context():
         db.create_all()
-        # Enable WAL for better concurrent read/write (fewer locks, faster bulk writes)
-        try:
-            db.session.execute(text("PRAGMA journal_mode=WAL"))
-            db.session.commit()
-        except Exception:
-            db.session.rollback()
-        _ensure_yara_campaign_id_column()
-        _ensure_yara_quality_points_column()
-        _ensure_yara_status_column()
-        _ensure_yara_content_sha256_column()
-        _ensure_yara_original_filename_column()
-        _ensure_yara_rejection_columns()
+        if is_sqlite_engine(db.engine):
+            enable_sqlite_wal(db.session)
+        elif is_postgresql_engine(db.engine):
+            try:
+                from utils.schema_migrations import reset_all_postgres_sequences
+                import models  # noqa: F401 — ensure all tables on metadata
+
+                aligned = reset_all_postgres_sequences(db.session, db.metadata)
+                if aligned:
+                    logging.info('PostgreSQL sequences aligned for %d table(s)', len(aligned))
+            except Exception as exc:
+                logging.warning('PostgreSQL sequence alignment on startup failed: %s', exc)
+        _run_schema_upgrades()
         _backfill_yara_content_sha256()
         _backfill_yara_original_filename()
-        _ensure_ioc_tags_column()
-        _ensure_ioc_submission_method_column()
-        _ensure_ioc_rare_find_columns()
-        _ensure_ioc_revocation_columns()
-        _ensure_ioc_pending_approval_column()
-        _ensure_feed_source_last_seen_status_columns()
-        _ensure_downstream_system_custom_columns()
-        _ensure_ioc_downstream_events_is_active_column()
-        _ensure_user_last_login_column()  # Must run before any User query (admin_user, etc.)
-        _ensure_user_must_change_password_column()
-        _ensure_admin_user()  # Must exist before user_id migration
-        _ensure_ioc_user_id_column()
+        _ensure_admin_user()
+        _backfill_ioc_user_ids()
         _ensure_system_settings_table()
-        _ensure_team_goal_type_column()
-        _ensure_team_goal_description_column()
-        _ensure_campaign_dir_column()
-        _ensure_campaign_created_by_column()
-        _ensure_campaign_reference_image_ext_column()
-        _ensure_campaign_tags_column()
-        _ensure_ioc_history_type_value_index()
-        _ensure_ioc_notes_type_value_index()
-        _ensure_champ_scores_streak_days_column()
-        _ensure_user_profile_preferences_columns()
         migrate_legacy_data()
 
 
+def _should_skip_auto_init_db() -> bool:
+    """Skip module-level init during setup/migration (import app must not seed PostgreSQL early)."""
+    if os.environ.get('ZIOCHUB_SKIP_DB_INIT', '').strip().lower() in ('1', 'true', 'yes'):
+        return True
+    sqlite_path = os.path.join(_data_dir, 'ziochub.db')
+    try:
+        if os.path.isfile(sqlite_path) and is_postgresql_engine(db.engine):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 # Ensure DB exists when app is loaded (e.g. under gunicorn); avoids service crash on first start
-try:
-    _init_db()
-except Exception:
-    pass
+if not _should_skip_auto_init_db():
+    try:
+        _init_db()
+    except Exception:
+        pass
 
 try:
     from utils.misp_sync_scheduler import start_misp_sync_scheduler
@@ -2166,6 +1753,12 @@ except Exception:
 try:
     from utils.taxii_sync_scheduler import start_taxii_sync_scheduler
     start_taxii_sync_scheduler(app)
+except Exception:
+    pass
+
+try:
+    from utils.adversarygraph_sync_scheduler import start_adversarygraph_sync_scheduler
+    start_adversarygraph_sync_scheduler(app)
 except Exception:
     pass
 

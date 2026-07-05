@@ -237,22 +237,33 @@ def sync_to_db(
     misp_username: str,
     default_ttl_days: int | None = None,
     geoip_reader=None,
+    *,
+    ioc_import_mode: str = 'pending',
+    get_setting_fn=None,
 ) -> dict:
     """
     Insert MISP attributes into ZIoCHub DB.
     Must be called within Flask app context.
     geoip_reader: optional geoip2 Reader for filling country_code on IPs (Live Stats).
-    Returns summary: {added, skipped, errors}
+    ioc_import_mode: auto | pending | block (default pending for inbound pulls).
+    Returns summary: {added, skipped, errors, blocked, pending_added, ...}
     """
     from extensions import db
     from models import IOC, IocHistory
     from sqlalchemy import func
+    from utils.ioc_import_mode import normalize_ioc_import_mode
+
+    mode = normalize_ioc_import_mode(ioc_import_mode, 'pending')
 
     added = 0
     skipped = 0
     errors = 0
-    added_samples: list[dict] = []  # for Admin UI: show new IOCs on screen (type + value), max 100
-    invalid_samples: list[dict] = []  # for Admin UI: show why some were skipped (type + value), max 30
+    blocked = 0
+    pending_added = 0
+    added_samples: list[dict] = []
+    pending_samples: list[dict] = []
+    invalid_samples: list[dict] = []
+    publish_keys: list[tuple[str, str]] = []
 
     exp_date = None
     if default_ttl_days and default_ttl_days > 0:
@@ -281,6 +292,12 @@ def sync_to_db(
             skipped += 1
             continue
 
+        if mode == 'block':
+            blocked += 1
+            continue
+
+        pending_approval = mode == 'pending'
+
         comment_parts = []
         if event_info:
             comment_parts.append(f'[MISP] {event_info}')
@@ -300,6 +317,8 @@ def sync_to_db(
                 comment=comment[:1000],
                 expiration_date=exp_date,
                 user_id=misp_user_id,
+                submission_method='import',
+                pending_approval=pending_approval,
                 country_code=agg.get('country_code'),
                 tld=agg.get('tld'),
                 email_domain=agg.get('email_domain'),
@@ -310,11 +329,21 @@ def sync_to_db(
                 ioc_value=value,
                 event_type='created',
                 username=misp_username,
-                payload=json.dumps({'source': 'misp', 'misp_event': event_id}),
+                payload=json.dumps({
+                    'source': 'misp',
+                    'misp_event': event_id,
+                    'pending_approval': pending_approval,
+                }),
             ))
             added += 1
-            if len(added_samples) < 100:
-                added_samples.append({'type': tg_type, 'value': value})
+            if pending_approval:
+                pending_added += 1
+                if len(pending_samples) < 100:
+                    pending_samples.append({'type': tg_type, 'value': value})
+            else:
+                publish_keys.append((tg_type, value))
+                if len(added_samples) < 100:
+                    added_samples.append({'type': tg_type, 'value': value})
         except Exception as e:
             _log.warning('MISP sync insert error for %s: %s', value[:80], e)
             errors += 1
@@ -325,9 +354,37 @@ def sync_to_db(
         except Exception as e:
             db.session.rollback()
             _log.exception('MISP sync commit failed: %s', e)
-            return {'added': 0, 'skipped': skipped, 'errors': added + errors, 'error': str(e), 'added_samples': [], 'invalid_samples': []}
+            return {
+                'added': 0, 'skipped': skipped, 'errors': added + errors, 'error': str(e),
+                'blocked': blocked, 'pending_added': 0,
+                'added_samples': [], 'pending_samples': [], 'invalid_samples': invalid_samples,
+            }
 
-    return {'added': added, 'skipped': skipped, 'errors': errors, 'invalid': invalid, 'added_samples': added_samples, 'invalid_samples': invalid_samples}
+        if mode == 'auto' and publish_keys and get_setting_fn:
+            try:
+                from utils.ioc_publish import publish_ioc_row
+                for tg_type, value in publish_keys:
+                    pub_row = IOC.query.filter(
+                        IOC.type == tg_type,
+                        func.lower(IOC.value) == value.lower(),
+                    ).first()
+                    if pub_row and not pub_row.pending_approval:
+                        publish_ioc_row(pub_row, get_setting=get_setting_fn)
+            except Exception as e:
+                _log.warning('MISP IOC publish after sync failed: %s', e)
+
+    return {
+        'added': added,
+        'skipped': skipped,
+        'errors': errors,
+        'invalid': invalid,
+        'blocked': blocked,
+        'pending_added': pending_added,
+        'added_samples': added_samples,
+        'pending_samples': pending_samples,
+        'invalid_samples': invalid_samples,
+        'ioc_import_mode': mode,
+    }
 
 
 def ensure_misp_user(username: str = 'misp_sync') -> tuple[int, str]:
@@ -459,6 +516,9 @@ def run_sync(settings: dict, log_lines: list | None = None) -> dict:
             return {'success': False, 'error': err, 'fetched': 0}
         log('Fetch attributes from MISP', 'ok', f'Fetched {len(attrs)} attributes')
 
+        ioc_mode = settings.get('misp_ioc_import_mode') or 'pending'
+        log('Import policy', 'ok', f'IOC={ioc_mode}')
+
         log('Insert into ZIoCHub', 'ok', 'Writing to database...')
         geoip_reader = None
         try:
@@ -466,10 +526,24 @@ def run_sync(settings: dict, log_lines: list | None = None) -> dict:
             geoip_reader = _gr
         except ImportError:
             pass
-        result = sync_to_db(attrs, user_id, username, default_ttl, geoip_reader=geoip_reader)
+        get_setting_fn = None
+        try:
+            from app import _get_setting
+            get_setting_fn = _get_setting
+        except ImportError:
+            pass
+        result = sync_to_db(
+            attrs, user_id, username, default_ttl, geoip_reader=geoip_reader,
+            ioc_import_mode=ioc_mode, get_setting_fn=get_setting_fn,
+        )
         result['success'] = True
         result['fetched'] = len(attrs)
-        log('Insert into ZIoCHub', 'ok', f"Added: {result.get('added', 0)}, skipped: {result.get('skipped', 0)}, errors: {result.get('errors', 0)}")
+        log(
+            'Insert into ZIoCHub', 'ok',
+            f"mode={ioc_mode} added={result.get('added', 0)} "
+            f"pending={result.get('pending_added', 0)} blocked={result.get('blocked', 0)} "
+            f"skipped={result.get('skipped', 0)} errors={result.get('errors', 0)}",
+        )
         return result
     finally:
         _release_lock()

@@ -28,7 +28,7 @@ var authState = {
     display_name: null,
     is_admin: false,
     avatar_url: null,
-    ui: { champs_tab_enabled: true, yara_approval_required: true, ioc_approval_required: true }
+    ui: { champs_tab_enabled: true, yara_approval_required: true, ioc_approval_required: false, ioc_submissions_blocked: false }
 };
 var statsPollInterval = null;
 var liveFeedInterval = null;
@@ -272,10 +272,14 @@ function _renderAdminPendingSection(adminData, inboxTr) {
             </div>
             <div class="text-secondary text-sm mb-2">${esc(inboxTr.pending || 'Pending')}: <span class="text-primary font-bold">${esc(iocCount)}</span></div>
             ${iocs.length ? `<ul class="space-y-2 text-sm">` + iocs.map(r => `
-                <li class="border border-white/10 rounded-lg p-3">
+                <li class="border border-white/10 rounded-lg p-3" data-ioc-type="${esc(r.type)}" data-ioc-value="${esc(r.value)}">
                     <div class="font-mono text-amber-200 break-all">${esc(r.type)}: ${esc(r.value)}</div>
                     <div class="text-secondary mt-1">${esc(inboxTr.by || 'By')} <span class="text-primary">${esc(r.analyst || '—')}</span> • ${esc(typeof formatUtcToLocal === 'function' ? formatUtcToLocal(r.created_at) : (r.created_at||'').slice(0,19).replace('T',' '))}</div>
                     ${r.comment ? `<div class="text-secondary mt-1">${esc(r.comment)}</div>` : ``}
+                    <div class="flex flex-wrap gap-2 mt-3">
+                        <button type="button" class="inbox-ioc-approve px-3 py-1 rounded-lg bg-emerald-600/80 hover:bg-emerald-500 text-white text-xs font-semibold">${esc(inboxTr.approve || 'Approve')}</button>
+                        <button type="button" class="inbox-ioc-reject px-3 py-1 rounded-lg bg-red-600/70 hover:bg-red-500 text-white text-xs font-semibold">${esc(inboxTr.reject || 'Reject')}</button>
+                    </div>
                 </li>
             `).join('') + `</ul>` : `<div class="text-secondary text-sm">${esc(inboxTr.admin_no_ioc || 'No pending IOCs.')}</div>`}
         </div>`;
@@ -449,6 +453,35 @@ async function goToYaraRejected(filename) {
     }
 }
 
+async function inboxIocAction(action, iocType, value) {
+    const tr = translations[currentLang] || translations.en || {};
+    const inboxTr = tr.inbox || {};
+    const url = action === 'approve' ? '/api/admin/ioc/approve' : '/api/admin/ioc/reject';
+    const body = { type: iocType, value: value };
+    if (action === 'reject') {
+        const reason = window.prompt(inboxTr.reject_reason_prompt || 'Rejection reason (optional):') || '';
+        if (reason) body.reason = reason;
+    }
+    try {
+        const res = await fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+            alert(data.message || data.error || (action === 'approve' ? 'Approve failed' : 'Reject failed'));
+            return;
+        }
+        await loadInboxBadge();
+        _renderInboxModal();
+    } catch (e) {
+        console.warn('inboxIocAction failed', e);
+        alert(action === 'approve' ? 'Approve failed' : 'Reject failed');
+    }
+}
+
 function initInboxUI() {
     const btn = document.getElementById('userInboxBtn');
     const modal = document.getElementById('userInboxModal');
@@ -466,6 +499,24 @@ function initInboxUI() {
             if (rejBtn) {
                 e.preventDefault();
                 goToYaraRejected(rejBtn.getAttribute('data-filename') || '');
+                return;
+            }
+            const approveBtn = e.target.closest('.inbox-ioc-approve');
+            if (approveBtn) {
+                e.preventDefault();
+                const li = approveBtn.closest('[data-ioc-type]');
+                if (li) {
+                    inboxIocAction('approve', li.getAttribute('data-ioc-type'), li.getAttribute('data-ioc-value'));
+                }
+                return;
+            }
+            const rejectBtn = e.target.closest('.inbox-ioc-reject');
+            if (rejectBtn) {
+                e.preventDefault();
+                const li = rejectBtn.closest('[data-ioc-type]');
+                if (li) {
+                    inboxIocAction('reject', li.getAttribute('data-ioc-type'), li.getAttribute('data-ioc-value'));
+                }
             }
         });
     }

@@ -74,6 +74,19 @@
                 </select>
             </div>
             <div class="border-t border-white/5 pt-4 mt-4">
+                <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Import policy</p>
+                <p class="text-secondary text-xs mb-3">Controls how MISP pull results enter ZIoCHub. Default: pending (admin approval). Pending items appear in the admin Inbox.</p>
+            </div>
+            <div>
+                <label for="misp_ioc_import_mode" class="block text-sm font-semibold text-secondary mb-1">IOC import mode</label>
+                {% set misp_ioc_mode = settings.misp_ioc_import_mode | default('pending') %}
+                <select id="misp_ioc_import_mode" name="misp_ioc_import_mode" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="auto" {% if misp_ioc_mode == 'auto' %}selected{% endif %}>Auto — publish to feeds immediately</option>
+                    <option value="pending" {% if misp_ioc_mode == 'pending' %}selected{% endif %}>Pending — admin approval required</option>
+                    <option value="block" {% if misp_ioc_mode == 'block' %}selected{% endif %}>Block — never import IOCs from MISP</option>
+                </select>
+            </div>
+            <div class="border-t border-white/5 pt-4 mt-4">
                 <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Import Settings</p>
             </div>
             <div class="grid grid-cols-2 gap-4">

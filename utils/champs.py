@@ -8,6 +8,10 @@ from datetime import date, datetime, timedelta
 from collections import defaultdict
 from sqlalchemy import func, text
 
+from utils.schema_migrations import (
+    clamp_int_expr, dow_in_clause, hour_in_clause, json_text_field_expr, sql_date_expr,
+)
+
 # Points per action type (scaled: ~10k IOCs/year -> ~20k points instead of 100k+)
 IOC_DEFAULT = 2
 IOC_WITH_CAMPAIGN = 3
@@ -545,6 +549,13 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
 
     params = {}
     sm = str(scoring_method or '').strip()
+    engine = db.engine
+    d_ioc_created = sql_date_expr('ioc.created_at', engine)
+    d_yr_uploaded = sql_date_expr('yr.uploaded_at', engine)
+    d_ae_created = sql_date_expr('ae.created_at', engine)
+    payload_was_expired = json_text_field_expr('ae.payload', '$.was_expired', engine)
+    yara_pts_default = clamp_int_expr('COALESCE(yr.quality_points, 25)', 10, 50, engine)
+    yara_pts_quality = clamp_int_expr('yr.quality_points', 10, 50, engine)
 
     # Method 5 (Time Decay): live leaderboard uses a rolling 90-day window by default.
     if sm == '5' and start_dt is None and end_dt is None:
@@ -673,11 +684,11 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
         """
     q2 = text(f"""
         SELECT LOWER(TRIM(ioc.analyst)) AS analyst,
-               DATE(ioc.created_at) AS d,
+               {d_ioc_created} AS d,
                {ioc_day_expr}
         FROM iocs ioc
         WHERE ioc.analyst IS NOT NULL AND TRIM(ioc.analyst) != '' AND ioc.created_at IS NOT NULL {_dt_filter('ioc', 'created_at', params)}
-        GROUP BY LOWER(TRIM(ioc.analyst)), DATE(ioc.created_at)
+        GROUP BY LOWER(TRIM(ioc.analyst)), {d_ioc_created}
     """)
     params['ioc_campaign2'] = IOC_WITH_CAMPAIGN
     params['ioc_default2'] = IOC_DEFAULT
@@ -701,18 +712,18 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
         yara_count_expr = "SUM(CASE WHEN yr.status = 'approved' THEN 1 ELSE 0 END) AS yara_count"
     elif sm == '4':
         # Campaign Focus: YARA points only when approved AND linked to a campaign.
-        yara_points_expr = "SUM(CASE WHEN yr.status = 'approved' AND yr.campaign_id IS NOT NULL THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS yara_points"
-        yara_day_expr = "SUM(CASE WHEN yr.status = 'approved' AND yr.campaign_id IS NOT NULL THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS day_pts"
+        yara_points_expr = f"SUM(CASE WHEN yr.status = 'approved' AND yr.campaign_id IS NOT NULL THEN {yara_pts_default} ELSE 0 END) AS yara_points"
+        yara_day_expr = f"SUM(CASE WHEN yr.status = 'approved' AND yr.campaign_id IS NOT NULL THEN {yara_pts_default} ELSE 0 END) AS day_pts"
         yara_count_expr = "SUM(CASE WHEN yr.status = 'approved' AND yr.campaign_id IS NOT NULL THEN 1 ELSE 0 END) AS yara_count"
     elif sm == '6':
         # Quality: YARA points come from quality_points only (approved only).
         # If quality_points is NULL, contributes 0.
-        yara_points_expr = "SUM(CASE WHEN yr.status = 'approved' AND yr.quality_points IS NOT NULL THEN MIN(50, MAX(10, yr.quality_points)) ELSE 0 END) AS yara_points"
-        yara_day_expr = "SUM(CASE WHEN yr.status = 'approved' AND yr.quality_points IS NOT NULL THEN MIN(50, MAX(10, yr.quality_points)) ELSE 0 END) AS day_pts"
+        yara_points_expr = f"SUM(CASE WHEN yr.status = 'approved' AND yr.quality_points IS NOT NULL THEN {yara_pts_quality} ELSE 0 END) AS yara_points"
+        yara_day_expr = f"SUM(CASE WHEN yr.status = 'approved' AND yr.quality_points IS NOT NULL THEN {yara_pts_quality} ELSE 0 END) AS day_pts"
         yara_count_expr = "SUM(CASE WHEN yr.status = 'approved' THEN 1 ELSE 0 END) AS yara_count"
     else:
-        yara_points_expr = "SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS yara_points"
-        yara_day_expr = "SUM(CASE WHEN yr.status = 'approved' THEN MIN(50, MAX(10, COALESCE(yr.quality_points, 25))) ELSE 0 END) AS day_pts"
+        yara_points_expr = f"SUM(CASE WHEN yr.status = 'approved' THEN {yara_pts_default} ELSE 0 END) AS yara_points"
+        yara_day_expr = f"SUM(CASE WHEN yr.status = 'approved' THEN {yara_pts_default} ELSE 0 END) AS day_pts"
         yara_count_expr = "SUM(CASE WHEN yr.status = 'approved' THEN 1 ELSE 0 END) AS yara_count"
     q3 = text(f"""
         SELECT LOWER(yr.analyst) AS analyst,
@@ -739,11 +750,11 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
     # 3b) YARA daily
     q3b = text(f"""
         SELECT LOWER(yr.analyst) AS analyst,
-               DATE(yr.uploaded_at) AS d,
+               {d_yr_uploaded} AS d,
                {yara_day_expr}
         FROM yara_rules yr
         WHERE yr.uploaded_at IS NOT NULL {yara_where}
-        GROUP BY LOWER(yr.analyst), DATE(yr.uploaded_at)
+        GROUP BY LOWER(yr.analyst), {d_yr_uploaded}
     """)
     rows3b = db.session.execute(q3b, params).fetchall()
     for r in rows3b:
@@ -758,11 +769,11 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
     q4 = text(f"""
         SELECT LOWER(u.username) AS analyst, ae.user_id,
                COUNT(*) AS total,
-               SUM(CASE WHEN json_extract(ae.payload,'$.was_expired') IN (1, 'true', 1.0) THEN 1 ELSE 0 END) AS expired
+               SUM(CASE WHEN {payload_was_expired} IN ('1', 'true', 'True', '1.0') THEN 1 ELSE 0 END) AS expired
         FROM activity_events ae
         JOIN users u ON ae.user_id = u.id
         WHERE ae.event_type = 'ioc_deletion' {del_where}
-        GROUP BY ae.user_id
+        GROUP BY ae.user_id, LOWER(u.username)
     """)
     rows4 = db.session.execute(q4, params).fetchall()
     for r in rows4:
@@ -775,7 +786,7 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
 
     # 4b) Deletion events per day so deleter gets +1 per deletion (not self-delete) and last_activity/streak update
     q4b = text(f"""
-        SELECT ae.user_id, LOWER(TRIM(u.username)) AS analyst, DATE(ae.created_at) AS d, ae.payload
+        SELECT ae.user_id, LOWER(TRIM(u.username)) AS analyst, {d_ae_created} AS d, ae.payload
         FROM activity_events ae
         JOIN users u ON ae.user_id = u.id
         WHERE ae.event_type = 'ioc_deletion' {del_where}
@@ -798,7 +809,7 @@ def compute_analyst_scores_aggregated(db, IOC, YaraRule, User, ActivityEvent=Non
     if sm not in ('2', '3'):
         evt_where = _dt_filter('ae', 'created_at', params)
         q5 = text(f"""
-            SELECT ae.user_id, LOWER(TRIM(u.username)) AS analyst, DATE(ae.created_at) AS d
+            SELECT ae.user_id, LOWER(TRIM(u.username)) AS analyst, {d_ae_created} AS d
             FROM activity_events ae
             JOIN users u ON ae.user_id = u.id
             WHERE ae.event_type IN ('campaign_create', 'ioc_campaign_link') {evt_where}
@@ -1413,30 +1424,34 @@ def _get_badges(db, IOC, YaraRule, ActivityEvent, analyst_lower, user_id, analys
     # Type counts and campaign_linked - by assigned analyst (ioc.analyst), not submitter
     type_counts = defaultdict(int)
     type_rows = db.session.query(IOC.type, func.count()).filter(func.lower(IOC.analyst) == analyst_lower).group_by(IOC.type).all()
-    campaign_linked = db.session.query(func.count()).filter(func.lower(IOC.analyst) == analyst_lower, IOC.campaign_id.isnot(None), IOC.campaign_id != '').scalar() or 0
+    campaign_linked = db.session.query(func.count()).filter(
+        func.lower(IOC.analyst) == analyst_lower, IOC.campaign_id.isnot(None)
+    ).scalar() or 0
     for (t, cnt) in type_rows:
         if t:
             type_counts[t] = type_counts.get(t, 0) + (cnt or 0)
 
     # Time-of-day / weekend badges: EXISTS-style checks (no full row load)
-    night_h = ['0', '1', '2', '3', '4', '22', '23']
-    early_h = ['5', '6', '7']
+    engine = db.engine
+    night_h = [0, 1, 2, 3, 4, 22, 23]
+    early_h = [5, 6, 7]
+    weekend_d = [5, 6]  # Fri–Sat (SQLite %w / PG dow)
     ioc_filter = func.lower(IOC.analyst) == analyst_lower
-    has_night = db.session.query(IOC.id).filter(ioc_filter, func.strftime('%H', IOC.created_at).in_(night_h)).first() is not None
-    has_early = db.session.query(IOC.id).filter(ioc_filter, func.strftime('%H', IOC.created_at).in_(early_h)).first() is not None
-    has_weekend = db.session.query(IOC.id).filter(ioc_filter, func.strftime('%w', IOC.created_at).in_(['5', '6'])).first() is not None
+    has_night = db.session.query(IOC.id).filter(ioc_filter, hour_in_clause(IOC.created_at, night_h, engine)).first() is not None
+    has_early = db.session.query(IOC.id).filter(ioc_filter, hour_in_clause(IOC.created_at, early_h, engine)).first() is not None
+    has_weekend = db.session.query(IOC.id).filter(ioc_filter, dow_in_clause(IOC.created_at, weekend_d, engine)).first() is not None
     if not has_night or not has_early or not has_weekend:
         yr_filter = db.and_(func.lower(YaraRule.analyst) == analyst_lower, YaraRule.status == 'approved')
         if not has_night:
-            has_night = db.session.query(YaraRule.id).filter(yr_filter, func.strftime('%H', YaraRule.uploaded_at).in_(night_h)).first() is not None
+            has_night = db.session.query(YaraRule.id).filter(yr_filter, hour_in_clause(YaraRule.uploaded_at, night_h, engine)).first() is not None
         if not has_early:
-            has_early = db.session.query(YaraRule.id).filter(yr_filter, func.strftime('%H', YaraRule.uploaded_at).in_(early_h)).first() is not None
+            has_early = db.session.query(YaraRule.id).filter(yr_filter, hour_in_clause(YaraRule.uploaded_at, early_h, engine)).first() is not None
         if not has_weekend:
-            has_weekend = db.session.query(YaraRule.id).filter(yr_filter, func.strftime('%w', YaraRule.uploaded_at).in_(['5', '6'])).first() is not None
+            has_weekend = db.session.query(YaraRule.id).filter(yr_filter, dow_in_clause(YaraRule.uploaded_at, weekend_d, engine)).first() is not None
     if user_id and ActivityEvent and not has_night:
         has_night = db.session.query(ActivityEvent.id).filter(
             ActivityEvent.event_type == 'ioc_deletion', ActivityEvent.user_id == user_id,
-            func.strftime('%H', ActivityEvent.created_at).in_(night_h)
+            hour_in_clause(ActivityEvent.created_at, night_h, engine),
         ).first() is not None
     if has_night:
         add_badge('night_owl')
@@ -1512,13 +1527,14 @@ def _compute_team_daily_totals(db, IOC, YaraRule, ActivityEvent, today, days_bac
     team_daily = defaultdict(int)
     start = today - timedelta(days=days_back)
     start_dt = datetime.combine(start, datetime.min.time())
+    d_created = sql_date_expr('created_at', db.engine)
     # IOCs: aggregated by date (2/3 pts) - no row load
-    q_ioc = text("""
-        SELECT DATE(created_at) AS d,
-               SUM(CASE WHEN campaign_id IS NOT NULL AND TRIM(COALESCE(campaign_id,'')) != '' THEN :ioc_campaign ELSE :ioc_default END) AS day_pts
+    q_ioc = text(f"""
+        SELECT {d_created} AS d,
+               SUM(CASE WHEN campaign_id IS NOT NULL THEN :ioc_campaign ELSE :ioc_default END) AS day_pts
         FROM iocs
         WHERE created_at >= :start_dt AND created_at IS NOT NULL
-        GROUP BY DATE(created_at)
+        GROUP BY {d_created}
     """)
     params = {'start_dt': start_dt, 'ioc_campaign': IOC_WITH_CAMPAIGN, 'ioc_default': IOC_DEFAULT}
     for row in db.session.execute(q_ioc, params).fetchall():
@@ -1555,19 +1571,21 @@ def _compute_team_daily_counts(db, IOC, YaraRule, today, days_back=30):
     team_daily = defaultdict(int)
     start = today - timedelta(days=days_back)
     start_dt = datetime.combine(start, datetime.min.time())
-    q_ioc = text("""
-        SELECT DATE(created_at) AS d, COUNT(*) AS cnt
+    d_created = sql_date_expr('created_at', db.engine)
+    d_uploaded = sql_date_expr('uploaded_at', db.engine)
+    q_ioc = text(f"""
+        SELECT {d_created} AS d, COUNT(*) AS cnt
         FROM iocs WHERE created_at >= :start_dt AND created_at IS NOT NULL
-        GROUP BY DATE(created_at)
+        GROUP BY {d_created}
     """)
     for row in db.session.execute(q_ioc, {'start_dt': start_dt}).fetchall():
         d = _ensure_date(row[0])
         if d:
             team_daily[d] = team_daily.get(d, 0) + (row[1] or 0)
-    q_yara = text("""
-        SELECT DATE(uploaded_at) AS d, COUNT(*) AS cnt
+    q_yara = text(f"""
+        SELECT {d_uploaded} AS d, COUNT(*) AS cnt
         FROM yara_rules WHERE uploaded_at >= :start_dt AND uploaded_at IS NOT NULL AND status = 'approved'
-        GROUP BY DATE(uploaded_at)
+        GROUP BY {d_uploaded}
     """)
     for row in db.session.execute(q_yara, {'start_dt': start_dt}).fetchall():
         d = _ensure_date(row[0])
@@ -1632,11 +1650,12 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
                 analyst_daily[day_key] = analyst_daily.get(day_key, 0) + pts
     else:
         # Non-Smart: aggregate by date (2/3 pts) - by assigned analyst
-        q = text("""
-            SELECT DATE(created_at) AS d,
-                   SUM(CASE WHEN campaign_id IS NOT NULL AND TRIM(COALESCE(campaign_id,'')) != '' THEN :ioc_campaign ELSE :ioc_default END) AS day_pts
+        d_created = sql_date_expr('created_at', db.engine)
+        q = text(f"""
+            SELECT {d_created} AS d,
+                   SUM(CASE WHEN campaign_id IS NOT NULL THEN :ioc_campaign ELSE :ioc_default END) AS day_pts
             FROM iocs WHERE LOWER(TRIM(analyst)) = :analyst AND created_at >= :start_dt AND created_at IS NOT NULL
-            GROUP BY DATE(created_at)
+            GROUP BY {d_created}
         """)
         params = {'analyst': analyst_lower, 'start_dt': start_dt, 'ioc_campaign': IOC_WITH_CAMPAIGN, 'ioc_default': IOC_DEFAULT}
         for agg_row in db.session.execute(q, params).fetchall():
@@ -1689,10 +1708,11 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
 
     # Chart: show submission counts (IOC + YARA per day) by analyst name so admin-submitted-on-behalf count
     analyst_daily_count = defaultdict(int)
-    qc = text("""
-        SELECT DATE(created_at) AS d, COUNT(*) AS cnt
+    d_created = sql_date_expr('created_at', db.engine)
+    qc = text(f"""
+        SELECT {d_created} AS d, COUNT(*) AS cnt
         FROM iocs WHERE LOWER(analyst) = :analyst AND created_at >= :start_dt AND created_at IS NOT NULL
-        GROUP BY DATE(created_at)
+        GROUP BY {d_created}
     """)
     for r in db.session.execute(qc, {'analyst': analyst_lower, 'start_dt': start_dt}).fetchall():
         d = _ensure_date(r[0])

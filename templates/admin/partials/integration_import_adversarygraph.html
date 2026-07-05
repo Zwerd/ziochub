@@ -1,0 +1,168 @@
+<div id="import-sub-adversarygraph" class="import-sub-pane hidden">
+    <div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-2xl">
+        <div class="flex items-center gap-3 mb-4">
+            <img src="{{ integration_icons.adversarygraph_pull }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+            <h3 class="text-lg font-semibold accent-blue">AdversaryGraph pull</h3>
+        </div>
+        <p class="text-secondary text-sm mb-6">Pull IOCs from AdversaryGraph <strong class="text-primary">IOC Library</strong> and new <strong class="text-primary">YARA</strong> rules from Detection Studio. IOCs are attributed to the sync user (like MISP). YARA rules follow the analyst approval workflow when <em>YARA auto-publish</em> is disabled in Settings.</p>
+
+        <form id="adversarygraphForm" class="space-y-4">
+            <div>
+                <label for="adversarygraph_enabled" class="block text-sm font-semibold text-secondary mb-1">AdversaryGraph Sync Enabled</label>
+                <select id="adversarygraph_enabled" name="adversarygraph_enabled" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="false" {% if settings.adversarygraph_enabled == 'false' %}selected{% endif %}>No</option>
+                    <option value="true" {% if settings.adversarygraph_enabled == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+            </div>
+            <div>
+                <label for="adversarygraph_url" class="block text-sm font-semibold text-secondary mb-1">API URL</label>
+                <input type="text" id="adversarygraph_url" name="adversarygraph_url" placeholder="http://127.0.0.1:8000" value="{{ settings.adversarygraph_url }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <p class="text-secondary text-xs mt-1">AdversaryGraph FastAPI base URL (not the React frontend on :3000).</p>
+            </div>
+            <div>
+                <label for="adversarygraph_verify_ssl" class="block text-sm font-semibold text-secondary mb-1">Verify SSL</label>
+                <select id="adversarygraph_verify_ssl" name="adversarygraph_verify_ssl" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="false" {% if settings.adversarygraph_verify_ssl == 'false' %}selected{% endif %}>No</option>
+                    <option value="true" {% if settings.adversarygraph_verify_ssl == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+            </div>
+            <div class="border-t border-white/5 pt-4">
+                <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Authentication (optional)</p>
+                <p class="text-secondary text-xs mb-3">Only required when AdversaryGraph has <code class="px-0.5 rounded bg-white/10 text-xs">AUTH_ENABLED</code> or an OIDC proxy sets headers.</p>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label for="adversarygraph_auth_user" class="block text-sm font-semibold text-secondary mb-1">X-Auth-User</label>
+                    <input type="text" id="adversarygraph_auth_user" name="adversarygraph_auth_user" placeholder="local" value="{{ settings.adversarygraph_auth_user }}"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" autocomplete="off">
+                </div>
+                <div>
+                    <label for="adversarygraph_auth_roles" class="block text-sm font-semibold text-secondary mb-1">X-Auth-Roles</label>
+                    <input type="text" id="adversarygraph_auth_roles" name="adversarygraph_auth_roles" placeholder="analyst" value="{{ settings.adversarygraph_auth_roles }}"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" autocomplete="off">
+                </div>
+            </div>
+            <div class="border-t border-white/5 pt-4 mt-4">
+                <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Fetch parameters</p>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label for="adversarygraph_last_days" class="block text-sm font-semibold text-secondary mb-1">Lookback (days)</label>
+                    <input type="number" id="adversarygraph_last_days" name="adversarygraph_last_days" min="1" max="365" value="{{ settings.adversarygraph_last_days }}"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+                <div>
+                    <label for="adversarygraph_pull_interval" class="block text-sm font-semibold text-secondary mb-1">Auto-sync interval</label>
+                    {% set ag_interval = settings.adversarygraph_pull_interval | default('60') | string %}
+                    <select id="adversarygraph_pull_interval" name="adversarygraph_pull_interval" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                        <option value="10" {% if ag_interval == '10' %}selected{% endif %}>Every 10 minutes</option>
+                        <option value="30" {% if ag_interval == '30' %}selected{% endif %}>Every 30 minutes</option>
+                        <option value="60" {% if ag_interval == '60' %}selected{% endif %}>Every hour</option>
+                        <option value="120" {% if ag_interval == '120' %}selected{% endif %}>Every 2 hours</option>
+                        <option value="360" {% if ag_interval == '360' %}selected{% endif %}>Every 6 hours</option>
+                        <option value="1440" {% if ag_interval == '1440' %}selected{% endif %}>Daily</option>
+                        {% if ag_interval not in ['10','30','60','120','360','1440'] %}
+                        <option value="{{ ag_interval }}" selected>Custom: {{ ag_interval }} min</option>
+                        {% endif %}
+                    </select>
+                </div>
+            </div>
+            <div>
+                <label for="adversarygraph_filter_types" class="block text-sm font-semibold text-secondary mb-1">Filter IOC types (comma-separated, empty = all)</label>
+                <input type="text" id="adversarygraph_filter_types" name="adversarygraph_filter_types" placeholder="ipv4, domain, sha256, url, email" value="{{ settings.adversarygraph_filter_types }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <div>
+                <label for="adversarygraph_filter_sources" class="block text-sm font-semibold text-secondary mb-1">Filter IOC sources (comma-separated, empty = all)</label>
+                <input type="text" id="adversarygraph_filter_sources" name="adversarygraph_filter_sources" placeholder="threatfox, otx, malpedia" value="{{ settings.adversarygraph_filter_sources }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <div>
+                <label for="adversarygraph_filter_actors" class="block text-sm font-semibold text-secondary mb-1">Filter ATT&amp;CK actors (comma-separated, empty = all)</label>
+                <input type="text" id="adversarygraph_filter_actors" name="adversarygraph_filter_actors" placeholder="G0006, G0049" value="{{ settings.adversarygraph_filter_actors | default('') }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                <p class="text-secondary text-xs mt-1">Matches AdversaryGraph IOC Library <code class="px-0.5 rounded bg-white/10 text-xs">actor</code> filter (group IDs).</p>
+            </div>
+            <div>
+                <label for="adversarygraph_min_confidence" class="block text-sm font-semibold text-secondary mb-1">Minimum confidence (0–100, 0 = off)</label>
+                <input type="number" id="adversarygraph_min_confidence" name="adversarygraph_min_confidence" min="0" max="100" value="{{ settings.adversarygraph_min_confidence | default('0') }}"
+                       class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+            </div>
+            <div>
+                <label for="adversarygraph_pull_yara" class="block text-sm font-semibold text-secondary mb-1">Pull YARA rules (Detection Studio)</label>
+                <select id="adversarygraph_pull_yara" name="adversarygraph_pull_yara" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="true" {% if settings.adversarygraph_pull_yara != 'false' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if settings.adversarygraph_pull_yara == 'false' %}selected{% endif %}>No — IOC only</option>
+                </select>
+            </div>
+            <div class="border-t border-white/5 pt-4 mt-4">
+                <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Import policy</p>
+                <p class="text-secondary text-xs mb-3">Controls how AdversaryGraph sync results enter ZIoCHub. Pending items appear in the admin Inbox for approval (IOC) or YARA Manager → Pending (YARA).</p>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label for="adversarygraph_ioc_import_mode" class="block text-sm font-semibold text-secondary mb-1">IOC import mode</label>
+                    {% set ag_ioc_mode = settings.adversarygraph_ioc_import_mode | default('pending') %}
+                    <select id="adversarygraph_ioc_import_mode" name="adversarygraph_ioc_import_mode" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                        <option value="auto" {% if ag_ioc_mode == 'auto' %}selected{% endif %}>Auto — publish to feeds immediately</option>
+                        <option value="pending" {% if ag_ioc_mode == 'pending' %}selected{% endif %}>Pending — admin approval required</option>
+                        <option value="block" {% if ag_ioc_mode == 'block' %}selected{% endif %}>Block — never import IOCs</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="adversarygraph_yara_import_mode" class="block text-sm font-semibold text-secondary mb-1">YARA import mode</label>
+                    {% set ag_yara_mode = settings.adversarygraph_yara_import_mode | default('pending') %}
+                    <select id="adversarygraph_yara_import_mode" name="adversarygraph_yara_import_mode" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                        <option value="auto" {% if ag_yara_mode == 'auto' %}selected{% endif %}>Auto — publish to YARA feeds</option>
+                        <option value="pending" {% if ag_yara_mode == 'pending' %}selected{% endif %}>Pending — admin approval required</option>
+                        <option value="block" {% if ag_yara_mode == 'block' %}selected{% endif %}>Block — never import YARA</option>
+                    </select>
+                </div>
+            </div>
+            <div class="border-t border-white/5 pt-4 mt-4">
+                <p class="text-secondary text-xs mb-3 uppercase tracking-wider font-semibold">Import settings</p>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label for="adversarygraph_default_ttl" class="block text-sm font-semibold text-secondary mb-1">Default TTL (days, 0 = permanent)</label>
+                    <input type="text" id="adversarygraph_default_ttl" name="adversarygraph_default_ttl" placeholder="permanent" value="{{ settings.adversarygraph_default_ttl }}"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+                <div>
+                    <label for="adversarygraph_sync_user" class="block text-sm font-semibold text-secondary mb-1">Sync analyst username</label>
+                    <input type="text" id="adversarygraph_sync_user" name="adversarygraph_sync_user" value="{{ settings.adversarygraph_sync_user }}" placeholder="adversarygraph_sync"
+                           class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                </div>
+            </div>
+            <div>
+                <label for="adversarygraph_exclude_from_champs" class="block text-sm font-semibold text-secondary mb-1">Exclude from Champs leaderboard</label>
+                <select id="adversarygraph_exclude_from_champs" name="adversarygraph_exclude_from_champs" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
+                    <option value="true" {% if settings.adversarygraph_exclude_from_champs != 'false' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if settings.adversarygraph_exclude_from_champs == 'false' %}selected{% endif %}>No</option>
+                </select>
+            </div>
+            <div class="flex items-center gap-3 pt-2">
+                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save AdversaryGraph Settings</button>
+                <button type="button" id="adversarygraphTestBtn" class="px-4 py-2 rounded-lg font-semibold bg-yellow-600 hover:bg-yellow-500 text-white transition">Test Connection</button>
+                <button type="button" id="adversarygraphSyncBtn" class="px-4 py-2 rounded-lg font-semibold bg-green-600 hover:bg-green-500 text-white transition">Sync Now</button>
+            </div>
+        </form>
+        <div id="adversarygraphMessage" class="mt-4 hidden text-sm"></div>
+        <div class="mt-6 pt-6 border-t border-white/10">
+            <h4 class="text-sm font-semibold text-secondary mb-2">AdversaryGraph operation log</h4>
+            <div id="adversarygraphLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto overflow-y-auto max-h-64">
+                <div id="adversarygraphLogContent" class="space-y-1 whitespace-pre-wrap"></div>
+            </div>
+            <div id="adversarygraphSpinner" class="mt-2 hidden text-amber-400 text-sm">Running...</div>
+        </div>
+        {% if settings.adversarygraph_last_sync %}
+        <div class="mt-4 text-xs text-secondary border-t border-white/5 pt-3">
+            <span class="font-semibold">Last sync:</span> {{ settings.adversarygraph_last_sync }}
+            {% if settings.adversarygraph_last_sync_result %}
+            <span class="ml-2">{{ settings.adversarygraph_last_sync_result }}</span>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+</div>

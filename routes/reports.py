@@ -10,7 +10,7 @@ from collections import defaultdict
 
 from flask import Blueprint, request, jsonify, url_for
 from flask_login import current_user
-from sqlalchemy import func, case, and_, distinct
+from sqlalchemy import func, case, and_, distinct, extract
 
 from extensions import db
 from models import (
@@ -143,6 +143,7 @@ def get_report_data():
         set_cached(cache_key, data, ttl_seconds=REPORTS_CACHE_TTL)
         return jsonify(data)
     except Exception as e:
+        db.session.rollback()
         log.exception('Reports API error')
         return jsonify({'success': False, 'message': str(e)}), 500
 
@@ -232,8 +233,8 @@ def _get_report_data_impl():
 
     # Submission rate: by hour for day, by date for week/month
     if period == 'day':
-        # Group by hour (0-23) for single-day report (SQLite strftime returns '00'-'23')
-        hour_expr = func.strftime('%H', IOC.created_at)
+        # Group by hour (0-23) — extract() works on PostgreSQL and SQLite (not strftime, which is SQLite-only)
+        hour_expr = extract('hour', IOC.created_at)
         sub_rate_team = db.session.query(
             hour_expr.label('hour'),
             func.count(IOC.id).label('cnt'),
@@ -473,6 +474,7 @@ def _get_report_data_impl():
                 start_dt, end_dt, prev_start_dt, prev_end_dt, max_findings=5
             )
         except Exception as e:
+            db.session.rollback()
             log.error(f'Mentorship insights error: {e}')
 
     # ── Available periods ─────────────────────────────────────────
@@ -658,7 +660,12 @@ def _build_analysts_section(start_dt, end_dt, prev_start_dt, prev_end_dt):
         emoji, nickname = _get_nickname(type_counts)
 
         analyst_daily = defaultdict(int)
-        badges = _get_badges(db, IOC, YaraRule, ActivityEvent, r['analyst'], uid, {}, {})
+        try:
+            badges = _get_badges(db, IOC, YaraRule, ActivityEvent, r['analyst'], uid, {}, {})
+        except Exception as e:
+            log.warning('Report badges failed for %s: %s', r.get('analyst'), e)
+            db.session.rollback()
+            badges = []
 
         # Activity sparkline (last 7 days)
         today = date.today()

@@ -634,9 +634,10 @@ _SETTINGS_DEFAULTS = {
     'trellix_cms_f_type': 'common',
     'trellix_cms_content_type': 'base',
     'sanity_check_mode': 'block_non_admin',
-    # Analyst workflow: false = require admin approval before feeds/push (default)
+    # Analyst workflow: auto = distribute without approval (default for analysts)
     'yara_analyst_auto_publish': 'false',
-    'ioc_analyst_auto_publish': 'false',
+    'ioc_analyst_auto_publish': 'true',
+    'ioc_analyst_submission_mode': 'auto',
     'champs_tab_enabled': 'true',
     'search_comment_rtl_by_script': 'true',  # In search results: if comment has more Hebrew/Arabic than other text, show RTL
     # Tags governance (admin-controlled taxonomy)
@@ -723,6 +724,8 @@ _SETTINGS_DEFAULTS = {
     'google_secops_credentials_json': '',
     'google_secops_verify_ssl': 'true',
     'google_secops_display_name': '',
+    'google_secops_reference_lists_enabled': 'false',
+    'google_secops_reference_lists_config': '[]',
     'netskope_enabled': 'false',
     'netskope_base_url': '',
     'netskope_api_token_v2': '',
@@ -1113,22 +1116,42 @@ _MISP_SAVE_KEYS_FALLBACK = (
     'misp_filter_tags', 'misp_filter_types', 'misp_published_only', 'misp_default_ttl',
     'misp_sync_user', 'misp_pull_interval', 'misp_exclude_from_champs',
     'misp_push_enabled', 'misp_push_include_comment', 'misp_push_default_event_id',
+    'misp_ioc_import_mode',
 )
 _MISP_SYNC_KEYS_FALLBACK = (
     'misp_url', 'misp_api_key', 'misp_verify_ssl', 'misp_last_days',
     'misp_filter_tags', 'misp_filter_types', 'misp_published_only', 'misp_default_ttl', 'misp_sync_user',
+    'misp_ioc_import_mode',
 )
 
 _TAXII_SAVE_KEYS_FALLBACK = (
     'taxii_pull_enabled', 'taxii_discovery_url', 'taxii_api_root_id', 'taxii_collection_id',
     'taxii_username', 'taxii_password', 'taxii_api_key', 'taxii_verify_ssl', 'taxii_last_days',
     'taxii_pull_interval', 'taxii_sync_user', 'taxii_exclude_from_champs', 'taxii_skip_revoked',
-    'taxii_default_ttl',
+    'taxii_default_ttl', 'taxii_ioc_import_mode',
 )
 _TAXII_SYNC_KEYS_FALLBACK = (
     'taxii_discovery_url', 'taxii_api_root_id', 'taxii_collection_id',
     'taxii_username', 'taxii_password', 'taxii_api_key', 'taxii_verify_ssl', 'taxii_last_days',
-    'taxii_default_ttl', 'taxii_sync_user', 'taxii_skip_revoked',
+    'taxii_default_ttl', 'taxii_sync_user', 'taxii_skip_revoked', 'taxii_ioc_import_mode',
+)
+
+_ADVERSARYGRAPH_SAVE_KEYS_FALLBACK = (
+    'adversarygraph_enabled', 'adversarygraph_url', 'adversarygraph_verify_ssl',
+    'adversarygraph_auth_user', 'adversarygraph_auth_roles', 'adversarygraph_last_days',
+    'adversarygraph_filter_types', 'adversarygraph_filter_sources', 'adversarygraph_filter_actors',
+    'adversarygraph_min_confidence', 'adversarygraph_ioc_import_mode', 'adversarygraph_yara_import_mode',
+    'adversarygraph_pull_yara',
+    'adversarygraph_sync_user', 'adversarygraph_pull_interval', 'adversarygraph_exclude_from_champs',
+    'adversarygraph_default_ttl',
+)
+_ADVERSARYGRAPH_SYNC_KEYS_FALLBACK = (
+    'adversarygraph_url', 'adversarygraph_verify_ssl', 'adversarygraph_auth_user',
+    'adversarygraph_auth_roles', 'adversarygraph_last_days', 'adversarygraph_filter_types',
+    'adversarygraph_filter_sources', 'adversarygraph_filter_actors', 'adversarygraph_min_confidence',
+    'adversarygraph_ioc_import_mode', 'adversarygraph_yara_import_mode',
+    'adversarygraph_pull_yara', 'adversarygraph_default_ttl',
+    'adversarygraph_sync_user',
 )
 
 
@@ -1149,6 +1172,11 @@ def save_settings():
             taxii_keys = TAXII_SAVE_KEYS
         except ImportError:
             taxii_keys = _TAXII_SAVE_KEYS_FALLBACK
+        try:
+            from adversarygraph_settings import ADVERSARYGRAPH_SAVE_KEYS
+            adversarygraph_keys = ADVERSARYGRAPH_SAVE_KEYS
+        except ImportError:
+            adversarygraph_keys = _ADVERSARYGRAPH_SAVE_KEYS_FALLBACK
         syslog_keys = ('syslog_udp_enabled', 'syslog_udp_host', 'syslog_udp_port')
         ldap_keys = ('auth_mode', 'ldap_enabled', 'ldap_url', 'ldap_base_dn', 'ldap_bind_dn', 'ldap_bind_password', 'ldap_servers', 'ldap_user_filter')
         session_keys = ('session_inactivity_timeout_minutes',)
@@ -1165,7 +1193,7 @@ def save_settings():
         trellix_ex_keys = ('trellix_ex_enabled',)
         trellix_cms_keys = ('trellix_cms_enabled',)
         sanity_keys = ('sanity_check_mode',)
-        workflow_keys = ('yara_analyst_auto_publish', 'ioc_analyst_auto_publish', 'champs_tab_enabled')
+        workflow_keys = ('yara_analyst_auto_publish', 'ioc_analyst_auto_publish', 'ioc_analyst_submission_mode', 'champs_tab_enabled')
         feed_keys = ('feeds_public_enabled', 'feed_cache_enabled', 'feed_cache_ttl_seconds')
         search_keys = ('search_comment_rtl_by_script', 'gui_display_timezone')
         tags_keys = ('allowed_tags', 'tags_restricted_enabled', 'tags_allow_suggest')
@@ -1221,6 +1249,8 @@ def save_settings():
             'google_secops_data_table_id',
             'google_secops_credentials_json',
             'google_secops_verify_ssl',
+            'google_secops_reference_lists_enabled',
+            'google_secops_reference_lists_config',
             'netskope_enabled',
             'netskope_display_name',
             'netskope_base_url',
@@ -1237,7 +1267,7 @@ def save_settings():
         )
         sections = []
         for key in (
-            session_keys + ldap_keys + misp_keys + taxii_keys + syslog_keys + dxl_keys + automation_keys + trellix_ex_keys
+            session_keys + ldap_keys + misp_keys + taxii_keys + adversarygraph_keys + syslog_keys + dxl_keys + automation_keys + trellix_ex_keys
             + trellix_cms_keys + sanity_keys + workflow_keys + feed_keys + search_keys + tags_keys + ioc_push_keys + esa_keys
             + vendor_ioc_keys + integration_retry_keys
         ):
@@ -1354,6 +1384,7 @@ def save_settings():
                         'cortex_xdr_retry_enabled',
                         'google_secops_enabled',
                         'google_secops_verify_ssl',
+                        'google_secops_reference_lists_enabled',
                         'netskope_enabled',
                         'netskope_verify_ssl',
                         'netskope_hash_push_enabled',
@@ -1401,6 +1432,12 @@ def save_settings():
                             _set_setting(key, normalize_google_secops_gateway_custom_headers(val))
                         except ValueError as vgs:
                             return jsonify({'success': False, 'message': str(vgs)}), 400
+                    elif key == 'google_secops_reference_lists_config':
+                        from utils.google_secops_reference_lists import normalize_reference_lists_config
+                        try:
+                            _set_setting(key, normalize_reference_lists_config(val))
+                        except ValueError as vrl:
+                            return jsonify({'success': False, 'message': str(vrl)}), 400
                     elif key == 'cortex_xdr_base_url':
                         from utils.cortex_xdr import sanitize_cortex_base_url
                         _set_setting(key, sanitize_cortex_base_url(str(val)))
@@ -1446,6 +1483,17 @@ def save_settings():
                 elif key == 'taxii_pull_interval':
                     from utils.taxii_sync_runner import normalize_taxii_pull_interval
                     _set_setting(key, str(normalize_taxii_pull_interval(val)))
+                elif key == 'adversarygraph_pull_interval':
+                    from utils.adversarygraph_sync_runner import normalize_adversarygraph_pull_interval
+                    _set_setting(key, str(normalize_adversarygraph_pull_interval(val)))
+                elif key in ('adversarygraph_ioc_import_mode', 'adversarygraph_yara_import_mode', 'misp_ioc_import_mode', 'taxii_ioc_import_mode'):
+                    from utils.ioc_import_mode import normalize_ioc_import_mode, DEFAULT_INTEGRATION_IOC_MODE
+                    _set_setting(key, normalize_ioc_import_mode(val, DEFAULT_INTEGRATION_IOC_MODE))
+                elif key == 'ioc_analyst_submission_mode':
+                    from utils.ioc_import_mode import normalize_ioc_import_mode, DEFAULT_ANALYST_IOC_MODE
+                    mode = normalize_ioc_import_mode(val, DEFAULT_ANALYST_IOC_MODE)
+                    _set_setting(key, mode)
+                    _set_setting('ioc_analyst_auto_publish', 'true' if mode == 'auto' else 'false')
                 elif key in workflow_keys:
                     _set_setting(key, 'true' if str(val).lower() in ('true', '1', 'yes') else 'false')
                 else:
@@ -1458,6 +1506,8 @@ def save_settings():
                     sections.append('MISP')
                 elif key in taxii_keys and 'TAXII' not in sections:
                     sections.append('TAXII')
+                elif key in adversarygraph_keys and 'AdversaryGraph' not in sections:
+                    sections.append('AdversaryGraph')
                 elif key in syslog_keys and 'Syslog' not in sections:
                     sections.append('Syslog')
                 elif key in dxl_keys and 'DXL' not in sections:
@@ -1910,6 +1960,8 @@ _GOOGLE_SECOPS_TEST_SETTING_KEYS = (
     'google_secops_data_table_id',
     'google_secops_credentials_json',
     'google_secops_verify_ssl',
+    'google_secops_reference_lists_enabled',
+    'google_secops_reference_lists_config',
 )
 
 _GOOGLE_SECOPS_TEST_SECRET_KEYS = frozenset({
@@ -1958,6 +2010,7 @@ def _google_secops_settings_from_db(_get_setting) -> dict:
         'google_secops_data_table_id',
         'google_secops_credentials_json',
         'google_secops_verify_ssl',
+        'google_secops_reference_lists_config',
     )
     return {k: _get_setting(k, '') for k in keys}
 
@@ -2849,6 +2902,92 @@ def taxii_sync_now():
         return _api_error(str(e), 500)
 
 
+# --- AdversaryGraph inbound pull ---
+
+@bp.route('/adversarygraph/test', methods=['POST'])
+@admin_required
+def adversarygraph_test():
+    """Test AdversaryGraph connectivity step-by-step."""
+    _api_ok, _api_error, _get_setting = _from_app('_api_ok', '_api_error', '_get_setting')
+    try:
+        data = request.get_json() or {}
+        url = (data.get('adversarygraph_url') or _get_setting('adversarygraph_url', '')).strip()
+        verify_ssl = (data.get('adversarygraph_verify_ssl') or _get_setting('adversarygraph_verify_ssl', 'false')).lower() == 'true'
+        auth_user = (data.get('adversarygraph_auth_user') or _get_setting('adversarygraph_auth_user', '')).strip()
+        auth_roles = (data.get('adversarygraph_auth_roles') or _get_setting('adversarygraph_auth_roles', 'analyst')).strip()
+
+        from utils.adversarygraph_sync import test_connection_steps
+        steps = test_connection_steps(url, verify_ssl, auth_user, auth_roles)
+        success = all(s.get('status') == 'ok' for s in steps)
+        return _api_ok(data={'success': success, 'steps': steps})
+    except Exception as e:
+        logging.exception('admin adversarygraph_test failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/adversarygraph/sync', methods=['POST'])
+@admin_required
+def adversarygraph_sync_now():
+    """Run AdversaryGraph pull manually (admin only)."""
+    _api_ok, _api_error, _get_setting, _set_setting, audit_log = _from_app(
+        '_api_ok', '_api_error', '_get_setting', '_set_setting', 'audit_log'
+    )
+    try:
+        try:
+            from adversarygraph_settings import ADVERSARYGRAPH_SYNC_KEYS
+            sync_keys = ADVERSARYGRAPH_SYNC_KEYS
+        except ImportError:
+            sync_keys = _ADVERSARYGRAPH_SYNC_KEYS_FALLBACK
+        settings = {key: _get_setting(key, '') for key in sync_keys}
+
+        from utils.adversarygraph_sync import run_sync
+        log_lines = []
+        result = run_sync(settings, log_lines=log_lines)
+
+        import json
+        from datetime import datetime, timezone
+        now_str = iso_utc(datetime.now(timezone.utc).replace(tzinfo=None))
+        _set_setting('adversarygraph_last_sync', now_str)
+        _set_setting('adversarygraph_last_sync_result', json.dumps(result)[:1000])
+
+        from utils.audit_events import audit_sync_result
+        audit_sync_result('adversarygraph_sync', result, username=current_user.username)
+
+        if result.get('success'):
+            ioc_added = int(result.get('added') or 0)
+            ioc_pending = int(result.get('pending_added') or 0)
+            ioc_blocked = int(result.get('blocked') or 0)
+            yara_added = int(result.get('yara_added') or 0)
+            yara_pending = int(result.get('yara_pending_added') or 0)
+            yara_blocked = int(result.get('yara_blocked') or 0)
+            parts = [f"{ioc_added} IOC imported"]
+            if ioc_pending:
+                parts.append(f"{ioc_pending} IOC pending approval")
+            if ioc_blocked:
+                parts.append(f"{ioc_blocked} IOC blocked")
+            parts.append(f"{result.get('skipped', 0)} duplicates skipped")
+            if yara_added or yara_pending or yara_blocked:
+                yp = []
+                if yara_added:
+                    yp.append(f"{yara_added} YARA published")
+                if yara_pending:
+                    yp.append(f"{yara_pending} YARA pending")
+                if yara_blocked:
+                    yp.append(f"{yara_blocked} YARA blocked")
+                parts.append(', '.join(yp))
+            inv = result.get('invalid', 0)
+            if inv:
+                parts.append(f"{inv} invalid")
+            return _api_ok(
+                message='Sync complete: ' + '; '.join(parts),
+                data={**result, 'steps': log_lines},
+            )
+        return jsonify({'success': False, 'message': result.get('error', 'Sync failed'), 'data': {**result, 'steps': log_lines}}), 400
+    except Exception as e:
+        logging.exception('admin adversarygraph_sync_now failed')
+        return _api_error(str(e), 500)
+
+
 @bp.route('/backfill-ioc-aggregate-fields', methods=['POST'])
 @admin_required
 def backfill_ioc_aggregate_fields():
@@ -3024,6 +3163,7 @@ def _misp_settings_fallback(get_setting_fn):
         'misp_last_days': '30', 'misp_filter_tags': '', 'misp_filter_types': '',
         'misp_published_only': 'true', 'misp_default_ttl': 'permanent', 'misp_sync_user': 'misp_sync',
         'misp_pull_interval': '60', 'misp_exclude_from_champs': 'true',
+        'misp_ioc_import_mode': 'pending',
         'misp_push_enabled': 'false', 'misp_push_include_comment': 'true', 'misp_push_default_event_id': '',
         'misp_last_sync': '', 'misp_last_sync_result': '',
     }
@@ -3066,6 +3206,7 @@ def _taxii_settings_fallback(get_setting_fn):
         'taxii_exclude_from_champs': 'true',
         'taxii_skip_revoked': 'true',
         'taxii_default_ttl': 'permanent',
+        'taxii_ioc_import_mode': 'pending',
         'taxii_last_sync': '',
         'taxii_last_sync_result': '',
     }
@@ -3088,6 +3229,11 @@ def _build_admin_settings_form_context():
         taxii_settings_dict = taxii_settings_for_form(_get_setting)
     except ImportError:
         taxii_settings_dict = _taxii_settings_fallback(_get_setting)
+    try:
+        from adversarygraph_settings import get_settings_for_form as adversarygraph_settings_for_form
+        adversarygraph_settings_dict = adversarygraph_settings_for_form(_get_setting)
+    except ImportError:
+        adversarygraph_settings_dict = {}
     ldap_servers = _get_ldap_servers_for_form(_get_setting)
     try:
         from utils.feed_cache import FEED_CACHE_TTL_DEFAULT, normalize_feed_cache_ttl_seconds
@@ -3113,6 +3259,7 @@ def _build_admin_settings_form_context():
         'ldap_user_filter': _get_setting('ldap_user_filter', '(sAMAccountName=%(user)s)'),
         **misp_settings_dict,
         **taxii_settings_dict,
+        **adversarygraph_settings_dict,
         'syslog_udp_enabled': _get_setting('syslog_udp_enabled', 'false'),
         'syslog_udp_host': _get_setting('syslog_udp_host', ''),
         'syslog_udp_port': _get_setting('syslog_udp_port', '514'),
@@ -3203,12 +3350,20 @@ def _build_admin_settings_form_context():
         'google_secops_data_table_id': _get_setting('google_secops_data_table_id', ''),
         'google_secops_credentials_json': _get_setting('google_secops_credentials_json', ''),
         'google_secops_verify_ssl': _get_setting('google_secops_verify_ssl', 'true'),
+        'google_secops_reference_lists_enabled': _get_setting('google_secops_reference_lists_enabled', 'false'),
+        'google_secops_reference_lists_config': _get_setting(
+            'google_secops_reference_lists_config',
+            '[]',
+        ),
         'tags_restricted_enabled': (_get_setting('tags_restricted_enabled', 'false') or 'false').lower() == 'true',
         'tags_allow_suggest': (_get_setting('tags_allow_suggest', 'true') or 'true').lower() != 'false',
         'allowed_tags_list': parse_allowed_tags_setting(_get_setting('allowed_tags', '[]')),
         'allowed_tags_text': '\n'.join(parse_allowed_tags_setting(_get_setting('allowed_tags', '[]'))),
         'yara_analyst_auto_publish': (_get_setting('yara_analyst_auto_publish', 'false') or 'false').lower() == 'true',
-        'ioc_analyst_auto_publish': (_get_setting('ioc_analyst_auto_publish', 'false') or 'false').lower() == 'true',
+        'ioc_analyst_auto_publish': (_get_setting('ioc_analyst_auto_publish', 'true') or 'true').lower() == 'true',
+        'ioc_analyst_submission_mode': _get_setting('ioc_analyst_submission_mode', '') or (
+            'auto' if (_get_setting('ioc_analyst_auto_publish', 'true') or 'true').lower() == 'true' else 'pending'
+        ),
         'champs_tab_enabled': (_get_setting('champs_tab_enabled', 'true') or 'true').lower() != 'false',
     }
 

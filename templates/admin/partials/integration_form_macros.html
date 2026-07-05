@@ -7,10 +7,18 @@
 </h3>
 {% endmacro %}
 
+{% macro integ_intro(text) %}
+<p class="integ-intro">{{ text|safe }}</p>
+{% endmacro %}
+
+{% macro integ_footnote(text) %}
+<p class="integ-footnote">{{ text|safe }}</p>
+{% endmacro %}
+
 {% macro integ_panel_open(title, intro='') %}
 <div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
     <h3 class="text-lg font-semibold accent-blue mb-2">{{ title }}</h3>
-    {% if intro %}<p class="text-secondary text-sm mb-4">{{ intro }}</p>{% endif %}
+    {% if intro %}<p class="integ-intro">{{ intro|safe }}</p>{% endif %}
 {% endmacro %}
 
 {% macro integ_panel_close() %}
@@ -24,6 +32,32 @@
         {{ caller() }}
     </div>
 </section>
+{% endmacro %}
+
+{% macro integ_subsection(title='', accent=false) %}
+<div class="integ-subsection{% if accent %} integ-subsection--accent{% endif %}">
+    {% if title %}<p class="integ-subsection__title">{{ title }}</p>{% endif %}
+    <div class="integ-subsection__body space-y-4">
+        {{ caller() }}
+    </div>
+</div>
+{% endmacro %}
+
+{% macro integ_details(title, body, open=false) %}
+<details class="integ-details"{% if open %} open{% endif %}>
+    <summary class="integ-details__summary">
+        <span class="integ-details__marker" aria-hidden="true">▸</span>
+        <span>{{ title }}</span>
+    </summary>
+    <div class="integ-details__body">{{ body|safe }}</div>
+</details>
+{% endmacro %}
+
+{% macro integ_troubleshoot(title, body) %}
+<details class="admin-troubleshoot-panel integ-troubleshoot">
+    <summary>{{ title }}</summary>
+    <div class="admin-troubleshoot-panel__body">{{ body|safe }}</div>
+</details>
 {% endmacro %}
 
 {% macro integ_yes_no(id, label, value, hint='', wide=false, default_on=false) %}
@@ -64,7 +98,7 @@
 {% endmacro %}
 
 {% macro integ_test_log(id) %}
-<div id="{{ id }}" class="integ-test-log mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto overflow-y-auto max-h-80 whitespace-pre-wrap break-words"></div>
+<div id="{{ id }}" class="integ-test-log hidden"></div>
 {% endmacro %}
 
 {% macro integ_retry_panel(title, description, vendor, enabled_id, enabled_value, interval_id, interval_value, max_attempts_id, max_attempts_value) %}
@@ -98,4 +132,11 @@
     <p class="integ-callout__title">{{ title }}</p>
     <div class="integ-callout__body text-secondary text-sm">{{ body|safe }}</div>
 </div>
+{% endmacro %}
+
+{% macro integ_checkbox_inline(id, label) %}
+<label class="integ-checkbox-inline" for="{{ id }}">
+    <input type="checkbox" id="{{ id }}" class="integ-checkbox-inline__input">
+    <span>{{ label }}</span>
+</label>
 {% endmacro %}

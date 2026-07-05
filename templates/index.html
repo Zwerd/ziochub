@@ -760,7 +760,7 @@
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                                     </button>
                                 </div>
-                                <p class="text-xs text-secondary/80 mt-0.5">Rank • Score • Trend</p>
+                                <p class="text-xs text-secondary/80 mt-0.5">Rank • Trend</p>
                             </div>
                             <div class="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-2">
                                 <div id="champsLadderList" class="space-y-1">
@@ -1860,7 +1860,7 @@
         </div>
     </div>
 
-    <!-- Pull state: inbound IOC sync from external platforms (e.g. MISP) -->
+    <!-- Pull state: inbound IOC sync from external platforms (MISP, AdversaryGraph, TAXII) -->
     <div id="feedPullStateModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-2 sm:p-4">
         <div class="feed-state-modal-panel bg-secondary rounded-lg p-4 sm:p-6 flex flex-col border border-white/10">
             <div class="flex items-center justify-between mb-4 flex-shrink-0 gap-2 min-w-0">
@@ -1870,7 +1870,7 @@
                 </h3>
                 <button type="button" id="feedPullStateModalClose" class="text-secondary hover:text-primary text-2xl leading-none shrink-0" aria-label="Close">&times;</button>
             </div>
-            <p class="text-sm text-secondary mb-4 flex-shrink-0 break-words" data-i18n="feedpulse.pull_state_modal_sub">When ZIoCHub last connected outbound to another system to pull IOCs into the database (currently MISP). Auto-sync checks every 5 minutes; interval is set in Admin → Settings → MISP.</p>
+            <p class="text-sm text-secondary mb-4 flex-shrink-0 break-words" data-i18n="feedpulse.pull_state_modal_sub">When ZIoCHub last connected outbound to pull IOCs (MISP, AdversaryGraph, remote TAXII). Auto-sync checks every 5 minutes; intervals are set in Admin → Integrations → Import (pull).</p>
             <div class="overflow-y-auto overflow-x-hidden flex-1 min-h-0 min-w-0 text-sm">
                 <div class="feed-state-table-scroll bg-tertiary rounded border border-white/5">
                     <table class="feed-state-table">

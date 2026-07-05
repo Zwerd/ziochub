@@ -31,6 +31,21 @@ from utils.upload_text_encoding import decode_uploaded_text_bytes
 
 bp = Blueprint('ioc_bp', __name__)
 
+_MSG_IOC_SUBMISSIONS_BLOCKED = (
+    'Analyst IOC submissions are disabled by admin workflow policy. '
+    'Contact an administrator to change Settings → Workflow → Submit IOCs.'
+)
+
+
+def _analyst_ioc_submission_blocked_response(get_setting_fn):
+    """Return (response, status) when non-admin submissions are blocked; else None."""
+    from utils.workflow_settings import ioc_analyst_submissions_blocked
+    if getattr(current_user, 'is_admin', False):
+        return None
+    if ioc_analyst_submissions_blocked(get_setting_fn):
+        return jsonify({'success': False, 'message': _MSG_IOC_SUBMISSIONS_BLOCKED}), 403
+    return None
+
 
 def _ioc_created_history_payload(
     *,
@@ -855,6 +870,9 @@ def submit_ioc():
         '_data_dir', '_get_setting',
     )
     try:
+        blocked_resp = _analyst_ioc_submission_blocked_response(_get_setting)
+        if blocked_resp:
+            return blocked_resp
         data = request.get_json()
         
         value = data.get('value', '').strip()
@@ -1063,6 +1081,9 @@ def ingest_ioc():
         '_get_setting',
     )
     try:
+        blocked_resp = _analyst_ioc_submission_blocked_response(_get_setting)
+        if blocked_resp:
+            return blocked_resp
         data = request.get_json()
         
         if not data:
@@ -1276,6 +1297,11 @@ def bulk_csv():
 
         sanity_mode = _get_setting('sanity_check_mode', 'block_non_admin')
         is_admin = getattr(current_user, 'is_admin', False)
+        blocked_resp = _analyst_ioc_submission_blocked_response(_get_setting)
+        if blocked_resp:
+            return blocked_resp
+        from utils.workflow_settings import ioc_analyst_requires_approval
+        needs_approval = ioc_analyst_requires_approval(current_user, _get_setting)
 
         # Read full CSV; do not treat line 1 as a header when it is IOC data (headerless lists).
         text = decode_uploaded_text_bytes(file.read())
@@ -1375,6 +1401,7 @@ def bulk_csv():
                         user_id=current_user.id if current_user.is_authenticated else None,
                         tags=tags_json if tags_list else None,
                         rare=rare,
+                        pending_approval=needs_approval,
                     )
                     updated_count += 1
                     if not was_active_before:
@@ -1394,20 +1421,21 @@ def bulk_csv():
                         _log_sanity_warning_history(
                             _log_ioc_history, ioc_type, value, get_sanity_warnings(value, ioc_type)
                         )
-                        _append_ioc_push_context_if_reactivated(
-                            new_iocs_for_push,
-                            was_active_before,
-                            ioc_type=ioc_type,
-                            value=value,
-                            analyst=username,
-                            ticket_id=ticket_id_val,
-                            comment=comment,
-                            expiration_date=exp_date,
-                            campaign_id=campaign_id,
-                            tags_json=tags_json,
-                            submission_method='csv',
-                            user_id=current_user.id if current_user.is_authenticated else None,
-                        )
+                        if not needs_approval:
+                            _append_ioc_push_context_if_reactivated(
+                                new_iocs_for_push,
+                                was_active_before,
+                                ioc_type=ioc_type,
+                                value=value,
+                                analyst=username,
+                                ticket_id=ticket_id_val,
+                                comment=comment,
+                                expiration_date=exp_date,
+                                campaign_id=campaign_id,
+                                tags_json=tags_json,
+                                submission_method='csv',
+                                user_id=current_user.id if current_user.is_authenticated else None,
+                            )
                 else:
                     rare = _compute_rare_find_fields(ioc_type, value)
                     db.session.add(_create_ioc(
@@ -1417,6 +1445,7 @@ def bulk_csv():
                         user_id=current_user.id if current_user.is_authenticated else None,
                         rare=rare,
                         tags=tags_json,
+                        pending_approval=needs_approval,
                     ))
                     payload_hist = _ioc_created_history_payload(
                         entered_by=current_user.username or '',
@@ -1430,18 +1459,19 @@ def bulk_csv():
                     _log_ioc_history(ioc_type, value, 'created', username, payload_hist)
                     _log_sanity_warning_history(_log_ioc_history, ioc_type, value, get_sanity_warnings(value, ioc_type))
                     new_count += 1
-                    new_iocs_for_push.append(ioc_context_from_submission(
-                        ioc_type=ioc_type,
-                        value=value,
-                        analyst=username,
-                        ticket_id=ticket_id_val,
-                        comment=comment,
-                        expiration_date=exp_date,
-                        campaign_id=campaign_id,
-                        tags_json=tags_json,
-                        submission_method='csv',
-                        user_id=current_user.id if current_user.is_authenticated else None,
-                    ))
+                    if not needs_approval:
+                        new_iocs_for_push.append(ioc_context_from_submission(
+                            ioc_type=ioc_type,
+                            value=value,
+                            analyst=username,
+                            ticket_id=ticket_id_val,
+                            comment=comment,
+                            expiration_date=exp_date,
+                            campaign_id=campaign_id,
+                            tags_json=tags_json,
+                            submission_method='csv',
+                            user_id=current_user.id if current_user.is_authenticated else None,
+                        ))
             summary[ioc_type] = {'updated': updated_count, 'new': new_count}
             total_updated += updated_count
             total_new += new_count
@@ -1465,14 +1495,15 @@ def bulk_csv():
         except Exception as dxl_err:
             logging.warning('DXL push after bulk_csv failed: %s', dxl_err)
 
-        try:
-            _schedule_ioc_push_batch(new_iocs_for_push)
-        except Exception as ioc_push_err:
-            logging.warning('IOC push after bulk_csv failed: %s', ioc_push_err)
-        try:
-            _schedule_esa_batch(new_iocs_for_push)
-        except Exception as esa_err:
-            logging.warning('ESA dictionary after bulk_csv failed: %s', esa_err)
+        if not needs_approval:
+            try:
+                _schedule_ioc_push_batch(new_iocs_for_push)
+            except Exception as ioc_push_err:
+                logging.warning('IOC push after bulk_csv failed: %s', ioc_push_err)
+            try:
+                _schedule_esa_batch(new_iocs_for_push)
+            except Exception as esa_err:
+                logging.warning('ESA dictionary after bulk_csv failed: %s', esa_err)
 
         # Build summary message
         summary_parts = []
@@ -2014,10 +2045,14 @@ def submit_staging():
     try:
         from utils.audit_events import audit_log_event, new_audit_batch_id
         batch_id = new_audit_batch_id()
+        from utils.workflow_settings import ioc_analyst_requires_approval
+        _get_setting = _from_app('_get_setting')[0]
+        blocked_resp = _analyst_ioc_submission_blocked_response(_get_setting)
+        if blocked_resp:
+            return blocked_resp
+        needs_approval = ioc_analyst_requires_approval(current_user, _get_setting)
         sanity_mode = _get_setting('sanity_check_mode', 'block_non_admin')
         is_admin = getattr(current_user, 'is_admin', False)
-        from utils.workflow_settings import ioc_analyst_requires_approval
-        needs_approval = ioc_analyst_requires_approval(current_user, _get_setting)
         data = request.get_json() or {}
         items = data.get('items') or []
         ttl = (data.get('ttl') or 'Permanent').strip()
@@ -2358,6 +2393,11 @@ def upload_txt():
             request.form.get('tags') or request.form.get('tags_for_all') or ''
         )
         _get_setting = _from_app('_get_setting')[0]
+        blocked_resp = _analyst_ioc_submission_blocked_response(_get_setting)
+        if blocked_resp:
+            return blocked_resp
+        from utils.workflow_settings import ioc_analyst_requires_approval
+        needs_approval = ioc_analyst_requires_approval(current_user, _get_setting)
         tags_list, tags_err = _validate_tags_or_reject(tags_list, _get_setting)
         if tags_err is not None:
             err_msg = 'Invalid tags'
@@ -2475,6 +2515,7 @@ def upload_txt():
                         user_id=store_user_id,
                         tags=tags_json if tags_list else None,
                         rare=rare,
+                        pending_approval=needs_approval,
                     )
                     updated_count += 1
                     if not was_active_before:
@@ -2491,21 +2532,22 @@ def upload_txt():
                             campaign_name=campaign_name,
                             tags_list=tags_list,
                         )
-                        _append_ioc_push_context_if_reactivated(
-                            new_iocs_for_push,
-                            was_active_before,
-                            ioc_type=ioc_type,
-                            value=value,
-                            analyst=store_analyst,
-                            ticket_id=meta['ticket_id'],
-                            comment=meta['comment'],
-                            expiration_date=exp_date,
-                            campaign_id=campaign_id,
-                            tags_json=tags_json,
-                            submission_method='txt',
-                            user_id=store_user_id,
-                            created_at=meta['created_at'],
-                        )
+                        if not needs_approval:
+                            _append_ioc_push_context_if_reactivated(
+                                new_iocs_for_push,
+                                was_active_before,
+                                ioc_type=ioc_type,
+                                value=value,
+                                analyst=store_analyst,
+                                ticket_id=meta['ticket_id'],
+                                comment=meta['comment'],
+                                expiration_date=exp_date,
+                                campaign_id=campaign_id,
+                                tags_json=tags_json,
+                                submission_method='txt',
+                                user_id=store_user_id,
+                                created_at=meta['created_at'],
+                            )
                 else:
                     rare = _compute_rare_find_fields(ioc_type, value)
                     u = meta['user']
@@ -2524,6 +2566,7 @@ def upload_txt():
                         campaign_id=campaign_id, user_id=store_user_id,
                         rare=rare,
                         tags=tags_json,
+                        pending_approval=needs_approval,
                     ))
                     payload_hist = _ioc_created_history_payload(
                         entered_by=current_user.username or '',
@@ -2536,19 +2579,20 @@ def upload_txt():
                     )
                     _log_ioc_history(ioc_type, value, 'created', store_analyst, payload_hist)
                     new_count += 1
-                    new_iocs_for_push.append(ioc_context_from_submission(
-                        ioc_type=ioc_type,
-                        value=value,
-                        analyst=store_analyst,
-                        ticket_id=meta['ticket_id'],
-                        comment=meta['comment'],
-                        expiration_date=exp_date,
-                        campaign_id=campaign_id,
-                        tags_json=tags_json,
-                        submission_method='txt',
-                        user_id=store_user_id,
-                        created_at=meta['created_at'],
-                    ))
+                    if not needs_approval:
+                        new_iocs_for_push.append(ioc_context_from_submission(
+                            ioc_type=ioc_type,
+                            value=value,
+                            analyst=store_analyst,
+                            ticket_id=meta['ticket_id'],
+                            comment=meta['comment'],
+                            expiration_date=exp_date,
+                            campaign_id=campaign_id,
+                            tags_json=tags_json,
+                            submission_method='txt',
+                            user_id=store_user_id,
+                            created_at=meta['created_at'],
+                        ))
             summary[ioc_type] = {'updated': updated_count, 'new': new_count}
             total_updated += updated_count
             total_new += new_count
@@ -2572,14 +2616,15 @@ def upload_txt():
         except Exception as dxl_err:
             logging.warning('DXL push after upload_txt failed: %s', dxl_err)
 
-        try:
-            _schedule_ioc_push_batch(new_iocs_for_push)
-        except Exception as ioc_push_err:
-            logging.warning('IOC push after upload_txt failed: %s', ioc_push_err)
-        try:
-            _schedule_esa_batch(new_iocs_for_push)
-        except Exception as esa_err:
-            logging.warning('ESA dictionary after upload_txt failed: %s', esa_err)
+        if not needs_approval:
+            try:
+                _schedule_ioc_push_batch(new_iocs_for_push)
+            except Exception as ioc_push_err:
+                logging.warning('IOC push after upload_txt failed: %s', ioc_push_err)
+            try:
+                _schedule_esa_batch(new_iocs_for_push)
+            except Exception as esa_err:
+                logging.warning('ESA dictionary after upload_txt failed: %s', esa_err)
 
         # Build summary message
         summary_parts = []

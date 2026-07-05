@@ -15,8 +15,9 @@ maintaining a separate list. Rows are removed on revoke/expiry so correlation st
 
 **Runtime paths**
 - **Push (create/reactivate):** Chronicle REST ``v1beta`` → ``dataTableRows:bulkCreate`` (two columns:
-  type slug, value).
-- **Remove (delete/expiry):** ``dataTableRows.list`` (filter by value) + row ``delete``.
+  type slug, value). Optional **Reference Lists** ``v2/lists`` PATCH (one list per IOC type).
+- **Remove (delete/expiry):** ``dataTableRows.list`` (filter by value) + row ``delete``; optional
+  Reference Lists line removal via ``v2/lists`` PATCH.
 - **Diagnostics only (direct mode):** optional ``GET /v2/logtypes`` on Ingestion host.
 
 OAuth scope ``https://www.googleapis.com/auth/chronicle`` is required for Data Table operations in
@@ -42,11 +43,12 @@ BATCH_INTER_CHUNK_DELAY_SEC = 0.15
 
 MALACHITE_INGESTION_SCOPE = 'https://www.googleapis.com/auth/malachite-ingestion'
 CHRONICLE_SCOPE = 'https://www.googleapis.com/auth/chronicle'
+BACKSTORY_SCOPE = 'https://www.googleapis.com/auth/chronicle-backstory'
 DEFAULT_INGESTION_HOST_US = 'https://malachiteingestion-pa.googleapis.com'
 
 API_VERSION = 'v1beta'
 
-_SCOPES = (CHRONICLE_SCOPE, MALACHITE_INGESTION_SCOPE)
+_SCOPES = (CHRONICLE_SCOPE, MALACHITE_INGESTION_SCOPE, BACKSTORY_SCOPE)
 
 CONNECTION_MODE_DIRECT = 'direct'
 CONNECTION_MODE_APIGEE = 'apigee'
@@ -88,6 +90,8 @@ def google_secops_settings_dict() -> dict[str, str]:
         'google_secops_data_table_id',
         'google_secops_credentials_json',
         'google_secops_verify_ssl',
+        'google_secops_reference_lists_enabled',
+        'google_secops_reference_lists_config',
     )
     return {k: _get_setting(k, '') for k in keys}
 
@@ -197,6 +201,18 @@ def _data_table_parent(g: dict[str, str]) -> Optional[str]:
     if not all([proj, loc, inst, tid]):
         return None
     return f'projects/{proj}/locations/{loc}/instances/{inst}/dataTables/{tid}'
+
+
+def google_secops_data_table_configured(g: dict[str, str]) -> bool:
+    """True when Data Table ID is set and the v1beta parent path can be built."""
+    if not (g.get('google_secops_data_table_id') or '').strip():
+        return False
+    return bool(_data_table_parent(g) and _api_rest_base(g))
+
+
+def google_secops_has_push_target(g: dict[str, str]) -> bool:
+    from utils.google_secops_reference_lists import reference_lists_configured
+    return google_secops_data_table_configured(g) or reference_lists_configured(g)
 
 
 def _ioc_type_slug(ioc_type: str) -> str:
@@ -341,10 +357,10 @@ def google_secops_push_contexts_batch(
     from_retry: bool = False,
 ) -> dict[str, Any]:
     """
-    Push many IOC events to Google SecOps using batched ``dataTableRows:bulkCreate``.
+    Push many IOC events to Google SecOps (Data Table + optional Reference Lists).
 
-    Removes still run per-IOC (list + delete). Creates are chunked (default 100 rows/request).
-    On batch failure, falls back to per-row create for that chunk.
+    Data Table: batched ``dataTableRows:bulkCreate`` for creates; per-row delete for removes.
+    Reference Lists: one GET+PATCH per configured list name (optional).
     """
     if not contexts:
         return {'success': True, 'processed': 0, 'succeeded': 0, 'failed': 0}
@@ -354,13 +370,21 @@ def google_secops_push_contexts_batch(
     g = google_secops_settings_dict()
     parent = _data_table_parent(g)
     base = _api_rest_base(g)
-    if not parent or not base:
+    data_table_ready = bool(parent and base)
+
+    from utils.google_secops_reference_lists import (
+        push_contexts_to_reference_lists,
+        reference_lists_configured,
+    )
+    ref_lists_ready = reference_lists_configured(g)
+
+    if not data_table_ready and not ref_lists_ready:
         return {
             'success': True,
             'processed': len(contexts),
             'succeeded': 0,
             'failed': 0,
-            'message': 'skipped_incomplete_data_table_config',
+            'message': 'skipped_no_push_targets',
         }
 
     verify_ssl = (g.get('google_secops_verify_ssl', 'true') or 'true').strip().lower() in ('true', '1', 'yes')
@@ -388,69 +412,91 @@ def google_secops_push_contexts_batch(
     succeeded = 0
     all_failed: list[tuple[dict[str, Any], str]] = []
 
-    for chunk in _chunked(creates, GOOGLE_SECOPS_BULK_CREATE_BATCH_SIZE):
-        rows = [(slug, val) for _ctx, slug, val in chunk]
-        ok, msg = _create_ioc_rows(session, base, parent, headers, rows)
-        if ok:
-            for ctx, slug, value in chunk:
-                list_ok, found, list_err = _list_matching_ioc_rows(
-                    session, base, parent, headers, slug, value,
+    if data_table_ready:
+        for chunk in _chunked(creates, GOOGLE_SECOPS_BULK_CREATE_BATCH_SIZE):
+            rows = [(slug, val) for _ctx, slug, val in chunk]
+            ok, msg = _create_ioc_rows(session, base, parent, headers, rows)
+            if ok:
+                for ctx, slug, value in chunk:
+                    list_ok, found, list_err = _list_matching_ioc_rows(
+                        session, base, parent, headers, slug, value,
+                    )
+                    if not list_ok:
+                        failed += 1
+                        all_failed.append((ctx, f'verify_list_failed: {list_err}'))
+                    elif found:
+                        succeeded += 1
+                        try:
+                            from utils.downstream import record_api_distribution_events
+                            gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
+                            record_api_distribution_events(
+                                [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        failed += 1
+                        all_failed.append((ctx, f'{msg}; verify_not_found'))
+            else:
+                logger.info(
+                    'Google SecOps batch bulkCreate failed (%s); per-row fallback for %s item(s)',
+                    msg, len(chunk),
                 )
-                if not list_ok:
-                    failed += 1
-                    all_failed.append((ctx, f'verify_list_failed: {list_err}'))
-                elif found:
-                    succeeded += 1
-                    try:
-                        from utils.downstream import record_api_distribution_events
-                        gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
-                        record_api_distribution_events(
-                            [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
-                        )
-                    except Exception:
-                        pass
-                else:
-                    failed += 1
-                    all_failed.append((ctx, f'{msg}; verify_not_found'))
-        else:
-            logger.info(
-                'Google SecOps batch bulkCreate failed (%s); per-row fallback for %s item(s)',
-                msg, len(chunk),
-            )
-            for ctx, slug, value in chunk:
-                one_ok, one_msg = _create_ioc_row(session, base, parent, headers, slug, value)
-                if one_ok:
-                    succeeded += 1
-                    try:
-                        from utils.downstream import record_api_distribution_events
-                        gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
-                        record_api_distribution_events(
-                            [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
-                        )
-                    except Exception:
-                        pass
-                else:
-                    failed += 1
-                    all_failed.append((ctx, one_msg))
-                    logger.warning('Google SecOps row create failed for %s: %s', value[:80], one_msg)
-        if BATCH_INTER_CHUNK_DELAY_SEC > 0:
-            time.sleep(BATCH_INTER_CHUNK_DELAY_SEC)
+                for ctx, slug, value in chunk:
+                    one_ok, one_msg = _create_ioc_row(session, base, parent, headers, slug, value)
+                    if one_ok:
+                        succeeded += 1
+                        try:
+                            from utils.downstream import record_api_distribution_events
+                            gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
+                            record_api_distribution_events(
+                                [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
+                            )
+                        except Exception:
+                            pass
+                    else:
+                        failed += 1
+                        all_failed.append((ctx, one_msg))
+                        logger.warning('Google SecOps row create failed for %s: %s', value[:80], one_msg)
+            if BATCH_INTER_CHUNK_DELAY_SEC > 0:
+                time.sleep(BATCH_INTER_CHUNK_DELAY_SEC)
 
-    for ctx in removes:
-        ok, rm_msg = _google_secops_push_ioc_from_context_inner(ctx)
-        if ok:
-            succeeded += 1
-            try:
-                from utils.downstream import mark_api_distribution_removed
-                gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
-                mark_api_distribution_removed(
-                    [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
-                )
-            except Exception:
-                pass
-        else:
-            failed += 1
-            all_failed.append((ctx, rm_msg))
+        for ctx in removes:
+            ioc_type = (str(ctx.get('type') or '')).strip()
+            value = (str(ctx.get('value') or '')).strip()
+            slug = _ioc_type_slug(ioc_type)
+            ok, rm_msg = _delete_ioc_rows(session, base, parent, headers, slug, value)
+            if ok:
+                succeeded += 1
+                try:
+                    from utils.downstream import mark_api_distribution_removed
+                    gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
+                    mark_api_distribution_removed(
+                        [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
+                    )
+                except Exception:
+                    pass
+            else:
+                failed += 1
+                all_failed.append((ctx, rm_msg))
+
+    if ref_lists_ready:
+        try:
+            rl_ok, rl_msg, rl_ok_n, rl_fail_n = push_contexts_to_reference_lists(contexts, g, session, headers)
+            if rl_fail_n:
+                failed += rl_fail_n
+                if not rl_ok:
+                    for ctx in contexts:
+                        if isinstance(ctx, dict):
+                            all_failed.append((ctx, rl_msg))
+            if rl_ok_n and data_table_ready is False:
+                succeeded += rl_ok_n
+        except Exception:
+            logger.exception('Google SecOps reference lists batch failed')
+            failed += len(contexts)
+            for ctx in contexts:
+                if isinstance(ctx, dict):
+                    all_failed.append((ctx, 'reference_lists_batch_failed'))
 
     processed = len(creates) + len(removes)
     overall_ok = failed == 0
@@ -533,14 +579,12 @@ def _google_secops_push_ioc_from_context_inner(ioc: dict[str, Any]) -> tuple[boo
         return False, 'invalid_context'
 
     g = google_secops_settings_dict()
-    parent = _data_table_parent(g)
-    base = _api_rest_base(g)
-    if not parent or not base:
+    data_table_ready = google_secops_data_table_configured(g)
+    if not data_table_ready and (g.get('google_secops_data_table_id') or '').strip():
         logger.warning(
-            'Google SecOps outbound enabled but Data Table parent or API base incomplete '
-            '(check connection mode, gateway/base host, project number, location, instance/customer id, data table id).'
+            'Google SecOps Data Table ID is set but parent path or API base is incomplete '
+            '(check connection mode, gateway/base host, project number, location, instance/customer id).'
         )
-        return True, 'skipped_incomplete_data_table_config'
 
     verify_ssl = (g.get('google_secops_verify_ssl', 'true') or 'true').strip().lower() in ('true', '1', 'yes')
     action = (str(ioc.get('action') or 'create')).strip().lower()
@@ -550,6 +594,8 @@ def _google_secops_push_ioc_from_context_inner(ioc: dict[str, Any]) -> tuple[boo
         return False, 'missing_type_or_value'
 
     slug = _ioc_type_slug(ioc_type)
+    parent = _data_table_parent(g)
+    base = _api_rest_base(g)
 
     try:
         session, headers = _build_request_session_and_headers(g, verify_ssl)
@@ -557,10 +603,39 @@ def _google_secops_push_ioc_from_context_inner(ioc: dict[str, Any]) -> tuple[boo
         logger.exception('Google SecOps authentication failed')
         return False, str(e)[:240]
 
-    if action == 'remove':
-        return _delete_ioc_rows(session, base, parent, headers, slug, value)
+    from utils.google_secops_reference_lists import (
+        push_ioc_to_reference_lists,
+        reference_lists_for_ioc_type,
+    )
 
-    return _create_ioc_row(session, base, parent, headers, slug, value)
+    parts: list[str] = []
+    overall_ok = True
+    attempted = False
+
+    if data_table_ready and parent and base:
+        attempted = True
+        if action == 'remove':
+            dt_ok, dt_msg = _delete_ioc_rows(session, base, parent, headers, slug, value)
+        else:
+            dt_ok, dt_msg = _create_ioc_row(session, base, parent, headers, slug, value)
+        parts.append(f'data_table:{dt_msg}')
+        overall_ok = overall_ok and dt_ok
+    elif (g.get('google_secops_data_table_id') or '').strip():
+        parts.append('data_table:skipped_incomplete_config')
+    else:
+        parts.append('data_table:skipped_not_configured')
+
+    if reference_lists_for_ioc_type(g, ioc_type):
+        attempted = True
+        rl_ok, rl_msg = push_ioc_to_reference_lists(
+            session, g, headers, ioc_type, value, action=action,
+        )
+        parts.append(f'reference_lists:{rl_msg}')
+        overall_ok = overall_ok and rl_ok
+
+    if not attempted:
+        return True, 'skipped_no_push_targets'
+    return overall_ok, '; '.join(parts)
 
 
 def _chunked(items: list, size: int):
@@ -774,6 +849,14 @@ def google_secops_config_checklist(g: Optional[dict[str, str]] = None) -> list[d
     settings = g or google_secops_settings_dict()
     steps: list[dict[str, str]] = []
     mode = google_secops_connection_mode(settings)
+    try:
+        from utils.google_secops_reference_lists import reference_lists_configured
+        ref_lists = reference_lists_configured(settings)
+    except Exception:
+        ref_lists = False
+    dt_wanted = bool((settings.get('google_secops_data_table_id') or '').strip())
+    dt_ready = google_secops_data_table_configured(settings)
+
     steps.append({
         'step': 'connection_mode',
         'status': 'ok',
@@ -785,47 +868,78 @@ def google_secops_config_checklist(g: Optional[dict[str, str]] = None) -> list[d
     else:
         _checklist_gateway_auth(settings, steps)
 
-    proj = (settings.get('google_secops_project_number') or '').strip()
-    steps.append({
-        'step': 'project_number',
-        'status': 'ok' if proj else 'fail',
-        'message': proj or 'GCP project number not set',
-    })
-
-    loc = (settings.get('google_secops_location') or '').strip()
-    steps.append({
-        'step': 'location',
-        'status': 'ok' if loc else 'fail',
-        'message': loc or 'Location (region) not set',
-    })
-
-    inst = (settings.get('google_secops_instance_id') or '').strip()
-    cust = (settings.get('google_secops_customer_id') or '').strip()
-    if inst or cust:
+    if dt_wanted:
+        proj = (settings.get('google_secops_project_number') or '').strip()
         steps.append({
-            'step': 'instance',
-            'status': 'ok',
-            'message': f'instance id = {inst or cust}' + (' (customer_id fallback)' if not inst and cust else ''),
+            'step': 'project_number',
+            'status': 'ok' if proj else 'fail',
+            'message': proj or 'GCP project number required for Data Table',
         })
+        loc = (settings.get('google_secops_location') or '').strip()
+        steps.append({
+            'step': 'location',
+            'status': 'ok' if loc else 'fail',
+            'message': loc or 'Location required for Data Table',
+        })
+        inst = (settings.get('google_secops_instance_id') or '').strip()
+        cust = (settings.get('google_secops_customer_id') or '').strip()
+        if inst or cust:
+            steps.append({
+                'step': 'instance',
+                'status': 'ok',
+                'message': f'instance id = {inst or cust}' + (' (customer_id fallback)' if not inst and cust else ''),
+            })
+        else:
+            steps.append({'step': 'instance', 'status': 'fail', 'message': 'Customer ID (or Instance ID) required for Data Table'})
+        tid = (settings.get('google_secops_data_table_id') or '').strip()
+        steps.append({
+            'step': 'data_table_id',
+            'status': 'ok' if tid else 'fail',
+            'message': tid or 'Data table ID not set',
+        })
+        parent = _data_table_parent(settings)
+        if parent:
+            steps.append({'step': 'resource_path', 'status': 'ok', 'message': parent})
+        else:
+            steps.append({
+                'step': 'resource_path',
+                'status': 'fail',
+                'message': 'Cannot build dataTables parent path (check project, location, instance, table id)',
+            })
     else:
-        steps.append({'step': 'instance', 'status': 'fail', 'message': 'Set Customer ID (or Instance ID)'})
-
-    tid = (settings.get('google_secops_data_table_id') or '').strip()
-    steps.append({
-        'step': 'data_table_id',
-        'status': 'ok' if tid else 'fail',
-        'message': tid or 'Data table ID not set',
-    })
+        steps.append({
+            'step': 'data_table_id',
+            'status': 'skipped',
+            'message': 'Data Table not configured (optional — leave ID empty to skip)',
+        })
+        if ref_lists and mode == CONNECTION_MODE_DIRECT:
+            loc = (settings.get('google_secops_location') or '').strip()
+            steps.append({
+                'step': 'location',
+                'status': 'ok' if loc else 'fail',
+                'message': loc or 'Location required for Reference Lists (direct mode)',
+            })
+        elif ref_lists:
+            steps.append({
+                'step': 'location',
+                'status': 'skipped',
+                'message': 'Optional when using Apigee for Reference Lists only',
+            })
+        else:
+            steps.append({
+                'step': 'push_targets',
+                'status': 'warn',
+                'message': 'No Data Table ID and no Reference List mappings configured',
+            })
 
     api_base = _api_rest_base(settings)
-    step_name = 'gateway_base' if mode == CONNECTION_MODE_APIGEE else 'chronicle_host'
-    if api_base:
-        if mode == CONNECTION_MODE_DIRECT and step_name == 'chronicle_host':
-            steps.append({'step': 'chronicle_host', 'status': 'ok', 'message': api_base})
-        elif mode == CONNECTION_MODE_APIGEE and not any(s['step'] == 'gateway_base' for s in steps):
-            steps.append({'step': 'gateway_base', 'status': 'ok' if api_base else 'fail', 'message': api_base or 'missing'})
-    else:
-        if mode == CONNECTION_MODE_DIRECT:
+    if dt_wanted or ref_lists:
+        if api_base:
+            if mode == CONNECTION_MODE_DIRECT:
+                steps.append({'step': 'chronicle_host', 'status': 'ok', 'message': api_base})
+            elif not any(s['step'] == 'gateway_base' for s in steps):
+                steps.append({'step': 'gateway_base', 'status': 'ok', 'message': api_base})
+        elif mode == CONNECTION_MODE_DIRECT:
             steps.append({
                 'step': 'chronicle_host',
                 'status': 'fail',
@@ -834,15 +948,10 @@ def google_secops_config_checklist(g: Optional[dict[str, str]] = None) -> list[d
         elif not any(s['step'] == 'gateway_base' for s in steps):
             steps.append({'step': 'gateway_base', 'status': 'fail', 'message': 'API Gateway base URL not set'})
 
-    parent = _data_table_parent(settings)
-    if parent:
-        steps.append({'step': 'resource_path', 'status': 'ok', 'message': parent})
-    else:
-        steps.append({
-            'step': 'resource_path',
-            'status': 'fail',
-            'message': 'Cannot build dataTables parent path (check project, location, instance, table id)',
-        })
+    if dt_ready:
+        steps.append({'step': 'data_table_push', 'status': 'ok', 'message': 'Data Table push configured'})
+    if ref_lists:
+        steps.append({'step': 'reference_lists_push', 'status': 'ok', 'message': 'Reference Lists push configured'})
 
     if google_secops_enabled(settings):
         steps.append({'step': 'outbound_enabled', 'status': 'ok', 'message': 'Outbound push is enabled'})
@@ -861,25 +970,27 @@ def google_secops_config_checklist(g: Optional[dict[str, str]] = None) -> list[d
             'message': f'{ibase} (optional; used only for ingestion probe, not IOC push)',
         })
 
+    try:
+        from utils.google_secops_reference_lists import reference_lists_config_checklist
+        steps.extend(reference_lists_config_checklist(settings))
+    except Exception:
+        pass
+
     return steps
 
 
 def _config_ready_for_api(g: dict[str, str]) -> bool:
-    """True when required Data Table + auth fields are present."""
-    mode = google_secops_connection_mode(g)
-    if mode == CONNECTION_MODE_DIRECT:
-        required_ok = {
-            'credentials', 'project_number', 'location', 'instance',
-            'data_table_id', 'chronicle_host', 'resource_path',
-        }
-    else:
-        required_ok = {
-            'gateway_base', 'gateway_auth', 'project_number', 'location',
-            'instance', 'data_table_id', 'resource_path',
-        }
+    """True when auth is OK and at least one push target (Data Table and/or Reference Lists) is ready."""
+    if not google_secops_has_push_target(g):
+        return False
     by_step = {s['step']: s for s in google_secops_config_checklist(g)}
-    for key in required_ok:
+    mode = google_secops_connection_mode(g)
+    auth_keys = ('credentials',) if mode == CONNECTION_MODE_DIRECT else ('gateway_base', 'gateway_auth')
+    for key in auth_keys:
         if by_step.get(key, {}).get('status') != 'ok':
+            return False
+    for key, step in by_step.items():
+        if step.get('status') == 'fail':
             return False
     return True
 
@@ -979,6 +1090,14 @@ def google_secops_test_connection(
     cbase = _api_rest_base(g)
     data_table_ok = False
     roundtrip_ok = False
+    dt_configured = google_secops_data_table_configured(g)
+    try:
+        from utils.google_secops_reference_lists import reference_lists_configured
+        ref_configured = reference_lists_configured(g)
+    except Exception:
+        ref_configured = False
+    has_any_target = dt_configured or ref_configured
+
     if parent and cbase:
         dt_url = _api_url(cbase, API_VERSION, parent)
         try:
@@ -994,24 +1113,33 @@ def google_secops_test_connection(
                     'status': 'fail',
                     'message': msg + ' (IAM: chronicle.dataTables.get on table resource)',
                 })
-                return {'success': False, 'steps': steps}
+                if not ref_configured:
+                    return {'success': False, 'steps': steps}
             else:
                 steps.append({'step': 'data_table', 'status': 'fail', 'message': msg + ' ' + r.text[:200]})
-                return {'success': False, 'steps': steps}
+                if not ref_configured:
+                    return {'success': False, 'steps': steps}
         except Exception as e:
             steps.append({'step': 'data_table', 'status': 'fail', 'message': str(e)[:240]})
-            return {'success': False, 'steps': steps}
+            if not ref_configured:
+                return {'success': False, 'steps': steps}
 
         if roundtrip and data_table_ok:
             roundtrip_ok, rt_steps = _test_roundtrip_row(session, cbase, parent, headers)
             steps.extend(rt_steps)
             if not roundtrip_ok:
                 return {'success': False, 'steps': steps}
+    elif (g.get('google_secops_data_table_id') or '').strip():
+        steps.append({
+            'step': 'data_table',
+            'status': 'skipped',
+            'message': 'skipped (Data Table ID set but parent path incomplete — see checklist)',
+        })
     else:
         steps.append({
             'step': 'data_table',
             'status': 'skipped',
-            'message': 'skipped (incomplete Data Table config — see checklist above)',
+            'message': 'skipped (Data Table not configured — optional)',
         })
 
     ingestion_ok = False
@@ -1023,18 +1151,18 @@ def google_secops_test_connection(
             msg = f'HTTP {r.status_code} GET {probe_url}'
             if r.status_code == 401:
                 steps.append({'step': 'ingestion_api', 'status': 'fail', 'message': msg})
-                if not data_table_ok:
+                if not data_table_ok and not ref_configured:
                     return {'success': False, 'steps': steps}
             elif r.status_code == 403:
                 ingestion_ok = True
                 steps.append({
                     'step': 'ingestion_api',
                     'status': 'ok',
-                    'message': msg + ' (403: ingestion restricted; IOC push uses Data Table only)',
+                    'message': msg + ' (403: ingestion restricted; optional probe only)',
                 })
             elif r.status_code >= 500:
                 steps.append({'step': 'ingestion_api', 'status': 'fail', 'message': msg})
-                if not data_table_ok:
+                if not data_table_ok and not ref_configured:
                     return {'success': False, 'steps': steps}
             elif r.status_code == 404:
                 steps.append({
@@ -1042,14 +1170,14 @@ def google_secops_test_connection(
                     'status': 'fail',
                     'message': msg + ' (wrong ingestion host for region?)',
                 })
-                if not data_table_ok:
+                if not data_table_ok and not ref_configured:
                     return {'success': False, 'steps': steps}
             else:
                 ingestion_ok = True
                 steps.append({'step': 'ingestion_api', 'status': 'ok', 'message': msg + ' (Ingestion API reachable)'})
         except Exception as e:
             steps.append({'step': 'ingestion_api', 'status': 'fail', 'message': str(e)[:240]})
-            if not data_table_ok:
+            if not data_table_ok and not ref_configured:
                 return {'success': False, 'steps': steps}
     else:
         steps.append({
@@ -1058,8 +1186,49 @@ def google_secops_test_connection(
             'message': 'skipped (ingestion probe is direct-mode only)',
         })
 
-    if roundtrip:
+    if roundtrip and dt_configured:
         return {'success': data_table_ok and roundtrip_ok, 'steps': steps}
-    if mode == CONNECTION_MODE_APIGEE:
-        return {'success': data_table_ok, 'steps': steps}
-    return {'success': data_table_ok or ingestion_ok, 'steps': steps}
+    ref_ok = _test_reference_lists_probe(session, g, headers, steps)
+    success = True
+    if dt_configured:
+        success = success and data_table_ok
+    if ref_configured:
+        success = success and ref_ok
+    if not has_any_target:
+        success = False
+    elif not dt_configured and mode == CONNECTION_MODE_DIRECT:
+        success = success or ingestion_ok
+    return {'success': success, 'steps': steps}
+
+
+def _test_reference_lists_probe(session, g: dict[str, str], headers: dict[str, str], steps: list[dict[str, str]]) -> bool:
+    try:
+        from utils.google_secops_reference_lists import (
+            parse_reference_lists_mappings,
+            test_reference_list_exists,
+        )
+    except Exception:
+        return True
+    mappings = parse_reference_lists_mappings(g)
+    if not mappings:
+        steps.append({
+            'step': 'reference_lists_probe',
+            'status': 'skipped',
+            'message': 'No reference list mappings configured',
+        })
+        return True
+    probe_name = mappings[0]['list_name']
+    ok, err = test_reference_list_exists(session, g, headers, probe_name)
+    if ok:
+        steps.append({
+            'step': 'reference_lists_probe',
+            'status': 'ok',
+            'message': f'GET v2/lists/{probe_name} ok',
+        })
+        return True
+    steps.append({
+        'step': 'reference_lists_probe',
+        'status': 'fail',
+        'message': f'{err} (IAM: Reference Lists API read on {probe_name})',
+    })
+    return False

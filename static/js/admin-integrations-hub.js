@@ -77,7 +77,7 @@
     var tab = rawTab;
     var pushIocSubTabs = ['cortex-xdr', 'google-secops', 'netskope', 'cisco-esa', 'ioc-push', 'misp-push', 'opendxl'];
     var pushYaraSubTabs = ['trellix-ex-nx', 'yara-push'];
-    var importSubTabs = ['misp', 'taxii'];
+    var importSubTabs = ['misp', 'adversarygraph', 'taxii'];
     if (pushIocSubTabs.indexOf(rawTab) >= 0) {
         tab = 'push-ioc';
         if (!sub) sub = rawTab;

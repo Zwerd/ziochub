@@ -14,6 +14,7 @@ WORKERS="${ZIOCHUB_WORKERS:-3}"
 # Cortex/integration tests can block up to REQUEST_TIMEOUT_TEST_SEC (15s) per outbound call;
 # default gunicorn worker timeout is 30s — too low and the UI sees HTML 500 instead of JSON.
 TIMEOUT="${GUNICORN_TIMEOUT:-120}"
+GRACEFUL_TIMEOUT="${GUNICORN_GRACEFUL_TIMEOUT:-30}"
 
 SSL_ARGS=""
 if [[ -f "$CERT" && -f "$KEY" ]]; then
@@ -28,6 +29,7 @@ exec "${APP_DIR}/venv/bin/gunicorn" \
     --workers "${WORKERS}" \
     --bind "0.0.0.0:${PORT}" \
     --timeout "${TIMEOUT}" \
+    --graceful-timeout "${GRACEFUL_TIMEOUT}" \
     ${SSL_ARGS} \
     --access-logfile - \
     --error-logfile - \

@@ -3,6 +3,8 @@ TAXII 2.1 inbound pull settings – keys, defaults, normalization (mirror misp_s
 """
 from __future__ import annotations
 
+from utils.ioc_import_mode import DEFAULT_INTEGRATION_IOC_MODE, normalize_ioc_import_mode
+
 TAXII_SETTING_KEYS = (
     'taxii_pull_enabled',
     'taxii_discovery_url',
@@ -18,6 +20,7 @@ TAXII_SETTING_KEYS = (
     'taxii_exclude_from_champs',
     'taxii_skip_revoked',
     'taxii_default_ttl',
+    'taxii_ioc_import_mode',
     'taxii_last_sync',
     'taxii_last_sync_result',
 )
@@ -38,6 +41,7 @@ TAXII_SYNC_KEYS = (
     'taxii_default_ttl',
     'taxii_sync_user',
     'taxii_skip_revoked',
+    'taxii_ioc_import_mode',
 )
 
 TAXII_DEFAULTS = {
@@ -55,6 +59,7 @@ TAXII_DEFAULTS = {
     'taxii_exclude_from_champs': 'true',
     'taxii_skip_revoked': 'true',
     'taxii_default_ttl': 'permanent',
+    'taxii_ioc_import_mode': DEFAULT_INTEGRATION_IOC_MODE,
     'taxii_last_sync': '',
     'taxii_last_sync_result': '',
 }
@@ -86,4 +91,7 @@ def normalize_sync_settings(settings: dict) -> dict:
         normalized['taxii_last_days'] = str(max(1, min(365, int(normalized.get('taxii_last_days') or '30'))))
     except (ValueError, TypeError):
         normalized['taxii_last_days'] = '30'
+    normalized['taxii_ioc_import_mode'] = normalize_ioc_import_mode(
+        normalized.get('taxii_ioc_import_mode'), DEFAULT_INTEGRATION_IOC_MODE
+    )
     return normalized

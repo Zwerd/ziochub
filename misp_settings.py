@@ -6,6 +6,8 @@ this module defines which keys exist and their default values.
 """
 from __future__ import annotations
 
+from utils.ioc_import_mode import DEFAULT_INTEGRATION_IOC_MODE, normalize_ioc_import_mode
+
 # All MISP-related setting keys (stored in DB)
 MISP_SETTING_KEYS = (
     'misp_enabled',
@@ -23,6 +25,7 @@ MISP_SETTING_KEYS = (
     'misp_push_enabled',
     'misp_push_include_comment',
     'misp_push_default_event_id',
+    'misp_ioc_import_mode',
     'misp_last_sync',
     'misp_last_sync_result',
 )
@@ -41,6 +44,7 @@ MISP_SYNC_KEYS = (
     'misp_published_only',
     'misp_default_ttl',
     'misp_sync_user',
+    'misp_ioc_import_mode',
 )
 
 # Default values for MISP settings
@@ -60,6 +64,7 @@ MISP_DEFAULTS = {
     'misp_push_enabled': 'false',
     'misp_push_include_comment': 'true',
     'misp_push_default_event_id': '',
+    'misp_ioc_import_mode': DEFAULT_INTEGRATION_IOC_MODE,
     'misp_last_sync': '',
     'misp_last_sync_result': '',
 }
@@ -97,5 +102,9 @@ def normalize_sync_settings(settings: dict) -> dict:
         normalized['misp_last_days'] = str(max(1, min(365, int(normalized['misp_last_days'] or '30'))))
     except (ValueError, TypeError):
         normalized['misp_last_days'] = '30'
+
+    normalized['misp_ioc_import_mode'] = normalize_ioc_import_mode(
+        normalized.get('misp_ioc_import_mode'), DEFAULT_INTEGRATION_IOC_MODE
+    )
 
     return normalized

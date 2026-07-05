@@ -7,6 +7,7 @@ from flask import Blueprint, render_template, request, jsonify, redirect, url_fo
 from flask_login import login_user, logout_user, current_user
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from extensions import db
 from models import User, UserProfile, UserSession, UserNotification, _utcnow
 from utils.auth import hash_password, verify_password
@@ -196,10 +197,25 @@ def login():
         return render_template('login.html', error='Invalid username or password'), 401
 
     login_user(user)
-    user.last_login_at = _utcnow()
-    usession = UserSession(user_id=user.id, ip_address=request.remote_addr)
-    db.session.add(usession)
-    _commit_with_retry()
+    for persist_attempt in range(2):
+        try:
+            db.session.add(user)
+            user.last_login_at = _utcnow()
+            db.session.add(UserSession(user_id=user.id, ip_address=request.remote_addr))
+            _commit_with_retry()
+            break
+        except IntegrityError:
+            db.session.rollback()
+            if persist_attempt == 0:
+                user = User.query.get(user.id)
+                if user:
+                    login_user(user)
+                continue
+            logging.exception('Login persist failed for %s (check PostgreSQL sequences)', username)
+        except Exception:
+            db.session.rollback()
+            logging.exception('Login persist failed for %s (check PostgreSQL sequences)', username)
+            break
     audit_log('login', f'user={username} source={user.source}')
     if user.must_change_password:
         return redirect(url_for('auth.change_password'))

@@ -847,7 +847,7 @@
                     const tabEl = document.getElementById('tab-champs');
                     if (!tabEl || tabEl.classList.contains('hidden')) return;
                     if (document.hidden) return;
-                    await fetch('/api/champs/ping', { method: 'POST' });
+                    await fetch('/api/champs/ping', { method: 'POST', credentials: 'same-origin' });
                 } catch (e) { /* ignore */ }
             };
             ping();
@@ -1070,7 +1070,7 @@
         try {
             listEl.querySelectorAll('.champs-ladder-row').forEach(b => b.classList.remove('champs-ladder-selected'));
             const url = fresh ? '/api/champs/leaderboard?fresh=1' : '/api/champs/leaderboard';
-            const response = await fetch(url);
+            const response = await fetch(url, { credentials: 'same-origin' });
             const result = await response.json();
             if (result.success && result.leaderboard && result.leaderboard.length > 0) {
                 const oldData = [...champsLeaderboardData];
@@ -1082,12 +1082,11 @@
                     const trendDown = a.trend && (String(a.trend).startsWith('-') || String(a.trend).includes('▼'));
                     const trendNum = a.trend ? String(a.trend).replace(/[^0-9]/g, '') || '' : '';
                     const trendHtml = trendUp
-                        ? `<span class="champs-trend-pill champs-trend-up" title="Rank improved"><span class="champs-trend-arrow" aria-hidden="true">↑</span><span class="champs-trend-delta">${escapeHtml(trendNum || a.trend)}</span></span>`
+                        ? `<span class="champs-trend-pill champs-trend-up" title="Moved up ${escapeHtml(trendNum || '1')} place${trendNum === '1' ? '' : 's'}"><span class="champs-trend-arrow" aria-hidden="true">↑</span><span class="champs-trend-delta">${escapeHtml(trendNum || a.trend)}</span></span>`
                         : trendDown
-                            ? `<span class="champs-trend-pill champs-trend-down" title="Rank dropped"><span class="champs-trend-arrow" aria-hidden="true">↓</span><span class="champs-trend-delta">${escapeHtml(trendNum || a.trend)}</span></span>`
-                            : '<span class="champs-trend-pill champs-trend-same" aria-hidden="true">—</span>';
+                            ? `<span class="champs-trend-pill champs-trend-down" title="Moved down ${escapeHtml(trendNum || '1')} place${trendNum === '1' ? '' : 's'}"><span class="champs-trend-arrow" aria-hidden="true">↓</span><span class="champs-trend-delta">${escapeHtml(trendNum || a.trend)}</span></span>`
+                            : '<span class="champs-trend-pill champs-trend-same" title="No rank change" aria-hidden="true">—</span>';
                     const medal = a.medal || '';
-                    const rankText = `#${a.rank}`;
                     const avatarUrl = a.avatar_url || '';
                     const displayName = escapeHtml(a.display_name || a.username || a.analyst);
                     const avatarSize = 'w-11 h-11';
@@ -1099,20 +1098,16 @@
                     const rankSlot = a.rank <= 3
                         ? `<span class="champs-medal-circle champs-medal-circle-${a.rank} champs-rank-slot flex-shrink-0 w-12 h-12 rounded-full flex items-center justify-center text-2xl border-2" title="Rank ${a.rank}">${medal}</span>`
                         : `<span class="champs-rank-slot champs-rank-num flex-shrink-0 w-12 h-12 flex items-center justify-center font-extrabold text-secondary text-lg">${a.rank}</span>`;
+                    const scoreTitle = a.score != null ? `${Number(a.score).toLocaleString()} pts` : '';
                     return `
-                        <button type="button" class="champs-ladder-row ${rankClass} w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-white/10 hover:bg-white/5 transition-all text-left" data-index="${i}" data-user-id="${a.user_id || ''}" title="${a.score} pts${isInactive ? ' (inactive)' : ''}">
+                        <button type="button" class="champs-ladder-row ${rankClass} w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-transparent hover:border-white/10 hover:bg-white/5 transition-all text-left" data-index="${i}" data-user-id="${a.user_id || ''}" title="${scoreTitle}${isInactive ? ' (inactive)' : ''}">
                             ${rankSlot}
                             <span class="flex-shrink-0 ${avatarSize} rounded-full overflow-hidden bg-slate-600/50 flex items-center justify-center ring-2 ring-white/5${avatarInactiveClass}">
                                 ${avatarHtml}
                             </span>
-                            <div class="flex-1 min-w-0">
-                                <div class="flex items-center gap-1.5 flex-wrap">
-                                    <span class="font-bold text-sm truncate">${displayName}</span>
-                                </div>
-                                <div class="flex items-center gap-2 mt-1 flex-wrap">
-                                    <span class="text-sm font-semibold opacity-90">${rankText}</span>
-                                    ${trendHtml}
-                                </div>
+                            <div class="champs-ladder-info flex-1 min-w-0">
+                                <span class="champs-ladder-name font-bold truncate">${displayName}</span>
+                                ${trendHtml}
                             </div>
                         </button>
                     `;
@@ -1150,7 +1145,8 @@
                 champsPreviousLeaderboard = [...champsLeaderboardData];
             } else {
                 const t = global.t || (k => k);
-                listEl.innerHTML = `<div class="text-secondary text-sm py-4 text-center">${t('champs.no_data') || 'No analyst data yet'}</div>`;
+                const errMsg = (result && result.message) ? result.message : (t('champs.no_data') || 'No analyst data yet');
+                listEl.innerHTML = `<div class="text-secondary text-sm py-4 text-center">${result && result.success === false ? errMsg : (t('champs.no_data') || 'No analyst data yet')}</div>`;
             }
         } catch (error) {
             console.error('Error loading champs leaderboard:', error);
@@ -1187,7 +1183,7 @@
         const form = document.getElementById('champsGoalForm');
         async function openGoalModal() {
             try {
-                const r = await fetch('/api/champs/team-goal');
+                const r = await fetch('/api/champs/team-goal', { credentials: 'same-origin' });
                 const j = await r.json();
                 const g = j.success && j.goal ? j.goal : null;
                 const setVal = (id, value) => {
@@ -1211,6 +1207,7 @@
             try {
                 const r = await fetch('/api/champs/team-goal', {
                     method: 'POST',
+                    credentials: 'same-origin',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         title: document.getElementById('champsGoalTitle').value.trim(),
@@ -1263,7 +1260,7 @@
         ensureRows();
         async function openMsgModal() {
             try {
-                const r = await fetch('/api/champs/ticker-messages');
+                const r = await fetch('/api/champs/ticker-messages', { credentials: 'same-origin' });
                 const j = await r.json();
                 const messages = (j.messages || []).slice(0, ROWS);
                 const bd = (j.banner_direction || 'rtl') === 'ltr' ? 'ltr' : 'rtl';
@@ -1298,6 +1295,7 @@
             try {
                 const r = await fetch('/api/champs/ticker-messages', {
                     method: 'POST',
+                    credentials: 'same-origin',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ messages: messages, banner_direction: banner_direction })
                 });
@@ -1320,7 +1318,7 @@
         const barArea = document.getElementById('champsTeamHudBarArea');
         if (!hud) return;
         try {
-            const r = await fetch('/api/champs/team-goal');
+            const r = await fetch('/api/champs/team-goal', { credentials: 'same-origin' });
             const j = await r.json();
             if (setBtn) setBtn.classList.toggle('hidden', !authState.is_admin);
             const msgSettingsBtn = document.getElementById('champsTickerMsgSettingsBtn');
@@ -1373,7 +1371,7 @@
         if (!stripEl || !scrollEl) return;
         const sep = '<span class="champs-ticker-sep"> | </span>';
         try {
-            const r = await fetch('/api/champs/ticker?limit=10');
+            const r = await fetch('/api/champs/ticker?limit=10', { credentials: 'same-origin' });
             const j = await r.json();
             applyChampsTickerBannerDirection(scrollEl, j.banner_direction);
             if (j.source === 'custom' && j.messages && j.messages.length > 0) {
@@ -1441,7 +1439,7 @@
         const uid = data.user_id;
         if (uid != null && uid !== '') {
             try {
-                const r = await fetch('/api/champs/analyst/' + uid);
+                const r = await fetch('/api/champs/analyst/' + uid, { credentials: 'same-origin' });
                 const j = await r.json();
                 if (j.success && j.analyst) {
                     renderChampsSpotlightFull(content, j.analyst, data);

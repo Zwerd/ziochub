@@ -586,39 +586,26 @@ def _google_secops_push_display_address(_get) -> tuple[str, str]:
 
 
 def _google_secops_is_configured(_get) -> bool:
-    from utils.google_secops import (
-        CONNECTION_MODE_APIGEE,
-        GATEWAY_AUTH_API_KEY,
-        GATEWAY_AUTH_OAUTH2,
-        google_secops_connection_mode,
-        google_secops_gateway_auth_method,
-    )
+    from utils.google_secops import _config_ready_for_api
 
-    proj = (_get('google_secops_project_number') or '').strip()
-    loc = (_get('google_secops_location') or '').strip()
-    inst = (_get('google_secops_instance_id') or '').strip() or (_get('google_secops_customer_id') or '').strip()
-    tid = (_get('google_secops_data_table_id') or '').strip()
-    if not (proj and loc and inst and tid):
-        return False
-
-    g = {'google_secops_connection_mode': _get('google_secops_connection_mode') or 'direct'}
-    if google_secops_connection_mode(g) == CONNECTION_MODE_APIGEE:
-        if not (_get('google_secops_gateway_base_url') or '').strip():
-            return False
-        auth = google_secops_gateway_auth_method({
-            'google_secops_gateway_auth_method': _get('google_secops_gateway_auth_method') or GATEWAY_AUTH_API_KEY,
-        })
-        if auth == GATEWAY_AUTH_OAUTH2:
-            return bool(
-                (_get('google_secops_gateway_oauth_token_url') or '').strip()
-                and (_get('google_secops_gateway_oauth_client_id') or '').strip()
-                and (_get('google_secops_gateway_oauth_client_secret') or '').strip()
-            )
-        return bool((_get('google_secops_gateway_api_key') or '').strip())
-
-    creds = (_get('google_secops_credentials_json') or '').strip()
-    base_ok = bool((_get('google_secops_chronicle_api_base') or '').strip() or loc)
-    return bool(creds and base_ok)
+    g = {
+        'google_secops_connection_mode': _get('google_secops_connection_mode') or 'direct',
+        'google_secops_project_number': _get('google_secops_project_number') or '',
+        'google_secops_location': _get('google_secops_location') or '',
+        'google_secops_instance_id': _get('google_secops_instance_id') or '',
+        'google_secops_customer_id': _get('google_secops_customer_id') or '',
+        'google_secops_data_table_id': _get('google_secops_data_table_id') or '',
+        'google_secops_chronicle_api_base': _get('google_secops_chronicle_api_base') or '',
+        'google_secops_gateway_base_url': _get('google_secops_gateway_base_url') or '',
+        'google_secops_gateway_auth_method': _get('google_secops_gateway_auth_method') or 'api_key',
+        'google_secops_gateway_api_key': _get('google_secops_gateway_api_key') or '',
+        'google_secops_gateway_oauth_token_url': _get('google_secops_gateway_oauth_token_url') or '',
+        'google_secops_gateway_oauth_client_id': _get('google_secops_gateway_oauth_client_id') or '',
+        'google_secops_gateway_oauth_client_secret': _get('google_secops_gateway_oauth_client_secret') or '',
+        'google_secops_credentials_json': _get('google_secops_credentials_json') or '',
+        'google_secops_reference_lists_config': _get('google_secops_reference_lists_config') or '[]',
+    }
+    return _config_ready_for_api(g)
 
 
 def _norm_automation_url(url: str) -> str:
@@ -1004,6 +991,8 @@ def _parse_pull_sync_result(result_raw) -> tuple[str, str]:
                         parts.append(f"skipped={r.get('skipped', 0)}")
                     if r.get('fetched') is not None:
                         parts.append(f"fetched={r.get('fetched', 0)}")
+                    if r.get('yara_added') is not None and int(r.get('yara_added') or 0) > 0:
+                        parts.append(f"yara_added={r.get('yara_added', 0)}")
                     last_summary = ', '.join(parts) if parts else 'ok'
                 else:
                     sync_status = 'fail'
@@ -1069,6 +1058,51 @@ def _misp_pull_state_row(_get) -> dict:
     return _enrich_pull_row_vendor(row, 'misp_pull')
 
 
+def _adversarygraph_pull_state_row(_get) -> dict:
+    from utils.adversarygraph_sync_runner import (
+        ADVERSARYGRAPH_PULL_INTERVAL_DEFAULT,
+        next_adversarygraph_pull_at,
+        normalize_adversarygraph_pull_interval,
+    )
+
+    url = (_get('adversarygraph_url') or '').strip()
+    enabled = (_get('adversarygraph_enabled') or 'false').lower() == 'true'
+    last_str = (_get('adversarygraph_last_sync') or '').strip()
+    pull_interval_min = normalize_adversarygraph_pull_interval(
+        _get('adversarygraph_pull_interval') or str(ADVERSARYGRAPH_PULL_INTERVAL_DEFAULT)
+    )
+    sync_status, last_summary = _parse_pull_sync_result(_get('adversarygraph_last_sync_result'))
+    nxt = next_adversarygraph_pull_at(_get) if enabled and last_str else None
+
+    if not url:
+        return _enrich_pull_row_vendor({
+            'id': 'adversarygraph',
+            'name': 'AdversaryGraph',
+            'address': '',
+            'host': '',
+            'last_pull_at': None,
+            'next_pull_at': None,
+            'pull_interval_min': pull_interval_min,
+            'last_summary': '',
+            'status': 'not_configured',
+            'enabled': False,
+        }, 'adversarygraph_pull')
+
+    row = {
+        'id': 'adversarygraph',
+        'name': 'AdversaryGraph',
+        'address': url,
+        'host': _host_from_url(url),
+        'last_pull_at': last_str or None,
+        'next_pull_at': nxt,
+        'pull_interval_min': pull_interval_min,
+        'last_summary': last_summary,
+        'enabled': enabled,
+        'status': 'disabled' if not enabled else sync_status,
+    }
+    return _enrich_pull_row_vendor(row, 'adversarygraph_pull')
+
+
 def _taxii_pull_state_row(_get) -> dict:
     from utils.taxii_sync_runner import (
         TAXII_PULL_INTERVAL_DEFAULT,
@@ -1119,9 +1153,13 @@ def _taxii_pull_state_row(_get) -> dict:
 
 def _build_pull_state_entries(_get):
     """
-    Inbound IOC pulls: ZIoCHub connects outward to MISP and/or remote TAXII 2.1 servers.
+    Inbound IOC pulls: ZIoCHub connects outward to MISP, AdversaryGraph, and/or remote TAXII 2.1 servers.
     """
-    return [_misp_pull_state_row(_get), _taxii_pull_state_row(_get)]
+    return [
+        _misp_pull_state_row(_get),
+        _adversarygraph_pull_state_row(_get),
+        _taxii_pull_state_row(_get),
+    ]
 
 
 def _build_automation_targets(_get):

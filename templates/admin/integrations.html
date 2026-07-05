@@ -3,7 +3,7 @@
 
 {% block admin_content %}
 <div class="mb-4">
-    <p class="text-secondary text-sm">Threat-intel flows: <strong class="text-primary">Import ↓</strong> (MISP, TAXII pull) · <strong class="text-primary">Export ↑</strong> (public feeds / TAXII server) · <strong class="text-primary">Push ↑</strong> (IOC &amp; YARA to defense tools). Platform options: <a href="{{ url_for('admin_pages.admin_settings') }}" class="text-cyan-400 hover:underline">Settings</a>.</p>
+    <p class="text-secondary text-sm">Threat-intel flows: <strong class="text-primary">Import ↓</strong> (MISP, AdversaryGraph, TAXII pull) · <strong class="text-primary">Export ↑</strong> (public feeds / TAXII server) · <strong class="text-primary">Push ↑</strong> (IOC &amp; YARA to defense tools). Platform options: <a href="{{ url_for('admin_pages.admin_settings') }}" class="text-cyan-400 hover:underline">Settings</a>.</p>
 </div>
 
 <nav class="integ-top-tabs settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-6">
@@ -27,7 +27,7 @@
 </div>
 
 <div id="integ-tab-push-ioc" class="integ-top-pane hidden">
-{% from 'admin/partials/integration_form_macros.html' import integ_section, integ_yes_no, integ_verify_tls, integ_retry_panel, integ_callout_warn, integ_brand_heading %}
+{% from 'admin/partials/integration_form_macros.html' import integ_section, integ_yes_no, integ_verify_tls, integ_retry_panel, integ_callout_warn, integ_brand_heading, integ_intro, integ_footnote, integ_subsection, integ_checkbox_inline, integ_message, integ_test_log %}
 <nav class="push-ioc-sub-tabs settings-tabs flex flex-wrap gap-2 border-b border-white/10 pb-3 mb-4">
     <button type="button" class="push-ioc-sub-btn settings-tab-btn active flex items-center gap-2" data-tab="cortex-xdr">
         <img src="{{ integration_icons.cortex_xdr }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
@@ -59,12 +59,8 @@
 <!-- Tab: Cisco ESA -->
 <div id="settings-tab-cisco-esa" class="settings-tab-pane hidden">
     <div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
-        <h3 class="text-lg font-semibold accent-blue mb-2 flex items-center gap-2">
-            <img src="{{ integration_icons.cisco_esa }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
-            <span>Cisco ESA — content dictionary sync</span>
-        </h3>
-        <p class="text-secondary text-sm mb-4">ZIoCHub logs in to the appliance, then adds or removes dictionary words automatically when analysts submit or revoke IOCs (and on expiry if enabled).</p>
-        <p class="text-secondary text-xs mb-4">Supported IOC types: <strong class="text-primary">Email</strong>, <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">URL</strong>. Hash and other types are not sent to ESA.</p>
+        {{ integ_brand_heading(integration_icons.cisco_esa, 'Cisco ESA — content dictionary sync') }}
+        {{ integ_intro('ZIoCHub logs in to the appliance, then adds or removes dictionary words automatically when analysts submit or revoke IOCs (and on expiry if enabled). Supported IOC types: <strong class="text-primary">Email</strong>, <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">URL</strong>. Hash and other types are not sent to ESA.') }}
 
         <form id="esaForm" class="space-y-0">
             {% call integ_section('General') %}
@@ -103,14 +99,14 @@
             <div id="esaGroupNameWrap" class="integ-field{% if settings.esa_deployment_mode != 'group' %} hidden{% endif %}">
                 <label for="esa_group_name" class="integ-label">Group name</label>
                 <input type="text" id="esa_group_name" name="esa_group_name" value="{{ settings.esa_group_name }}"
-                       class="w-full max-w-xl px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="As defined on the ESA for API group scope" autocomplete="off">
-                <p class="text-secondary text-xs mt-1">Required for <strong class="text-primary">Group</strong> mode (<code class="px-0.5 rounded bg-white/10 text-xs">group_name</code> query parameter).</p>
+                       class="integ-input integ-input--wide" placeholder="As defined on the ESA for API group scope" autocomplete="off">
+                <p class="integ-hint">Required for <strong class="text-primary">Group</strong> mode (<code class="px-0.5 rounded bg-white/10 text-xs">group_name</code> query parameter).</p>
             </div>
             <div id="esaHostNameWrap" class="integ-field{% if settings.esa_deployment_mode != 'machine' %} hidden{% endif %}">
                 <label for="esa_host_name" class="integ-label">Host name</label>
                 <input type="text" id="esa_host_name" name="esa_host_name" value="{{ settings.esa_host_name }}"
-                       class="w-full max-w-xl px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="Target appliance hostname for API" autocomplete="off">
-                <p class="text-secondary text-xs mt-1">Required for <strong class="text-primary">Machine</strong> mode (<code class="px-0.5 rounded bg-white/10 text-xs">host_name</code> query parameter).</p>
+                       class="integ-input integ-input--wide" placeholder="Target appliance hostname for API" autocomplete="off">
+                <p class="integ-hint">Required for <strong class="text-primary">Machine</strong> mode (<code class="px-0.5 rounded bg-white/10 text-xs">host_name</code> query parameter).</p>
             </div>
             {% endcall %}
 
@@ -134,27 +130,27 @@
             </div>
             <div>
                 <div class="flex items-center justify-between mb-2">
-                    <label class="block text-sm font-semibold text-secondary">Dictionaries on ESA → IOC type</label>
-                    <button type="button" id="esaAddMappingBtn" class="text-sm px-3 py-1 rounded bg-cyan-600/30 text-cyan-400 hover:bg-cyan-500/40 transition">+ Add row</button>
+                    <label class="integ-label mb-0">Dictionaries on ESA → IOC type</label>
+                    <button type="button" id="esaAddMappingBtn" class="integ-btn integ-btn--add">+ Add row</button>
                 </div>
-                <p class="text-secondary text-xs mb-3">Use the exact dictionary name from the ESA UI. One IOC type per row; add multiple rows if you use several dictionaries.</p>
-                <div id="esaMappingsContainer" class="space-y-3">
+                <p class="integ-hint mb-3">Use the exact dictionary name from the ESA UI. One IOC type per row; add multiple rows if you use several dictionaries.</p>
+                <div id="esaMappingsContainer" class="space-y-0">
                     {% for row in settings.esa_mapping_rows %}
-                    <div class="esa-mapping-row flex flex-wrap gap-3 items-end rounded-lg border border-white/10 bg-black/20 p-4">
-                        <div class="flex-1 min-w-[14rem]">
-                            <label class="block text-xs font-semibold text-secondary mb-1">Dictionary name (on ESA)</label>
-                            <input type="text" class="esa-map-dict w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green text-sm" placeholder="e.g. URL-Blocklist" value="{{ row.dictionary_name }}" autocomplete="off">
+                    <div class="esa-mapping-row integ-mapping-row">
+                        <div class="integ-field">
+                            <label class="integ-label">Dictionary name (on ESA)</label>
+                            <input type="text" class="esa-map-dict integ-input" placeholder="e.g. URL-Blocklist" value="{{ row.dictionary_name }}" autocomplete="off">
                         </div>
-                        <div class="w-full sm:w-44">
-                            <label class="block text-xs font-semibold text-secondary mb-1">IOC type</label>
-                            <select class="esa-map-type w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary text-sm focus:border-accent-green">
+                        <div class="integ-field integ-field--narrow">
+                            <label class="integ-label">IOC type</label>
+                            <select class="esa-map-type integ-select">
                                 <option value="Email" {% if row.ioc_type == 'Email' %}selected{% endif %}>Email</option>
                                 <option value="Domain" {% if row.ioc_type == 'Domain' %}selected{% endif %}>Domain</option>
                                 <option value="IP" {% if row.ioc_type == 'IP' %}selected{% endif %}>IP</option>
                                 <option value="URL" {% if row.ioc_type == 'URL' %}selected{% endif %}>URL</option>
                             </select>
                         </div>
-                        <button type="button" class="esa-remove-mapping px-3 py-2 rounded-lg text-sm font-medium bg-red-600/80 hover:bg-red-500 text-white transition">Remove</button>
+                        <button type="button" class="esa-remove-mapping integ-btn integ-btn--remove">Remove</button>
                     </div>
                     {% endfor %}
                 </div>
@@ -178,18 +174,15 @@
             </div>
         </form>
         <div id="esaMessage" class="integ-message mt-4 hidden text-sm"></div>
-        <div id="esaTestLog" class="integ-test-log mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto max-h-48"></div>
+        <div id="esaTestLog" class="integ-test-log mt-3 hidden"></div>
     </div>
 </div>
 
 <!-- Tab: Cortex XDR (IOC API) -->
 <div id="settings-tab-cortex-xdr" class="settings-tab-pane">
     <div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
-        <h3 class="text-lg font-semibold accent-blue mb-2 flex items-center gap-2">
-            <img src="{{ integration_icons.cortex_xdr }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
-            <span>Cortex XDR</span>
-        </h3>
-        <p class="text-secondary text-sm mb-4">Uses the documented Cortex XDR <strong class="text-primary">Platform API</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">https://api-…paloaltonetworks.com</code>): <code class="px-0.5 rounded bg-white/10 text-xs">indicators/insert_jsons</code> (push) and <code class="px-0.5 rounded bg-white/10 text-xs">indicators/delete</code> (revoke). Optional <strong class="text-primary">Hash</strong> file block list via <code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>. When <strong class="text-primary">Enable</strong> is Yes, outbound IOC events run in the background.</p>
+        {{ integ_brand_heading(integration_icons.cortex_xdr, 'Cortex XDR') }}
+        {{ integ_intro('Uses the documented Cortex XDR <strong class="text-primary">Platform API</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">https://api-…paloaltonetworks.com</code>): <code class="px-0.5 rounded bg-white/10 text-xs">indicators/insert_jsons</code> (push) and <code class="px-0.5 rounded bg-white/10 text-xs">indicators/delete</code> (revoke). Optional <strong class="text-primary">Hash</strong> file block list via <code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>. When <strong class="text-primary">Enable</strong> is Yes, outbound IOC events run in the background.') }}
 
         {{ integ_callout_warn('Supported IOC types — XDR console vs ZIoCHub API', '
         <p>ZIoCHub pushes via <code class="px-0.5 rounded bg-white/10 text-xs">POST /public_api/v1/indicators/insert_jsons</code>. Palo Alto&apos;s published enum lists <code class="px-0.5 rounded bg-white/10 text-xs">HASH</code>, <code class="px-0.5 rounded bg-white/10 text-xs">IP</code>, <code class="px-0.5 rounded bg-white/10 text-xs">DOMAIN_NAME</code>, and <code class="px-0.5 rounded bg-white/10 text-xs">FILENAME</code>; many tenants also accept <code class="px-0.5 rounded bg-white/10 text-xs">URL</code> and <code class="px-0.5 rounded bg-white/10 text-xs">EMAIL_ADDRESS</code> (verify with <code class="px-0.5 rounded bg-white/10 text-xs">scripts/cortex_xdr_ioc_probe.py</code>).</p>
@@ -206,12 +199,13 @@
         <p class="mt-2 text-xs">If push fails with validation errors for URL/Email, your tenant may require different API types — use <code class="px-0.5 rounded bg-white/10 text-xs">indicators/get</code> on a manually created rule to see the stored <code class="px-0.5 rounded bg-white/10 text-xs">type</code> value. References: <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-Platform-APIs/Get-Indicators-IOCs" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Get Indicators</a> · <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-REST-API/Insert-Simple-Indicators-JSON" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">insert_jsons</a>.</p>
         ') }}
 
-        <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary open:border-cyan-500/50">
-            <summary class="cursor-pointer font-semibold text-cyan-300 select-none list-none [&amp;::-webkit-details-marker]:hidden flex items-center gap-2">
-                <span class="text-cyan-400" aria-hidden="true">▸</span>
-                How to create a Cortex XDR API key (Standard or Advanced)
+        <details class="integ-details">
+            <summary class="integ-details__summary">
+                <span class="integ-details__marker" aria-hidden="true">▸</span>
+                <span>How to create a Cortex XDR API key (Standard or Advanced)</span>
             </summary>
-            <ol class="mt-3 list-decimal list-inside space-y-2 text-primary/90">
+            <div class="integ-details__body">
+            <ol class="list-decimal list-inside space-y-2">
                 <li>In the Cortex XDR console, open <strong class="text-primary">Settings → Configurations → Integrations → API Keys</strong> (see <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-REST-API/Cortex-XDR-API-Overview" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Cortex XDR API overview</a>).</li>
                 <li>Click <strong class="text-primary">+ New Key</strong>. Choose a <strong class="text-primary">Security Level</strong> - <em>Standard</em> (raw key in Authorization, no signing) or <em>Advanced</em> (HMAC-style signed header). Use the matching value in <strong class="text-primary">Security level</strong> below; a mismatch always returns HTTP 401.</li>
                 <li>Create an <strong class="text-primary">Advanced</strong> API key (required for signed REST calls). Standard keys are not supported by ZIoCHub.</li>
@@ -222,6 +216,7 @@
             </ol>
             <p class="mt-3 text-xs text-secondary">IOC REST references: <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-Platform-APIs/Get-Indicators-IOCs" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Get Indicators (IOCs)</a> · <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-REST-API/Insert-Simple-Indicators-JSON" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Insert Simple Indicators (JSON)</a> · <a href="https://docs-cortex.paloaltonetworks.com/r/Cortex-XDR-Platform-APIs/Delete-Indicators-IOCs" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Delete Indicators (IOCs)</a>. ZIoCHub uses the documented <code class="px-0.5 rounded bg-white/10 text-xs">/public_api/v1/indicators/*</code> routes — not the legacy <code class="px-0.5 rounded bg-white/10 text-xs">tim_*</code> aliases (which modern tenants reject with HTTP 403 <em>Invalid API</em>).</p>
             <p class="mt-2 text-xs text-amber-200/90">If Test shows <strong>HTML 500</strong> (not JSON): usually <strong class="text-primary">Gunicorn worker timeout</strong> while waiting for Cortex (fix: <code class="px-0.5 rounded bg-white/10 text-xs">start.sh --timeout 120</code>, <code class="px-0.5 rounded bg-white/10 text-xs">systemctl restart ziochub</code>, Ctrl+F5). Use <strong class="text-primary">Check module</strong> first — must return JSON. Also fix <strong class="text-primary">API base URL</strong>: no spaces (e.g. not <code class="px-0.5 rounded bg-white/10 text-xs">https:// api-…</code>).</p>
+            </div>
         </details>
 
         <form id="cortexXdrForm" class="space-y-0">
@@ -273,11 +268,11 @@
                 </select>
                 <p class="integ-hint">Sent with each IOC push and hash blocklist entry. After reactivation, <code class="px-0.5 rounded bg-white/10 text-xs">re-synced by ZIoCHub</code> is appended automatically.</p>
             </div>
-            <div class="flex items-start gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-3">
-                <input type="checkbox" id="cortex_xdr_hash_blocklist_enabled" class="mt-1 h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600 focus:ring-cyan-500"
+            <div class="integ-checkbox-row">
+                <input type="checkbox" id="cortex_xdr_hash_blocklist_enabled" class="integ-checkbox-row__input"
                        {% if settings.cortex_xdr_hash_blocklist_enabled != 'false' %}checked{% endif %}>
                 <div>
-                    <label for="cortex_xdr_hash_blocklist_enabled" class="block text-sm font-semibold text-primary cursor-pointer">Send every Hash IOC to the Cortex XDR file block list</label>
+                    <label for="cortex_xdr_hash_blocklist_enabled" class="integ-checkbox-row__label">Send every Hash IOC to the Cortex XDR file block list</label>
                     <p class="integ-hint">Adds to block list after TIM succeeds; removes on revoke. API path <code class="px-0.5 rounded bg-white/10 text-xs">hash_exceptions/blocklist</code>.</p>
                 </div>
             </div>
@@ -298,15 +293,12 @@
                 <button type="submit" class="integ-btn integ-btn--save">Save Cortex XDR settings</button>
                 <button type="button" id="cortexXdrPingBtn" class="integ-btn integ-btn--secondary" title="Check ZIoCHub module load only (no Cortex call)">Check module</button>
                 <button type="button" id="cortexXdrTestBtn" class="integ-btn integ-btn--test">Test connection</button>
-                <label class="flex items-center gap-2 text-sm text-secondary cursor-pointer">
-                    <input type="checkbox" id="cortexXdrTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
-                    Ignore TLS for this test
-                </label>
+                {{ integ_checkbox_inline('cortexXdrTestIgnoreSsl', 'Ignore TLS for this test') }}
             </div>
         </form>
-        <div id="cortexXdrMessage" class="mt-4 hidden text-sm"></div>
-        <p class="text-secondary text-xs mt-2">Test sends the values in the form below; if API key secret is empty, the last <strong class="text-primary">saved</strong> secret is used. Click <strong class="text-primary">Save</strong> after changing keys so production pushes use the new secret.</p>
-        <div id="cortexXdrTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto overflow-y-auto max-h-80 whitespace-pre-wrap break-words"></div>
+        {{ integ_message('cortexXdrMessage') }}
+        {{ integ_footnote('Test sends the values in the form below; if API key secret is empty, the last <strong class="text-primary">saved</strong> secret is used. Click <strong class="text-primary">Save</strong> after changing keys so production pushes use the new secret.') }}
+        {{ integ_test_log('cortexXdrTestLog') }}
     </div>
 </div>
 
@@ -314,17 +306,18 @@
 <div id="settings-tab-google-secops" class="settings-tab-pane hidden">
     <div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
         {{ integ_brand_heading(integration_icons.google_secops, 'Google SecOps (Chronicle SIEM)') }}
-        <p class="text-secondary text-sm mb-4">Pushes outbound IOCs into a Google SecOps <strong class="text-primary">Data Table</strong> via the documented Chronicle REST API (<code class="px-0.5 rounded bg-white/10 text-xs">v1beta</code>): <code class="px-0.5 rounded bg-white/10 text-xs">dataTableRows:bulkCreate</code> on submit/reactivation, and <code class="px-0.5 rounded bg-white/10 text-xs">dataTableRows.list</code> + <code class="px-0.5 rounded bg-white/10 text-xs">delete</code> when an analyst revokes or deletes an IOC in ZIoCHub. When <strong class="text-primary">Enable</strong> is Yes, lifecycle events call <code class="px-0.5 rounded bg-white/10 text-xs">google_secops_push_ioc_from_context</code> in the background (same hook as Cortex XDR). Supported types: <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">URL</strong>, <strong class="text-primary">Hash</strong>, <strong class="text-primary">Email</strong>, <strong class="text-primary">YARA</strong>.</p>
+        {{ integ_intro('Push outbound IOCs to Google SecOps using the same connection (Direct GCP or Apigee): <strong class="text-primary">Data Table</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">v1beta</code>) and, optionally, <strong class="text-primary">Reference Lists</strong> per IOC type (<code class="px-0.5 rounded bg-white/10 text-xs">v2/lists</code>) for alerts and dashboards. Supported types: <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">URL</strong>, <strong class="text-primary">Hash</strong>, <strong class="text-primary">Email</strong>, <strong class="text-primary">YARA</strong> (Data Table only).') }}
 
-        <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary open:border-cyan-500/50">
-            <summary class="cursor-pointer font-semibold text-cyan-300 select-none list-none [&amp;::-webkit-details-marker]:hidden flex items-center gap-2">
-                <span class="text-cyan-400" aria-hidden="true">▸</span>
-                How to set up Google SecOps for ZIoCHub (Data Table + service account)
+        <details class="integ-details">
+            <summary class="integ-details__summary">
+                <span class="integ-details__marker" aria-hidden="true">▸</span>
+                <span>How to set up Google SecOps for ZIoCHub (Data Table + service account)</span>
             </summary>
-            <p class="mt-3 text-primary/90">Complete these steps with your <strong class="text-primary">Google SecOps / GCP administrator</strong> before enabling outbound push. ZIoCHub only needs a pre-created Data Table, a service account JSON key, and the resource identifiers listed in the form below.</p>
+            <div class="integ-details__body">
+            <p>Complete these steps with your <strong class="text-primary">Google SecOps / GCP administrator</strong> before enabling outbound push. ZIoCHub only needs a pre-created Data Table, a service account JSON key, and the resource identifiers listed in the form below.</p>
 
-            <p class="mt-4 text-primary/90 font-semibold">Part A — Create the IOC Data Table in SecOps</p>
-            <ol class="mt-2 list-decimal list-inside space-y-2 text-primary/90">
+            <p class="mt-4 font-semibold">Part A — Create the IOC Data Table in SecOps</p>
+            <ol class="mt-2 list-decimal list-inside space-y-2">
                 <li>In the Google SecOps console, open the area where <strong class="text-primary">Data Tables</strong> are managed (reference / lookup tables for Search and detection). See Google’s <a href="https://cloud.google.com/chronicle/docs/reference/data-table-api" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">Data Table documentation</a>.</li>
                 <li>Create a new table (suggested id/name: <code class="px-0.5 rounded bg-white/10 text-xs">ziochub_iocs</code> or similar). Note the <strong class="text-primary">Data table ID</strong> — the resource id used in API paths (<code class="px-0.5 rounded bg-white/10 text-xs">dataTables/{id}</code>), not only the display title.</li>
                 <li>Define <strong class="text-primary">exactly two string columns</strong>, in this order: <em>Column 1</em> = indicator type slug, <em>Column 2</em> = indicator value. Example row: <code class="px-0.5 rounded bg-white/10 text-xs">domain</code>, <code class="px-0.5 rounded bg-white/10 text-xs">evil.example.com</code>.</li>
@@ -367,20 +360,22 @@
 
             <p class="mt-3 text-xs text-secondary">Field mapping summary: <strong class="text-primary">Customer ID</strong> + <strong class="text-primary">Location</strong> + <strong class="text-primary">GCP project number</strong> + <strong class="text-primary">Data table ID</strong> build the API parent path <code class="px-0.5 rounded bg-white/10 text-xs">projects/{number}/locations/{loc}/instances/{id}/dataTables/{table}</code>. <strong class="text-primary">Service account JSON</strong> authenticates all REST calls.</p>
             <p class="mt-2 text-xs text-amber-200/90">HTTP 403 on <em>data_table</em> or <em>roundtrip_create</em>: fix IAM on the table resource. HTTP 401 on OAuth: invalid or revoked JSON key. On the server: <code class="px-0.5 rounded bg-white/10 text-xs">python scripts/test_google_secops_setup.py --roundtrip</code>. After code deploy, restart <code class="px-0.5 rounded bg-white/10 text-xs">ziochub</code> and hard-refresh the browser (Ctrl+F5) if this panel looks outdated.</p>
+            </div>
         </details>
 
-        <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary open:border-cyan-500/50">
-            <summary class="cursor-pointer font-semibold text-cyan-300 select-none list-none [&amp;::-webkit-details-marker]:hidden flex items-center gap-2">
-                <span class="text-cyan-400" aria-hidden="true">▸</span>
-                Why Data Tables, and how this integration works
+        <details class="integ-details">
+            <summary class="integ-details__summary">
+                <span class="integ-details__marker" aria-hidden="true">▸</span>
+                <span>Why Data Tables, and how this integration works</span>
             </summary>
+            <div class="integ-details__body">
 
-            <p class="mt-3 text-primary/90"><strong class="text-primary">Why a Data Table (and not log ingestion)?</strong> ZIoCHub does <em>not</em> send IOCs through the Chronicle <strong class="text-primary">Ingestion API</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">malachite-ingestion</code>). Ingestion is for shipping raw log/event payloads into the platform. Our goal is different: make every ZIoCHub IOC a <strong class="text-primary">first-class reference dataset inside SecOps</strong> that analysts can use while hunting.</p>
+            <p><strong class="text-primary">Why a Data Table (and not log ingestion)?</strong> ZIoCHub does <em>not</em> send IOCs through the Chronicle <strong class="text-primary">Ingestion API</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">malachite-ingestion</code>). Ingestion is for shipping raw log/event payloads into the platform. Our goal is different: make every ZIoCHub IOC a <strong class="text-primary">first-class reference dataset inside SecOps</strong> that analysts can use while hunting.</p>
 
-            <p class="mt-3 text-primary/90">In Google SecOps, a <strong class="text-primary">Data Table</strong> is a managed lookup table tied to your Chronicle instance. Once ZIoCHub writes a row (<code class="px-0.5 rounded bg-white/10 text-xs">type</code> + <code class="px-0.5 rounded bg-white/10 text-xs">value</code>), SecOps can <strong class="text-primary">join that table to UDM events</strong> in Search, dashboards, and detection logic. Practically: when TI publishes <code class="px-0.5 rounded bg-white/10 text-xs">evil.example.com</code>, analysts can pivot from the table to <strong class="text-primary">find matching traffic, DNS, proxy, or auth events</strong> in stored logs — without maintaining a separate IOC spreadsheet or manual list. Removing the row on revoke keeps hunts aligned with ZIoCHub (stale indicators drop out of correlation).</p>
+            <p class="mt-3">In Google SecOps, a <strong class="text-primary">Data Table</strong> is a managed lookup table tied to your Chronicle instance. Once ZIoCHub writes a row (<code class="px-0.5 rounded bg-white/10 text-xs">type</code> + <code class="px-0.5 rounded bg-white/10 text-xs">value</code>), SecOps can <strong class="text-primary">join that table to UDM events</strong> in Search, dashboards, and detection logic. Practically: when TI publishes <code class="px-0.5 rounded bg-white/10 text-xs">evil.example.com</code>, analysts can pivot from the table to <strong class="text-primary">find matching traffic, DNS, proxy, or auth events</strong> in stored logs — without maintaining a separate IOC spreadsheet or manual list. Removing the row on revoke keeps hunts aligned with ZIoCHub (stale indicators drop out of correlation).</p>
 
-            <p class="mt-3 text-primary/90"><strong class="text-primary">End-to-end flow in ZIoCHub</strong></p>
-            <ol class="mt-2 list-decimal list-inside space-y-2 text-primary/90">
+            <p class="mt-3 font-semibold"><strong class="text-primary">End-to-end flow in ZIoCHub</strong></p>
+            <ol class="mt-2 list-decimal list-inside space-y-2">
                 <li>Analyst submits, reactivates, or deletes an IOC in ZIoCHub (GUI or API).</li>
                 <li><code class="px-0.5 rounded bg-white/10 text-xs">schedule_auxiliary_vendor_integrations</code> queues a background job with the IOC context (<code class="px-0.5 rounded bg-white/10 text-xs">type</code>, <code class="px-0.5 rounded bg-white/10 text-xs">value</code>, <code class="px-0.5 rounded bg-white/10 text-xs">action=create|remove</code>).</li>
                 <li>ZIoCHub loads the GCP <strong class="text-primary">service account JSON</strong>, requests an OAuth token (scopes <code class="px-0.5 rounded bg-white/10 text-xs">https://www.googleapis.com/auth/chronicle</code> + optional <code class="px-0.5 rounded bg-white/10 text-xs">malachite-ingestion</code> for diagnostics only).</li>
@@ -396,12 +391,13 @@
             </ul>
 
             <p class="mt-3 text-xs text-secondary">API references: <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest/v1beta/projects.locations.instances.dataTables.dataTableRows/bulkCreate" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">bulkCreate rows</a> · <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest/v1beta/projects.locations.instances.dataTables.dataTableRows/list" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">list rows</a> · <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest#rest_endpoints" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">REST endpoints by region</a>.</p>
+            </div>
         </details>
 
         <form id="googleSecopsForm" class="space-y-0">
             {% call integ_section('General') %}
             <div class="integ-form-grid integ-form-grid--2">
-                {{ integ_yes_no('google_secops_enabled', 'Enable outbound push', settings.google_secops_enabled, 'When Yes, IOC lifecycle events write rows to the SecOps Data Table.') }}
+                {{ integ_yes_no('google_secops_enabled', 'Enable outbound push', settings.google_secops_enabled, 'When Yes, IOC lifecycle events sync to configured SecOps targets below.') }}
                 {{ integ_verify_tls('google_secops_verify_ssl', settings.google_secops_verify_ssl) }}
             </div>
             <div class="integ-field">
@@ -412,113 +408,146 @@
             {% endcall %}
 
             {% call integ_section('Connection') %}
-            <div>
+            <div class="integ-field">
                 <span class="integ-label">Connection mode</span>
-                <div class="flex flex-wrap gap-4 text-sm text-primary">
-                    <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="radio" name="google_secops_connection_mode" id="google_secops_connection_mode_direct" value="direct" class="h-4 w-4" {% if (settings.google_secops_connection_mode or 'direct') != 'apigee' %}checked{% endif %}>
+                <div class="integ-radio-group">
+                    <label>
+                        <input type="radio" name="google_secops_connection_mode" id="google_secops_connection_mode_direct" value="direct" {% if (settings.google_secops_connection_mode or 'direct') != 'apigee' %}checked{% endif %}>
                         Direct GCP service account
                     </label>
-                    <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="radio" name="google_secops_connection_mode" id="google_secops_connection_mode_apigee" value="apigee" class="h-4 w-4" {% if settings.google_secops_connection_mode == 'apigee' %}checked{% endif %}>
+                    <label>
+                        <input type="radio" name="google_secops_connection_mode" id="google_secops_connection_mode_apigee" value="apigee" {% if settings.google_secops_connection_mode == 'apigee' %}checked{% endif %}>
                         API Gateway / Apigee
                     </label>
                 </div>
-                <p class="text-secondary text-xs mt-1">Direct mode uses a service account JSON key against the native Chronicle host. Apigee mode routes the same Data Table API paths through your internal gateway.</p>
+                <p class="integ-hint">Direct: service account JSON → Google regional hosts. Apigee: one gateway base URL for both <code class="px-0.5 rounded bg-white/10 text-xs">/v1beta/…/dataTables/…</code> and <code class="px-0.5 rounded bg-white/10 text-xs">/v2/lists/…</code> (same auth).</p>
             </div>
+            <div id="gsModeDirect" class="integ-subsection">
+                <p class="integ-subsection__title">Direct GCP connection</p>
+                <div class="integ-subsection__body space-y-4">
+                    <div class="integ-field">
+                        <label for="google_secops_chronicle_api_base" class="integ-label">Chronicle REST API host (optional)</label>
+                        <input type="text" id="google_secops_chronicle_api_base" class="integ-input integ-input--mono" placeholder="https://me-west1-chronicle.googleapis.com" value="{{ settings.google_secops_chronicle_api_base }}" autocomplete="off">
+                        <p class="integ-hint">Data Table API host. If empty, defaults to <code class="px-0.5 rounded bg-white/10 text-xs">https://&lt;location&gt;-chronicle.googleapis.com</code>. Reference Lists use <code class="px-0.5 rounded bg-white/10 text-xs">https://&lt;location&gt;-backstory.googleapis.com</code> automatically.</p>
+                    </div>
+                    <div class="integ-field">
+                        <label for="google_secops_base_url" class="integ-label">Ingestion API host (optional)</label>
+                        <input type="text" id="google_secops_base_url" class="integ-input integ-input--mono" placeholder="https://malachiteingestion-pa.googleapis.com" value="{{ settings.google_secops_base_url }}" autocomplete="off">
+                        <p class="integ-hint">Used only for <strong class="text-primary">Test connection</strong> in direct mode (<code class="px-0.5 rounded bg-white/10 text-xs">GET /v2/logtypes</code>). Not used for IOC push.</p>
+                    </div>
+                    <div class="integ-field">
+                        <label for="google_secops_credentials_json" class="integ-label">Service account JSON (paste)</label>
+                        <textarea id="google_secops_credentials_json" rows="6" class="integ-textarea" placeholder="{}">{{ settings.google_secops_credentials_json }}</textarea>
+                    </div>
+                </div>
+            </div>
+            <div id="gsModeApigee" class="integ-subsection hidden">
+                <p class="integ-subsection__title">API Gateway / Apigee</p>
+                <div class="integ-subsection__body space-y-4">
+                    <div class="integ-field">
+                        <label for="google_secops_gateway_base_url" class="integ-label">API Gateway base URL</label>
+                        <input type="text" id="google_secops_gateway_base_url" class="integ-input integ-input--mono" placeholder="https://api.example.com/secops" value="{{ settings.google_secops_gateway_base_url }}" autocomplete="off">
+                        <p class="integ-hint">Single proxy root for <strong class="text-primary">Data Table</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">/v1beta/projects/…/dataTables/…</code>) and <strong class="text-primary">Reference Lists</strong> (<code class="px-0.5 rounded bg-white/10 text-xs">/v2/lists/…</code>). Trailing slash is stripped automatically.</p>
+                        <p class="integ-hint text-amber-200/90">Do not include <code class="px-0.5 rounded bg-white/10 text-xs">/v1beta</code> or <code class="px-0.5 rounded bg-white/10 text-xs">/v2</code> in the base — only the proxy root. Routes: <code class="px-0.5 rounded bg-white/10 text-xs">docs/google_secops_apigee_routes.md</code>.</p>
+                    </div>
+                    <div class="integ-field integ-field--compact">
+                        <label for="google_secops_gateway_auth_method" class="integ-label">Authentication method</label>
+                        <select id="google_secops_gateway_auth_method" class="integ-select integ-input--md">
+                            <option value="api_key" {% if (settings.google_secops_gateway_auth_method or 'api_key') != 'oauth2' %}selected{% endif %}>API Key</option>
+                            <option value="oauth2" {% if settings.google_secops_gateway_auth_method == 'oauth2' %}selected{% endif %}>OAuth2 Client Credentials</option>
+                        </select>
+                    </div>
+                    <div id="gsGatewayApiKey" class="integ-form-grid integ-form-grid--2">
+                        <div class="integ-field">
+                            <label for="google_secops_gateway_api_key_header" class="integ-label">API key header name</label>
+                            <input type="text" id="google_secops_gateway_api_key_header" class="integ-input integ-input--mono integ-input--md" value="{{ settings.google_secops_gateway_api_key_header or 'x-api-key' }}" autocomplete="off">
+                        </div>
+                        <div class="integ-field">
+                            <label for="google_secops_gateway_api_key" class="integ-label">API key value</label>
+                            <input type="password" id="google_secops_gateway_api_key" class="integ-input integ-input--mono" placeholder="Leave empty to keep saved secret" autocomplete="off">
+                        </div>
+                    </div>
+                    <div id="gsGatewayOAuth" class="integ-form-grid integ-form-grid--1 hidden">
+                        <div class="integ-field">
+                            <label for="google_secops_gateway_oauth_client_id" class="integ-label">Client ID</label>
+                            <input type="text" id="google_secops_gateway_oauth_client_id" class="integ-input integ-input--mono" value="{{ settings.google_secops_gateway_oauth_client_id }}" autocomplete="off">
+                        </div>
+                        <div class="integ-field">
+                            <label for="google_secops_gateway_oauth_client_secret" class="integ-label">Client secret</label>
+                            <input type="password" id="google_secops_gateway_oauth_client_secret" class="integ-input integ-input--mono" placeholder="Leave empty to keep saved secret" autocomplete="off">
+                        </div>
+                        <div class="integ-field">
+                            <label for="google_secops_gateway_oauth_token_url" class="integ-label">Token auth URL</label>
+                            <input type="text" id="google_secops_gateway_oauth_token_url" class="integ-input integ-input--mono" placeholder="https://api.example.com/oauth/token" value="{{ settings.google_secops_gateway_oauth_token_url }}" autocomplete="off">
+                        </div>
+                    </div>
+                    <div class="integ-field">
+                        <label class="integ-label">Custom headers (optional)</label>
+                        <input type="hidden" id="google_secops_gateway_custom_headers" value="{{ settings.google_secops_gateway_custom_headers or '[]' }}">
+                        <div id="gsCustomHeadersList"></div>
+                        <button type="button" id="gsCustomHeaderAdd" class="integ-btn integ-btn--add mt-2">Add header</button>
+                        <p class="integ-hint">Applied to Data Table, Reference Lists, and token requests (e.g. routing headers).</p>
+                    </div>
+                </div>
+            </div>
+            <div class="integ-form-grid integ-form-grid--2">
+                <div class="integ-field">
+                    <label for="google_secops_project_number" class="integ-label">GCP project number</label>
+                    <input type="text" id="google_secops_project_number" class="integ-input integ-input--mono integ-input--wide" placeholder="123456789123" value="{{ settings.google_secops_project_number or '' }}" autocomplete="off" inputmode="numeric">
+                    <p class="integ-hint">Required only when Data Table ID is set.</p>
+                </div>
+                <div class="integ-field">
+                    <label for="google_secops_location" class="integ-label">Location (region)</label>
+                    <input type="text" id="google_secops_location" class="integ-input integ-input--mono integ-input--wide" placeholder="me-west1" value="{{ settings.google_secops_location }}" autocomplete="off">
+                    <p class="integ-hint">Used for API resource paths and to derive regional Google hosts in direct mode.</p>
+                </div>
+            </div>
+            <div class="integ-form-grid integ-form-grid--2">
+                <div class="integ-field">
+                    <label for="google_secops_instance_id" class="integ-label">Instance ID (optional)</label>
+                    <input type="text" id="google_secops_instance_id" class="integ-input integ-input--mono integ-input--wide" placeholder="UUID if different from Customer ID below" value="{{ settings.google_secops_instance_id }}" autocomplete="off">
+                    <p class="integ-hint">If empty, <strong class="text-primary">Customer ID</strong> is used as the Chronicle instance id in the Data Table path.</p>
+                </div>
+                <div class="integ-field">
+                    <label for="google_secops_customer_id" class="integ-label">Customer ID (UUID)</label>
+                    <input type="text" id="google_secops_customer_id" class="integ-input integ-input--mono integ-input--wide" placeholder="From SecOps Settings - Profile" value="{{ settings.google_secops_customer_id }}" autocomplete="off">
+                </div>
+            </div>
+            {% endcall %}
+
+            {% call integ_section('Push targets') %}
+            <p class="integ-section-intro">Configure one or both targets. Leave a section empty to skip it. IOC lifecycle events push only to configured targets.</p>
+            {% call integ_subsection('Data Table (optional)') %}
             <div class="integ-field">
-                <label for="google_secops_project_number" class="integ-label">GCP project number</label>
-                <input type="text" id="google_secops_project_number" class="integ-input max-w-xl font-mono text-sm" placeholder="123456789123" value="{{ settings.google_secops_project_number or '' }}" autocomplete="off" inputmode="numeric">
-                <p class="integ-hint">Numeric project number from GCP (not Project ID). Gray text above is an example only.</p>
+                <label for="google_secops_data_table_id" class="integ-label">Data table ID</label>
+                <input type="text" id="google_secops_data_table_id" class="integ-input integ-input--mono integ-input--wide" placeholder="Leave empty to skip Data Table push" value="{{ settings.google_secops_data_table_id }}" autocomplete="off">
+                <p class="integ-hint">Pre-created table resource id (<code class="px-0.5 rounded bg-white/10 text-xs">dataTables/{id}</code>). Requires project, location, and customer/instance above. Two columns: type slug + value.</p>
             </div>
-            <div>
-                <label for="google_secops_location" class="block text-sm font-semibold text-secondary mb-1">Location (region)</label>
-                <input type="text" id="google_secops_location" class="w-full max-w-xl px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="me-west1" value="{{ settings.google_secops_location }}" autocomplete="off">
+            {% endcall %}
+            {% call integ_subsection('Reference Lists (optional)', accent=true) %}
+            <p class="integ-hint">Add one row per SecOps list. Same IOC type may map to multiple lists. Uses the same Apigee/Direct connection. URLs are pushed as REGEX with <code class="px-0.5 rounded bg-white/10 text-xs">/</code> → <code class="px-0.5 rounded bg-white/10 text-xs">\/</code>.</p>
+            <input type="hidden" id="google_secops_reference_lists_config" value="{{ settings.google_secops_reference_lists_config or '[]' }}">
+            <div class="integ-table-wrap">
+                <table class="integ-table">
+                    <thead>
+                        <tr>
+                            <th>IOC type</th>
+                            <th>Reference list name</th>
+                            <th>SecOps list type</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="gsReferenceListsBody"></tbody>
+                </table>
             </div>
-            <div>
-                <label for="google_secops_instance_id" class="block text-sm font-semibold text-secondary mb-1">Instance ID (optional)</label>
-                <input type="text" id="google_secops_instance_id" class="w-full max-w-xl px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="UUID if different from Customer ID below" value="{{ settings.google_secops_instance_id }}" autocomplete="off">
-                <p class="text-secondary text-xs mt-1">If empty, <strong class="text-primary">Customer ID</strong> is used as the Chronicle instance id in the resource path.</p>
-            </div>
-            <div>
-                <label for="google_secops_customer_id" class="block text-sm font-semibold text-secondary mb-1">Customer ID (UUID)</label>
-                <input type="text" id="google_secops_customer_id" class="w-full max-w-xl px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="From SecOps Settings - Profile" value="{{ settings.google_secops_customer_id }}" autocomplete="off">
-            </div>
-            <div>
-                <label for="google_secops_data_table_id" class="block text-sm font-semibold text-secondary mb-1">Data table ID</label>
-                <input type="text" id="google_secops_data_table_id" class="w-full max-w-xl px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="e.g. iocs_table" value="{{ settings.google_secops_data_table_id }}" autocomplete="off">
-                <p class="text-secondary text-xs mt-1">Resource id of the pre-created Data Table (the <code class="px-0.5 rounded bg-white/10 text-xs">dataTables/{id}</code> segment), not the display title.</p>
-            </div>
-            <div id="gsModeDirect" class="space-y-4 rounded-lg border border-white/10 p-4">
-                <p class="text-sm font-semibold text-cyan-300">Direct GCP connection</p>
-                <div>
-                    <label for="google_secops_chronicle_api_base" class="block text-sm font-semibold text-secondary mb-1">Chronicle REST API host (optional)</label>
-                    <input type="text" id="google_secops_chronicle_api_base" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="https://me-west1-chronicle.googleapis.com" value="{{ settings.google_secops_chronicle_api_base }}" autocomplete="off">
-                    <p class="text-secondary text-xs mt-1">From Google <a href="https://docs.cloud.google.com/chronicle/docs/reference/rest#rest_endpoints" class="text-cyan-400 hover:underline" target="_blank" rel="noopener">REST endpoints</a>. If empty, host defaults to <code class="px-0.5 rounded bg-white/10 text-xs">https://&lt;location&gt;-chronicle.googleapis.com</code> when Location is set.</p>
-                </div>
-                <div>
-                    <label for="google_secops_base_url" class="block text-sm font-semibold text-secondary mb-1">Ingestion API host (optional)</label>
-                    <input type="text" id="google_secops_base_url" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green" placeholder="https://malachiteingestion-pa.googleapis.com" value="{{ settings.google_secops_base_url }}" autocomplete="off">
-                    <p class="text-secondary text-xs mt-1">Used only for <strong class="text-primary">Test connection</strong> in direct mode (<code class="px-0.5 rounded bg-white/10 text-xs">GET /v2/logtypes</code>). Leave empty for default US ingestion host.</p>
-                </div>
-                <div>
-                    <label for="google_secops_credentials_json" class="block text-sm font-semibold text-secondary mb-1">Service account JSON (paste)</label>
-                    <textarea id="google_secops_credentials_json" rows="6" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-xs focus:border-accent-green" placeholder="{}">{{ settings.google_secops_credentials_json }}</textarea>
-                </div>
-            </div>
-            <div id="gsModeApigee" class="space-y-4 rounded-lg border border-white/10 p-4 hidden">
-                <p class="text-sm font-semibold text-cyan-300">API Gateway / Apigee</p>
-                <div>
-                    <label for="google_secops_gateway_base_url" class="block text-sm font-semibold text-secondary mb-1">API Gateway base URL</label>
-                    <input type="text" id="google_secops_gateway_base_url" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green font-mono text-sm" placeholder="https://api.example.com/secops" value="{{ settings.google_secops_gateway_base_url }}" autocomplete="off">
-                    <p class="text-secondary text-xs mt-1">ZIoCHub appends <code class="px-0.5 rounded bg-white/10 text-xs">/v1beta/projects/…/dataTables/…</code> to this base. A trailing slash is stripped automatically (no <code class="px-0.5 rounded bg-white/10 text-xs">//v1beta</code>).</p>
-                    <p class="text-amber-200/90 text-xs mt-1"><strong class="text-primary">Do not</strong> include <code class="px-0.5 rounded bg-white/10 text-xs">/v1beta</code> or a full <code class="px-0.5 rounded bg-white/10 text-xs">projects/…</code> path here — only the Apigee proxy root (e.g. <code class="px-0.5 rounded bg-white/10 text-xs">https://my-apigee.internal/secops-proxy</code>, not <code class="px-0.5 rounded bg-white/10 text-xs">…/secops-proxy/v1beta</code>). Gateway route details: <code class="px-0.5 rounded bg-white/10 text-xs">docs/google_secops_apigee_routes.md</code>.</p>
-                </div>
-                <div>
-                    <label for="google_secops_gateway_auth_method" class="block text-sm font-semibold text-secondary mb-1">Authentication method</label>
-                    <select id="google_secops_gateway_auth_method" class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green">
-                        <option value="api_key" {% if (settings.google_secops_gateway_auth_method or 'api_key') != 'oauth2' %}selected{% endif %}>API Key</option>
-                        <option value="oauth2" {% if settings.google_secops_gateway_auth_method == 'oauth2' %}selected{% endif %}>OAuth2 Client Credentials</option>
-                    </select>
-                </div>
-                <div id="gsGatewayApiKey" class="space-y-3">
-                    <div>
-                        <label for="google_secops_gateway_api_key_header" class="block text-sm font-semibold text-secondary mb-1">API key header name</label>
-                        <input type="text" id="google_secops_gateway_api_key_header" class="w-full max-w-md px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green" value="{{ settings.google_secops_gateway_api_key_header or 'x-api-key' }}" autocomplete="off">
-                    </div>
-                    <div>
-                        <label for="google_secops_gateway_api_key" class="block text-sm font-semibold text-secondary mb-1">API key value</label>
-                        <input type="password" id="google_secops_gateway_api_key" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green" placeholder="Leave empty to keep saved secret" autocomplete="off">
-                    </div>
-                </div>
-                <div id="gsGatewayOAuth" class="space-y-3 hidden">
-                    <div>
-                        <label for="google_secops_gateway_oauth_client_id" class="block text-sm font-semibold text-secondary mb-1">Client ID</label>
-                        <input type="text" id="google_secops_gateway_oauth_client_id" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green" value="{{ settings.google_secops_gateway_oauth_client_id }}" autocomplete="off">
-                    </div>
-                    <div>
-                        <label for="google_secops_gateway_oauth_client_secret" class="block text-sm font-semibold text-secondary mb-1">Client secret</label>
-                        <input type="password" id="google_secops_gateway_oauth_client_secret" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green" placeholder="Leave empty to keep saved secret" autocomplete="off">
-                    </div>
-                    <div>
-                        <label for="google_secops_gateway_oauth_token_url" class="block text-sm font-semibold text-secondary mb-1">Token auth URL</label>
-                        <input type="text" id="google_secops_gateway_oauth_token_url" class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green" placeholder="https://api.example.com/oauth/token" value="{{ settings.google_secops_gateway_oauth_token_url }}" autocomplete="off">
-                    </div>
-                </div>
-                <div>
-                    <label class="block text-sm font-semibold text-secondary mb-1">Custom headers (optional)</label>
-                    <input type="hidden" id="google_secops_gateway_custom_headers" value="{{ settings.google_secops_gateway_custom_headers or '[]' }}">
-                    <div id="gsCustomHeadersList" class="space-y-2"></div>
-                    <button type="button" id="gsCustomHeaderAdd" class="mt-2 px-3 py-1.5 rounded-lg text-sm bg-tertiary border border-white/10 hover:border-cyan-400 text-cyan-300">Add header</button>
-                    <p class="text-secondary text-xs mt-1">Applied to Data Table and token requests (e.g. routing headers).</p>
-                </div>
-            </div>
+            <button type="button" id="gsReferenceListAdd" class="integ-btn integ-btn--add">Add list mapping</button>
+            {% endcall %}
             {% endcall %}
 
             {% call integ_section('Retry on failure') %}
             {{ integ_retry_panel(
                 'Retry on failure',
-                'Re-queue failed Data Table push/remove operations after transient network or auth errors.',
+                'Re-queue failed SecOps push/remove operations (Data Table and Reference Lists) after transient errors.',
                 'google_secops',
                 'google_secops_retry_enabled', settings.google_secops_retry_enabled,
                 'google_secops_retry_interval_minutes', settings.google_secops_retry_interval_minutes or '15',
@@ -531,19 +560,13 @@
                 <button type="button" id="googleSecopsPingBtn" class="integ-btn integ-btn--secondary" title="Import check only (no GCP call)">Check module</button>
                 <button type="button" id="googleSecopsConfigBtn" class="integ-btn integ-btn--secondary" title="Validate saved + form fields locally">Check config</button>
                 <button type="button" id="googleSecopsTestBtn" class="integ-btn integ-btn--test">Test connection</button>
-                <label class="flex items-center gap-2 text-sm text-secondary cursor-pointer">
-                    <input type="checkbox" id="googleSecopsTestRoundtrip" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
-                    Include push/remove test row
-                </label>
-                <label class="flex items-center gap-2 text-sm text-secondary cursor-pointer">
-                    <input type="checkbox" id="googleSecopsTestIgnoreSsl" class="h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600">
-                    Ignore TLS for this test
-                </label>
+                {{ integ_checkbox_inline('googleSecopsTestRoundtrip', 'Include push/remove test row') }}
+                {{ integ_checkbox_inline('googleSecopsTestIgnoreSsl', 'Ignore TLS for this test') }}
             </div>
         </form>
-        <details class="admin-troubleshoot-panel text-xs text-secondary">
-            <summary class="text-primary">Troubleshooting checklist (GCP / SecOps)</summary>
-            <div class="admin-troubleshoot-panel__body text-primary/90">
+        <details class="admin-troubleshoot-panel integ-troubleshoot">
+            <summary>Troubleshooting checklist (GCP / SecOps)</summary>
+            <div class="admin-troubleshoot-panel__body">
                 <ul class="admin-troubleshoot-panel__list">
                     <li><strong class="text-primary">Data Table</strong> in SecOps: 2 string columns — type slug (<code class="px-0.5 rounded bg-white/10">domain</code>, <code class="px-0.5 rounded bg-white/10">ip</code>, …) then value.</li>
                     <li><strong class="text-primary">Service account JSON</strong> pasted above (or saved after Save).</li>
@@ -553,9 +576,9 @@
                 </ul>
             </div>
         </details>
-        <div id="googleSecopsMessage" class="mt-4 hidden text-sm"></div>
-        <p class="text-secondary text-xs mt-2">Tests use <strong class="text-primary">saved settings merged with the form</strong> (unsaved secrets in password fields are included when filled; leave empty to use the last saved value). <strong class="text-primary">Test connection</strong>: auth for the selected mode + GET Data Table (+ ingestion probe in direct mode). <strong class="text-primary">Include push/remove</strong>: writes one <code class="px-0.5 rounded bg-white/10 text-xs">*.invalid</code> row then deletes it.</p>
-        <div id="googleSecopsTestLog" class="mt-3 hidden rounded-lg border border-white/10 bg-black/30 p-4 font-mono text-xs overflow-x-auto max-h-64 whitespace-pre-wrap"></div>
+        {{ integ_message('googleSecopsMessage') }}
+        {{ integ_footnote('Tests use <strong class="text-primary">saved settings merged with the form</strong> (unsaved secrets in password fields are included when filled; leave empty to use the last saved value). <strong class="text-primary">Test connection</strong>: auth for the selected mode + GET Data Table (+ ingestion probe in direct mode). <strong class="text-primary">Include push/remove</strong>: writes one <code class="px-0.5 rounded bg-white/10 text-xs">*.invalid</code> row then deletes it.') }}
+        {{ integ_test_log('googleSecopsTestLog') }}
     </div>
 </div>
 
@@ -563,16 +586,21 @@
 <div id="settings-tab-netskope" class="settings-tab-pane hidden">
     <div class="integ-panel bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
         {{ integ_brand_heading(integration_icons.netskope, 'Netskope (Cloud SWG)') }}
-        <p class="text-secondary text-sm mb-4">Pushes IOCs to your <strong class="text-primary">Netskope tenant</strong> (cloud proxy) via REST API: <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">URL</strong> → URL List (<code class="px-0.5 rounded bg-white/10 text-xs">append</code> + <code class="px-0.5 rounded bg-white/10 text-xs">deploy</code>); <strong class="text-primary">Hash</strong> (MD5/SHA256) → File Hash List (V1). Revoke uses URL <code class="px-0.5 rounded bg-white/10 text-xs">replace</code> and hash cache update. Link the URL List to a Custom Category + Real-time Protection policy in Netskope.</p>
-        <details class="mb-4 rounded-lg border border-cyan-500/30 bg-cyan-950/20 p-4 text-sm text-secondary">
-            <summary class="cursor-pointer font-semibold text-cyan-300 select-none">Setup checklist</summary>
-            <ol class="mt-3 list-decimal list-inside space-y-2 text-primary/90">
+        {{ integ_intro('Pushes IOCs to your <strong class="text-primary">Netskope tenant</strong> (cloud proxy) via REST API: <strong class="text-primary">Domain</strong>, <strong class="text-primary">IP</strong>, <strong class="text-primary">URL</strong> → URL List (<code class="px-0.5 rounded bg-white/10 text-xs">append</code> + <code class="px-0.5 rounded bg-white/10 text-xs">deploy</code>); <strong class="text-primary">Hash</strong> (MD5/SHA256) → File Hash List (V1). Revoke uses URL <code class="px-0.5 rounded bg-white/10 text-xs">replace</code> and hash cache update. Link the URL List to a Custom Category + Real-time Protection policy in Netskope.') }}
+        <details class="integ-details">
+            <summary class="integ-details__summary">
+                <span class="integ-details__marker" aria-hidden="true">▸</span>
+                <span>Setup checklist</span>
+            </summary>
+            <div class="integ-details__body">
+            <ol class="list-decimal list-inside space-y-2">
                 <li>Create an API token with URL List (V2) permissions in Netskope Admin.</li>
                 <li>Create or pick a <strong class="text-primary">URL List</strong> (Policies → Profiles → URL Lists) and note its numeric <strong class="text-primary">ID</strong>.</li>
                 <li>Optional: dedicated <strong class="text-primary">File Hash List</strong> name for ZIoCHub (V1 token; list is replaced from ZIoCHub cache on each hash push).</li>
                 <li>Attach URL List to Custom Category + block/alert policy.</li>
                 <li>Enable push here, save, then <strong class="text-primary">Test connection</strong>.</li>
             </ol>
+            </div>
         </details>
         <form id="netskopeForm" class="space-y-0">
             {% call integ_section('General') %}
@@ -610,17 +638,17 @@
                     <input type="text" id="netskope_hash_list_name" class="integ-input" placeholder="ZIoCHub-IOCs" value="{{ settings.netskope_hash_list_name }}" autocomplete="off">
                 </div>
             </div>
-            <div class="mt-3 space-y-2">
-                <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" id="netskope_deploy_on_push" class="mt-1 h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600"
+            <div class="space-y-3">
+                <div class="integ-checkbox-row">
+                    <input type="checkbox" id="netskope_deploy_on_push" class="integ-checkbox-row__input"
                            {% if settings.netskope_deploy_on_push != 'false' %}checked{% endif %}>
-                    <span class="text-sm text-secondary">Deploy URL List after each append/remove (recommended)</span>
-                </label>
-                <label class="flex items-start gap-2 cursor-pointer">
-                    <input type="checkbox" id="netskope_hash_push_enabled" class="mt-1 h-4 w-4 rounded border-white/20 bg-tertiary text-cyan-600"
+                    <label for="netskope_deploy_on_push" class="integ-checkbox-row__label">Deploy URL List after each append/remove (recommended)</label>
+                </div>
+                <div class="integ-checkbox-row">
+                    <input type="checkbox" id="netskope_hash_push_enabled" class="integ-checkbox-row__input"
                            {% if settings.netskope_hash_push_enabled != 'false' %}checked{% endif %}>
-                    <span class="text-sm text-secondary">Push Hash IOCs (MD5/SHA256) to File Hash List</span>
-                </label>
+                    <label for="netskope_hash_push_enabled" class="integ-checkbox-row__label">Push Hash IOCs (MD5/SHA256) to File Hash List</label>
+                </div>
             </div>
             {% endcall %}
             {% call integ_section('Retry on failure') %}
@@ -899,15 +927,15 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
         list.innerHTML = '';
         items.forEach(function(item, idx) {
             var row = document.createElement('div');
-            row.className = 'gs-custom-header-row flex flex-wrap gap-2 items-end';
+            row.className = 'gs-custom-header-row integ-keyvalue-row';
             row.innerHTML =
-                '<div class="flex-1 min-w-[8rem]"><label class="block text-xs text-secondary mb-0.5">Header</label>' +
-                '<input type="text" class="gs-custom-header-key w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm font-mono" value="' +
+                '<div class="integ-field"><label class="integ-label">Header</label>' +
+                '<input type="text" class="gs-custom-header-key integ-input integ-input--mono" value="' +
                 String(item.key || '').replace(/"/g, '&quot;') + '"></div>' +
-                '<div class="flex-1 min-w-[8rem]"><label class="block text-xs text-secondary mb-0.5">Value</label>' +
-                '<input type="text" class="gs-custom-header-value w-full px-2 py-1.5 rounded bg-tertiary border border-white/10 text-primary text-sm font-mono" value="' +
+                '<div class="integ-field"><label class="integ-label">Value</label>' +
+                '<input type="text" class="gs-custom-header-value integ-input integ-input--mono" value="' +
                 String(item.value || '').replace(/"/g, '&quot;') + '"></div>' +
-                '<button type="button" class="gs-custom-header-remove px-2 py-1.5 rounded text-xs text-red-300 border border-white/10 hover:border-red-400">Remove</button>';
+                '<button type="button" class="gs-custom-header-remove integ-btn integ-btn--remove">Remove</button>';
             row.querySelector('.gs-custom-header-remove').addEventListener('click', function() {
                 row.remove();
                 hidden.value = JSON.stringify(gsCustomHeadersFromDom());
@@ -923,9 +951,90 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             list.appendChild(row);
         });
     }
+    var GS_REF_IOC_TYPES = [
+        { id: 'IP', ct: 'String / CIDR' },
+        { id: 'Domain', ct: 'String' },
+        { id: 'URL', ct: 'REGEX (escaped /)' },
+        { id: 'Hash', ct: 'String' },
+        { id: 'Email', ct: 'String' },
+        { id: 'YARA', ct: 'String' }
+    ];
+    function gsReferenceListsMigrate(cfg) {
+        if (Array.isArray(cfg)) return cfg;
+        if (cfg && typeof cfg === 'object') {
+            var out = [];
+            Object.keys(cfg).forEach(function(k) {
+                var e = cfg[k];
+                if (!e || !e.list_name) return;
+                if (e.enabled === false) return;
+                out.push({ ioc_type: k, list_name: String(e.list_name) });
+            });
+            return out;
+        }
+        return [];
+    }
+    function gsReferenceListsPersist() {
+        var hidden = document.getElementById('google_secops_reference_lists_config');
+        if (hidden) hidden.value = JSON.stringify(gsReferenceListsFromDom());
+    }
+    function gsReferenceListsFromDom() {
+        var out = [];
+        document.querySelectorAll('#gsReferenceListsBody tr.gs-ref-list-row').forEach(function(row) {
+            var typeEl = row.querySelector('.gs-ref-list-type');
+            var nameEl = row.querySelector('.gs-ref-list-name');
+            var iocType = typeEl ? String(typeEl.value || '').trim() : '';
+            var listName = nameEl ? String(nameEl.value || '').trim() : '';
+            if (!iocType || !listName) return;
+            out.push({ ioc_type: iocType, list_name: listName });
+        });
+        return out;
+    }
+    function gsReferenceListTypeHint(iocType) {
+        var t = GS_REF_IOC_TYPES.find(function(x) { return x.id === iocType; });
+        return t ? t.ct : 'String';
+    }
+    function gsAppendReferenceListRow(iocType, listName) {
+        var hidden = document.getElementById('google_secops_reference_lists_config');
+        var body = document.getElementById('gsReferenceListsBody');
+        if (!body) return;
+        var tr = document.createElement('tr');
+        tr.className = 'gs-ref-list-row';
+        var typeOptions = GS_REF_IOC_TYPES.map(function(t) {
+            var sel = (t.id === (iocType || 'Domain')) ? ' selected' : '';
+            return '<option value="' + t.id + '"' + sel + '>' + t.id + '</option>';
+        }).join('');
+        tr.innerHTML =
+            '<td><select class="gs-ref-list-type integ-select">' + typeOptions + '</select></td>' +
+            '<td><input type="text" class="gs-ref-list-name integ-input integ-input--mono" placeholder="ZIOCHUB_LIST" value="' + String(listName || '').replace(/"/g, '&quot;') + '"></td>' +
+            '<td class="text-secondary text-xs gs-ref-list-hint">' + gsReferenceListTypeHint(iocType || 'Domain') + '</td>' +
+            '<td><button type="button" class="gs-ref-list-remove integ-btn integ-btn--remove">Remove</button></td>';
+        tr.querySelector('.gs-ref-list-remove').addEventListener('click', function() {
+            tr.remove();
+            gsReferenceListsPersist();
+        });
+        tr.querySelector('.gs-ref-list-type').addEventListener('change', function() {
+            tr.querySelector('.gs-ref-list-hint').textContent = gsReferenceListTypeHint(this.value);
+            gsReferenceListsPersist();
+        });
+        tr.querySelector('.gs-ref-list-name').addEventListener('input', gsReferenceListsPersist);
+        body.appendChild(tr);
+    }
+    function gsRenderReferenceLists() {
+        var hidden = document.getElementById('google_secops_reference_lists_config');
+        var body = document.getElementById('gsReferenceListsBody');
+        if (!hidden || !body) return;
+        var items = [];
+        try { items = gsReferenceListsMigrate(JSON.parse(hidden.value || '[]')); } catch (e) { items = []; }
+        body.innerHTML = '';
+        items.forEach(function(item) {
+            gsAppendReferenceListRow(item.ioc_type, item.list_name);
+        });
+    }
     function googleSecopsSettingsFromForm() {
         var hiddenHeaders = document.getElementById('google_secops_gateway_custom_headers');
         if (hiddenHeaders) hiddenHeaders.value = JSON.stringify(gsCustomHeadersFromDom());
+        var hiddenRef = document.getElementById('google_secops_reference_lists_config');
+        if (hiddenRef) hiddenRef.value = JSON.stringify(gsReferenceListsFromDom());
         var payload = {
             google_secops_connection_mode: googleSecopsConnectionMode(),
             google_secops_project_number: (document.getElementById('google_secops_project_number') || {}).value || '',
@@ -944,7 +1053,8 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             google_secops_gateway_oauth_client_id: (document.getElementById('google_secops_gateway_oauth_client_id') || {}).value || '',
             google_secops_gateway_oauth_client_secret: (document.getElementById('google_secops_gateway_oauth_client_secret') || {}).value || '',
             google_secops_gateway_oauth_token_url: (document.getElementById('google_secops_gateway_oauth_token_url') || {}).value || '',
-            google_secops_gateway_custom_headers: hiddenHeaders ? hiddenHeaders.value : '[]'
+            google_secops_gateway_custom_headers: hiddenHeaders ? hiddenHeaders.value : '[]',
+            google_secops_reference_lists_config: hiddenRef ? hiddenRef.value : '[]'
         };
         return payload;
     }
@@ -965,6 +1075,14 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             });
         }
         gsRenderCustomHeaders();
+        gsRenderReferenceLists();
+        var gsRefAdd = document.getElementById('gsReferenceListAdd');
+        if (gsRefAdd) {
+            gsRefAdd.addEventListener('click', function() {
+                gsAppendReferenceListRow('Domain', '');
+                gsReferenceListsPersist();
+            });
+        }
         syncGoogleSecopsModePanels();
     }
     function renderGoogleSecopsSteps(logEl, data, res) {
@@ -1025,6 +1143,7 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
             payload.google_secops_instance_id = document.getElementById('google_secops_instance_id').value.trim();
             payload.google_secops_customer_id = document.getElementById('google_secops_customer_id').value.trim();
             payload.google_secops_data_table_id = document.getElementById('google_secops_data_table_id').value.trim();
+            payload.google_secops_reference_lists_config = JSON.stringify(gsReferenceListsFromDom());
             payload.google_secops_base_url = (document.getElementById('google_secops_base_url') || {}).value.trim();
             payload.google_secops_credentials_json = (document.getElementById('google_secops_credentials_json') || {}).value;
             payload.google_secops_gateway_base_url = (document.getElementById('google_secops_gateway_base_url') || {}).value.trim();
@@ -2255,17 +2374,17 @@ document.querySelectorAll('.trellix-exnx-subtab-btn').forEach(function(btn) {
 })();
 
 /* Cisco ESA */
-var esaMappingRowHtml = '<div class="esa-mapping-row flex flex-wrap gap-3 items-end rounded-lg border border-white/10 bg-black/20 p-4">'
-    + '<div class="flex-1 min-w-[14rem]">'
-    + '<label class="block text-xs font-semibold text-secondary mb-1">Dictionary name (on ESA)</label>'
-    + '<input type="text" class="esa-map-dict w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary focus:border-accent-green text-sm" placeholder="e.g. URL-Blocklist" autocomplete="off">'
+var esaMappingRowHtml = '<div class="esa-mapping-row integ-mapping-row">'
+    + '<div class="integ-field">'
+    + '<label class="integ-label">Dictionary name (on ESA)</label>'
+    + '<input type="text" class="esa-map-dict integ-input" placeholder="e.g. URL-Blocklist" autocomplete="off">'
     + '</div>'
-    + '<div class="w-full sm:w-44">'
-    + '<label class="block text-xs font-semibold text-secondary mb-1">IOC type</label>'
-    + '<select class="esa-map-type w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary text-sm focus:border-accent-green">'
+    + '<div class="integ-field integ-field--narrow">'
+    + '<label class="integ-label">IOC type</label>'
+    + '<select class="esa-map-type integ-select">'
     + '<option value="Email">Email</option><option value="Domain">Domain</option><option value="IP">IP</option><option value="URL">URL</option>'
     + '</select></div>'
-    + '<button type="button" class="esa-remove-mapping px-3 py-2 rounded-lg text-sm font-medium bg-red-600/80 hover:bg-red-500 text-white transition">Remove</button>'
+    + '<button type="button" class="esa-remove-mapping integ-btn integ-btn--remove">Remove</button>'
     + '</div>';
 function esaAppendMappingRow() {
     var c = document.getElementById('esaMappingsContainer');

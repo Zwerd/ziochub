@@ -610,7 +610,7 @@
     "connections_feed_modal_title": "Feed & TAXII clients",
     "connections_feed_modal_sub": "Clients that successfully pulled plain-text feeds (/feed/…) or TAXII 2 (/taxii2/…). Throttled telemetry per client IP and path.",
     "pull_state_modal_title": "Pull state",
-    "pull_state_modal_sub": "When ZIoCHub last connected outbound to another system to pull IOCs into the database (currently MISP). Auto-sync checks every 5 minutes; interval is set in Admin → Settings → MISP.",
+    "pull_state_modal_sub": "When ZIoCHub last connected outbound to pull IOCs (MISP, AdversaryGraph, remote TAXII). Auto-sync checks every 5 minutes; intervals are set in Admin → Integrations → Import (pull).",
     "pull_col_system": "System",
     "pull_col_address": "Address",
     "pull_col_interval": "Interval",

@@ -1,4 +1,8 @@
-"""In-app TAXII pull scheduler (daemon thread)."""
+"""
+In-app TAXII pull scheduler (daemon thread).
+
+Skipped when ``ZIOCHUB_USE_SYSTEMD_SYNC=1`` (use ``ziochub-taxii-sync.timer`` instead).
+"""
 from __future__ import annotations
 
 import logging
@@ -14,6 +18,15 @@ _start_lock = threading.Lock()
 
 
 def start_taxii_sync_scheduler(app) -> None:
+    from utils.inapp_sync_policy import inapp_taxii_sync_enabled
+
+    if not inapp_taxii_sync_enabled():
+        logger.info(
+            'In-app TAXII sync scheduler disabled '
+            '(production: ziochub-taxii-sync.timer; dev: set ZIOCHUB_INAPP_TAXII_SYNC=1)'
+        )
+        return
+
     global _started
     with _start_lock:
         if _started:

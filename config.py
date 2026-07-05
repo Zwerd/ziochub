@@ -30,7 +30,15 @@ try:
 except (ValueError, TypeError):
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024
 
-# Database path. If DATA_DIR is set, use DATA_DIR/ziochub.db; otherwise app computes it.
+# PostgreSQL (production). setup.sh writes ZIOCHUB_DATABASE_URL / ZIOCHUB_PG_* to data/ziochub.env.
+DATABASE_URL = os.environ.get("ZIOCHUB_DATABASE_URL", "").strip() or None
+ZIOCHUB_PG_HOST = os.environ.get("ZIOCHUB_PG_HOST", "").strip() or None
+ZIOCHUB_PG_PORT = os.environ.get("ZIOCHUB_PG_PORT", "").strip() or None
+ZIOCHUB_PG_DB = os.environ.get("ZIOCHUB_PG_DB", "").strip() or None
+ZIOCHUB_PG_USER = os.environ.get("ZIOCHUB_PG_USER", "").strip() or None
+ZIOCHUB_PG_PASSWORD = os.environ.get("ZIOCHUB_PG_PASSWORD", "").strip() or None
+
+# Legacy SQLite path (upgrade migration only; fresh installs use PostgreSQL).
 DB_PATH = None
 if DATA_DIR:
     DB_PATH = os.path.join(DATA_DIR, "ziochub.db")

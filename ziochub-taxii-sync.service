@@ -8,6 +8,7 @@ User=ziochub
 Group=ziochub
 WorkingDirectory=/opt/ziochub
 ExecStart=/opt/ziochub/venv/bin/python /opt/ziochub/taxii_sync_job.py
+EnvironmentFile=-/opt/ziochub/data/ziochub.env
 Environment="PATH=/opt/ziochub/venv/bin:/usr/bin:/bin"
 
 NoNewPrivileges=true

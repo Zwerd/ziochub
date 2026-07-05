@@ -152,6 +152,10 @@ def _champs_excluded_usernames():
         sync_user = (_get_setting('taxii_sync_user', 'taxii_sync') or 'taxii_sync').strip()
         if sync_user:
             excluded.add(sync_user.lower())
+    if _get_setting('adversarygraph_exclude_from_champs', 'true').lower() == 'true':
+        sync_user = (_get_setting('adversarygraph_sync_user', 'adversarygraph_sync') or 'adversarygraph_sync').strip()
+        if sync_user:
+            excluded.add(sync_user.lower())
     return excluded or None
 
 
@@ -198,6 +202,7 @@ def _filter_champs_leaderboard_rows(rows, users_by_id):
 
 
 @bp.route('/analyst-stats', methods=['GET'])
+@login_required
 def get_analyst_stats():
     """Champs 5.0: Analyst stats; scoring method from admin setting (1-8)."""
     method = _get_setting('champs_scoring_method', '1')
@@ -220,6 +225,7 @@ def get_analyst_stats():
 
 
 @bp.route('/analyst-activity', methods=['GET'])
+@login_required
 def get_analyst_activity():
     """Login frequency, last seen, contribution count per user (from user_sessions)."""
     user_ids = db.session.query(User.id, User.username).all()
@@ -254,6 +260,7 @@ def get_analyst_activity():
 # --- Champs config / leaderboard / team goal / ticker / analyst detail ---
 
 @bp.route('/champs/config', methods=['GET'])
+@login_required
 def get_champs_config():
     """Return scoring configuration for Champs Analysis 5.0."""
     return jsonify({
@@ -293,6 +300,7 @@ def _format_last_activity(val):
 
 
 @bp.route('/champs/leaderboard', methods=['GET'])
+@login_required
 def get_champs_leaderboard():
     """Champs 5.0 Ladder: analysts with rank, avatar, display_name, score, trend, medal. Always from computed scores so all analysts appear."""
     method = _get_setting('champs_scoring_method', '1')
@@ -432,6 +440,7 @@ def get_champs_leaderboard():
 
 
 @bp.route('/champs/team-goal', methods=['GET'])
+@login_required
 def get_champs_team_goal():
     """Return active team goal. Weekly: target = previous week's count, current = this ISO week. Monthly: target fixed, current = since 1st of month."""
     goal = TeamGoal.query.filter_by(is_active=True).order_by(TeamGoal.updated_at.desc()).first()
@@ -537,6 +546,7 @@ def set_champs_team_goal():
 
 
 @bp.route('/champs/ticker', methods=['GET'])
+@login_required
 def get_champs_ticker():
     """Return ticker content: custom messages (if set by admin) or activity events."""
     raw = _get_setting(TICKER_MESSAGES_KEY, '[]')
@@ -614,6 +624,7 @@ def get_champs_ticker():
 
 
 @bp.route('/champs/ticker-messages', methods=['GET'])
+@login_required
 def get_champs_ticker_messages():
     """Return admin-configured ticker messages (up to 5) for the news strip."""
     raw = _get_setting(TICKER_MESSAGES_KEY, '[]')
@@ -676,6 +687,7 @@ def set_champs_ticker_messages():
 
 
 @bp.route('/champs/analyst/<int:user_id>', methods=['GET'])
+@login_required
 def get_champs_analyst(user_id):
     """Full analyst detail for Spotlight: nickname, level, XP, badges, activity chart data."""
     method = _get_setting('champs_scoring_method', '1')

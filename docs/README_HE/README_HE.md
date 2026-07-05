@@ -17,6 +17,15 @@ ZIoCHub נולדה מתוך צורך אמיתי של SOC: **מקור אמת אח
 
 מספר הגרסה שמופיע בממשק מגיע מ־`constants.py` (למשל **2.0 Beta**).
 
+### עדכונים אחרונים (2026)
+
+- **PostgreSQL (Production):** בסביבת production המערכת רצה על **PostgreSQL**; פרטי חיבור ב‑`data/ziochub.env`. SQLite (`data/ziochub.db`) משמש רק עד סיום מיגרציה בשדרוג, או לפיתוח מקומי עם `ZIOCHUB_ALLOW_SQLITE_DEV=true`. פירוט: [Database & migration](../../README.md#database--migration).
+- **חבילות התקנה נפרדות:** `package_offline.sh` — אפליקציה + wheels בלבד. PostgreSQL **לא** בתוך ZIP האפליקציה. **Production:** IT מתקין PG → `setup.sh --offline --use-existing-postgresql`. **Lab:** `sudo ./package_postgresql_debs.sh` → ZIP נפרד, לחלץ לאותה תיקייה. ראו [Installation](../../README.md#installation).
+- **Google SecOps (Chronicle):** דחיפת IOC ל‑**Data Table** ו/או **Reference Lists** (`v2/lists`); מיפוי גמיש IOC type → שם רשימה; הוספה בהגשה והסרה ב‑revoke/expire. ראו [Google SecOps push](../../README.md#google-secops-chronicle-push).
+- **Integrations Hub** — **Admin → Integrations**: Import ↓ (MISP, **AdversaryGraph**, TAXII pull) · Export ↑ (פידים + TAXII server) · Push ↑ (Cortex, Google SecOps, Netskope, ESA, Trellix, MISP push, DXL, HTTP).
+- **AdversaryGraph** — משיכת IOC מ‑IOC Library + YARA מ‑Detection Studio; משתמש סנכרון `adversarygraph_sync`; Feed Pulse → Pull State.
+- מסמך Troubleshooting מעודכן: [`../TROUBLESHOOTING.md`](../TROUBLESHOOTING.md) (PostgreSQL, מיגרציה, אינטגרציות).
+
 -
 
 ## תוכן עניינים
@@ -32,7 +41,7 @@ ZIoCHub נולדה מתוך צורך אמיתי של SOC: **מקור אמת אח
 - [Admin: הגדרות, משתמשים, תעודות, Allowlist, Inbox](#he-admin)
 - [Sanity Checks + Allowlist — מנגנוני בטיחות](#he-safety)
 - [Champs / Achievements / Ambition — מוטיבציה בצורה מבוקרת](#he-champs)
-- [מודל נתונים (SQLite) והיסטוריה](#he-data)
+- [מודל נתונים (PostgreSQL) והיסטוריה](#he-data)
 - [אבטחה (Security)](#he-security)
 - [התקנה והרצה (Dev/Prod/Offline)](#he-install)
 - [תפעול ותחזוקה (systemd, timers, backup, cleaner)](#he-ops)
@@ -330,12 +339,36 @@ Header חובה ללקוחות:
 
 ## אינטגרציות (אופציונלי)
 
-- MISP: `utils/misp_sync.py` + `misp_sync_job.py` + timer.
-- LDAP/AD: `utils/ldap_auth.py` + health/test endpoints.
-- Cisco ESA: `utils/cisco_esa.py` + admin test endpoint.
-- DXL/TIE: `utils/dxl_tie.py` (תלוי חבילות).
-- GeoIP: `data/GeoLite2-City.mmdb`.
-- Audit (CEF/Syslog): `utils/cef_logger.py`.
+הגדרה: **Admin → Integrations** (לא ב‑Settings).
+
+### Import (משיכה — Pull)
+
+| מקור | קוד | הערות |
+|------|-----|--------|
+| **MISP** | `utils/misp_sync.py`, `misp_sync_job.py`, `ziochub-misp-sync.timer` | PyMISP; IOC עם analyst `misp_sync` |
+| **AdversaryGraph** | `utils/adversarygraph_sync.py`, scheduler ב‑app | FastAPI backend; IOC + YARA; analyst `adversarygraph_sync` |
+| **TAXII 2.1 remote** | `utils/taxii_sync.py`, `ziochub-taxii-sync.timer` | משיכה משרת TAXII חיצוני |
+
+Feed Pulse → **Pull State** מציג סטטוס MISP / AdversaryGraph / TAXII.
+
+### Export & Push
+
+- **Export**: פידים ציבוריים, cache, **TAXII server** (`routes/taxii_server.py`)
+- **Push IOC**: Cortex XDR, Google SecOps, Netskope, Cisco ESA, HTTP, MISP push, OpenDXL
+- **Push YARA**: Trellix EX/CMS/NX, HTTP YARA
+
+**Google SecOps:** Data Table (אופציונלי) + Reference Lists (`v2/lists`, אופציונלי) — יעדים עצמאיים; מיפוי `[{"ioc_type":"IP","list_name":"..."}]`. פירוט: [Google SecOps](../../README.md#google-secops-chronicle-push).
+
+### תשתית
+
+- LDAP/AD: `utils/ldap_auth.py`
+- Cisco ESA: `utils/cisco_esa.py`
+- Google SecOps: `utils/google_secops.py`, `utils/google_secops_reference_lists.py`
+- DXL/TIE: חבילות אופציונליות
+- GeoIP: `data/GeoLite2-City.mmdb`
+- Audit (CEF/Syslog): `utils/cef_logger.py`
+
+פירוט מלא (כולל COMMENT mapping ל‑AdversaryGraph): [`../../README.md#inbound-integrations-pull`](../../README.md#inbound-integrations-pull)
 
 -
 
@@ -344,16 +377,24 @@ Header חובה ללקוחות:
 ## Admin: הגדרות, משתמשים, תעודות, Allowlist, Inbox
 
 Admin UI: `templates/admin/*`  
-Admin API: `routes/admin.py`
+Admin API: `routes/admin.py`  
+גישה: **`/admin`** (דורש admin)
 
-כולל:
+| דף | נתיב | תפקיד |
+|-----|------|--------|
+| **Users** | `/admin/users` | משתמשים, LDAP/local, avatar, must-change-password; משתמשי מערכת (MISP/TAXII/AG) לא ניתנים לעריכה |
+| **Settings** | `/admin/settings` | Search, Workflow, Tags, LDAP, Syslog |
+| **Integrations** | `/admin/integrations` | Import / Export / Push — ראו [אינטגרציות](#he-integrations) |
+| **Distribution** | `/admin/downstream` | רישום צרכני פיד (Feed Pulse Connections) |
+| **Sanity Check** | `/admin/sanity` | כללי Feed Pulse anomalies |
+| **Allowlist** | `/admin/allowlist` | `allowlist.txt` |
+| **Certificate** | `/admin/certificate` | HTTPS cert/key |
+| **Scoring** | `/admin/scoring` | שיטת ניקוד Champs |
+| **Logs** | `/admin/logs` | צפייה ב‑CEF audit log |
 
-- Settings (feature flags, sanity policy, feeds public)
-- Users
-- Integrations tests
-- Allowlist management
-- Certificate management
-- Admin Inbox (`GET /api/admin/inbox`)
+**Admin Inbox** (באפליקציה הראשית): IOC / YARA / tag suggestions ממתינים — `GET /api/admin/inbox`.
+
+מדריך מלא באנגלית: [`../../README.md#admin-panel-reference`](../../README.md#admin-panel-reference)
 
 -
 
@@ -389,14 +430,28 @@ Sanity policy + allowlist הם ה־guardrails של המערכת:
 
 <a id="he-data"></a>
 
-## מודל נתונים (SQLite) והיסטוריה
+## מודל נתונים (PostgreSQL) והיסטוריה
 
-SQLite + SQLAlchemy:
+**Production:** PostgreSQL — credentials ב‑`data/ziochub.env` (`ZIOCHUB_DATABASE_URL` או `ZIOCHUB_PG_*`).  
+**Legacy / dev:** `data/ziochub.db` (SQLite) רק עד סיום מיגרציה בשדרוג, או לפיתוח מקומי עם `ZIOCHUB_ALLOW_SQLITE_DEV=true`.
+
+| סביבה | מנוע | קובץ הגדרות | הערות |
+|--------|------|-------------|--------|
+| **Production** | **PostgreSQL** | `data/ziochub.env` | `setup.sh` + systemd |
+| **שדרוג מ‑SQLite** | SQLite → PostgreSQL | `ziochub.db` + `ziochub.env` | `migrate_sqlite_to_postgres.py` |
+| **Dev מקומי** | SQLite (אופציונלי) | `data/ziochub.db` | רק עם `ZIOCHUB_ALLOW_SQLITE_DEV=true` |
+
+סדר קביעת חיבור (`utils/db_config.py`): משתני סביבה → `ziochub.env` → קובץ SQLite legacy → שגיאה.
+
+SQLAlchemy:
 
 - `models.py`
 - `extensions.py`
+- `utils/db_config.py`, `utils/schema_migrations.py`
 
 דגש: `ioc_history` ו־`ioc_notes` נועדו לשמור context לאורך זמן (audit + knowledge).
+
+טבלאות נוספות (2026): `downstream_systems`, `feed_source_last_seen`, `ioc_downstream_events`, `feed_cache_entries`, `user_notifications` — ראו [`../../README.md#data-model`](../../README.md#data-model).
 
 -
 
@@ -424,13 +479,77 @@ pip install -r requirements.txt
 python app.py
 ```
 
+**ללא PostgreSQL (פיתוח בלבד):**
+
+```bash
+export ZIOCHUB_ALLOW_SQLITE_DEV=true   # Windows: set ZIOCHUB_ALLOW_SQLITE_DEV=true
+python app.py
+```
+
+Production ו‑offline **דורשים PostgreSQL**.
+
 ### Production
 
-`setup.sh` מתקין ומגדיר systemd.
+`setup.sh` מתקין ומגדיר systemd — **לא** יוצרים venv ידנית תחת `/opt/ziochub`.
+
+#### Python & venv (production)
+
+| פריט | התקנה production | ב‑ZIP? |
+|------|------------------|--------|
+| `python3` על Linux | חובה — המפרש ש‑`setup.sh` משתמש בו | לא |
+| `python3-venv` (חבילת OS) | חובה — בלי זה יצירת venv נכשלת | לא |
+| `/opt/ziochub/venv` | **`setup.sh` יוצר אוטומטית** | לא |
+| `packages/*.whl` | תלויות Python | כן |
+
+**גרסת Python חייבת להתאים:** ה‑wheels (למשל `cp312`) נבנים עבור גרסת Python ספציפית. `setup.sh` מריץ `python3 -m venv` עם **`python3` של השרת**.
+
+**כלל:** `./package_offline.sh` על build machine עם **אותה distro, ארכיטקטורה ו‑Python major.minor** כמו השרת.
+
+```bash
+# על השרת (לפני build):
+python3 --version
+
+# על מכונת build — אותה גרסה (למשל 3.12.x):
+python3 --version
+./package_offline.sh
+```
+
+**לפני `setup.sh` על השרת:**
+
+```bash
+sudo apt-get install -y python3 python3-venv
+python3 -m venv /tmp/test && rm -rf /tmp/test   # אופציונלי — בדיקה
+```
+
+פירוט מלא: [Python & venv (production)](../../README.md#python--venv-production)
 
 ### Offline
 
-ראו `OFFLINE.md` + `package_offline.sh` + `setup.sh --offline`.
+ראו `OFFLINE.md` + `package_offline.sh` (אפליקציה) + **`package_postgresql_debs.sh`** (PostgreSQL — ZIP נפרד ל‑lab).
+
+**Lab / air-gap — שני ZIPים, שתי תיקיות, installer אחד (`setup.sh` בלבד):**
+
+```bash
+mkdir -p ziochub_app ziochub_postgresql
+python3 -m zipfile -e ziochub_*_installer.zip ziochub_app
+python3 -m zipfile -e ziochub_postgresql_debs_*.zip ziochub_postgresql
+cd ziochub_app && sudo ./setup.sh --offline \
+  --postgresql-debs-dir ../ziochub_postgresql/postgresql-debs
+```
+
+ZIP של PostgreSQL **אינו** installer — רק `postgresql-debs/*.deb`.
+
+**Production:** IT מתקין PostgreSQL → `sudo ./setup.sh --offline --use-existing-postgresql`
+
+פירוט: [Lab / air-gap: PostgreSQL .deb via external Linux machine](../../README.md#lab--air-gap-postgresql-deb-via-external-linux-machine)
+
+### שדרוג מ‑SQLite
+
+```bash
+sudo ./setup.sh --upgrade --offline
+```
+
+לוג מיגרציה: `data/migrate_sqlite_to_postgres.log`
 
 -
 
@@ -440,13 +559,15 @@ python app.py
 
 Timers נפוצים:
 
-- `ziochub-cleaner.timer`
-- `ziochub-backup.timer`
-- `ziochub-misp-sync.timer`
+- `ziochub-cleaner.timer` — מחיקת IOC שפג תוקף (+ ESA remove אם מופעל)
+- `ziochub-backup.timer` — **pg_dump** + SSL + YARA + allowlist + audit log
+- `ziochub-misp-sync.timer` — MISP pull
+- `ziochub-taxii-sync.timer` — TAXII pull (אם מופעל)
 
 סקריפטים:
 
-- `backup_ziochub.sh`
+- `backup_ziochub.sh` — גיבוי ידני (PostgreSQL + קבצים)
+- `scripts/migrate_sqlite_to_postgres.py` — מיגרציה מ‑SQLite
 - `cleaner.py`
 - `reset_data.py`
 - `scripts/reset_admin_password.py`
@@ -492,9 +613,16 @@ Frontend:
 
 ## פתרון תקלות נפוצות
 
-- DB locked (SQLite): בדרך כלל תהליך כפול / פעולה מקבילית.
-- YARA validate נכשל: `yara-python` לא מותקן ב־venv הנכון.
-- GitHub Pages נשבר: משתמשים בנתיבים מוחלטים במקום יחסיים.
+מסמך מלא: [`../TROUBLESHOOTING.md`](../TROUBLESHOOTING.md)
+
+| תקלה | כיוון |
+|------|--------|
+| PostgreSQL connection | `systemctl status postgresql`; בדיקת `data/ziochub.env` |
+| מיגרציה נכשלה | `data/migrate_sqlite_to_postgres.log`; גיבוי `pre_pg_migration_*` |
+| DB locked | **רק SQLite legacy** — תהליך כפול; שדרג ל‑PostgreSQL |
+| MISP / AdversaryGraph / TAXII | Admin → Integrations → Import; Feed Pulse → Pull State |
+| YARA validate נכשל | `yara-python` לא מותקן ב‑venv הנכון |
+| GitHub Pages | נתיבים מוחלטים במקום יחסיים |
 
 -
 

@@ -3,7 +3,12 @@
         <img src="{{ integration_icons.misp_pull }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
         <span>MISP pull</span>
     </button>
+    <button type="button" class="import-sub-tab-btn settings-tab-btn flex items-center gap-2" data-import-sub="adversarygraph">
+        <img src="{{ integration_icons.adversarygraph_pull }}" alt="" class="downstream-vendor-icon downstream-vendor-icon--md" loading="lazy" onerror="this.src='/static/img/vendors/generic.svg'" />
+        <span>AdversaryGraph pull</span>
+    </button>
     <button type="button" class="import-sub-tab-btn settings-tab-btn" data-import-sub="taxii">TAXII Pull</button>
 </nav>
 {% include 'admin/partials/integration_import_misp.html' %}
+{% include 'admin/partials/integration_import_adversarygraph.html' %}
 {% include 'admin/partials/integration_import_taxii.html' %}

@@ -10,6 +10,7 @@ Requires a normal user session (form login). Environment variables (optional def
 
 Usage:
   python scripts/stix_taxii_lookup.py --type Domain --value evil.example.com
+  cd scripts && python3 stix_taxii_lookup.py --type Domain --value evil.example.com
   python scripts/stix_taxii_lookup.py -k --base-url https://host:5000 -u USER --type IP --value 203.0.113.1
     (password: prompted if ZIOCHUB_PASSWORD is unset — do not pass passwords on the command line)
   python scripts/stix_taxii_lookup.py --type IP --value 203.0.113.1 --fetch-taxii
@@ -27,6 +28,10 @@ import getpass
 import json
 import os
 import sys
+
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 _PASSWORD_ARG_UNSET = object()
 

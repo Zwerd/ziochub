@@ -92,8 +92,46 @@ def google_secops_settings_dict() -> dict[str, str]:
         'google_secops_verify_ssl',
         'google_secops_reference_lists_enabled',
         'google_secops_reference_lists_config',
+        'google_secops_display_name',
     )
     return {k: _get_setting(k, '') for k in keys}
+
+
+def google_secops_display_name(g: Optional[dict[str, str]] = None) -> str:
+    settings = g or google_secops_settings_dict()
+    return (settings.get('google_secops_display_name') or '').strip() or 'Google SecOps'
+
+
+def _mark_gs_distribution_removed(contexts: list[dict[str, Any]], g: dict[str, str]) -> None:
+    if not contexts:
+        return
+    try:
+        from utils.downstream import mark_api_distribution_removed
+
+        mark_api_distribution_removed(
+            contexts,
+            vendor_id='google_secops',
+            display_name=google_secops_display_name(g),
+            api_source='google_secops',
+        )
+    except Exception:
+        pass
+
+
+def _mark_gs_distribution_created(contexts: list[dict[str, Any]], g: dict[str, str]) -> None:
+    if not contexts:
+        return
+    try:
+        from utils.downstream import record_api_distribution_events
+
+        record_api_distribution_events(
+            contexts,
+            vendor_id='google_secops',
+            display_name=google_secops_display_name(g),
+            api_source='google_secops',
+        )
+    except Exception:
+        pass
 
 
 def google_secops_connection_mode(g: dict[str, str]) -> str:
@@ -375,6 +413,7 @@ def google_secops_push_contexts_batch(
     from utils.google_secops_reference_lists import (
         push_contexts_to_reference_lists,
         reference_lists_configured,
+        reference_lists_for_ioc_type,
     )
     ref_lists_ready = reference_lists_configured(g)
 
@@ -403,7 +442,7 @@ def google_secops_push_contexts_batch(
         value = (str(ctx.get('value') or '')).strip()
         if not value or not ioc_type:
             continue
-        if action == 'remove':
+        if action in ('remove', 'delete', 'revoke', 'expire_remove', 'delete_remove'):
             removes.append(ctx)
         elif action == 'create':
             creates.append((ctx, _ioc_type_slug(ioc_type), value))
@@ -411,6 +450,7 @@ def google_secops_push_contexts_batch(
     failed = 0
     succeeded = 0
     all_failed: list[tuple[dict[str, Any], str]] = []
+    remove_dt_succeeded: set[int] = set()
 
     if data_table_ready:
         for chunk in _chunked(creates, GOOGLE_SECOPS_BULK_CREATE_BATCH_SIZE):
@@ -426,14 +466,7 @@ def google_secops_push_contexts_batch(
                         all_failed.append((ctx, f'verify_list_failed: {list_err}'))
                     elif found:
                         succeeded += 1
-                        try:
-                            from utils.downstream import record_api_distribution_events
-                            gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
-                            record_api_distribution_events(
-                                [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
-                            )
-                        except Exception:
-                            pass
+                        _mark_gs_distribution_created([ctx], g)
                     else:
                         failed += 1
                         all_failed.append((ctx, f'{msg}; verify_not_found'))
@@ -446,14 +479,7 @@ def google_secops_push_contexts_batch(
                     one_ok, one_msg = _create_ioc_row(session, base, parent, headers, slug, value)
                     if one_ok:
                         succeeded += 1
-                        try:
-                            from utils.downstream import record_api_distribution_events
-                            gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
-                            record_api_distribution_events(
-                                [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
-                            )
-                        except Exception:
-                            pass
+                        _mark_gs_distribution_created([ctx], g)
                     else:
                         failed += 1
                         all_failed.append((ctx, one_msg))
@@ -468,32 +494,49 @@ def google_secops_push_contexts_batch(
             ok, rm_msg = _delete_ioc_rows(session, base, parent, headers, slug, value)
             if ok:
                 succeeded += 1
-                try:
-                    from utils.downstream import mark_api_distribution_removed
-                    gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
-                    mark_api_distribution_removed(
-                        [ctx], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
-                    )
-                except Exception:
-                    pass
+                remove_dt_succeeded.add(id(ctx))
+                _mark_gs_distribution_removed([ctx], g)
             else:
                 failed += 1
                 all_failed.append((ctx, rm_msg))
 
     if ref_lists_ready:
+        create_ctxs = [ctx for ctx, _slug, _val in creates]
         try:
-            rl_ok, rl_msg, rl_ok_n, rl_fail_n = push_contexts_to_reference_lists(contexts, g, session, headers)
-            if rl_fail_n:
-                failed += rl_fail_n
-                if not rl_ok:
-                    for ctx in contexts:
-                        if isinstance(ctx, dict):
-                            all_failed.append((ctx, rl_msg))
-            if rl_ok_n and data_table_ready is False:
-                succeeded += rl_ok_n
+            if create_ctxs:
+                rl_ok, rl_msg, rl_ok_n, rl_fail_n = push_contexts_to_reference_lists(
+                    create_ctxs, g, session, headers,
+                )
+                if rl_fail_n:
+                    failed += rl_fail_n
+                    if not rl_ok:
+                        for ctx in create_ctxs:
+                            if isinstance(ctx, dict):
+                                all_failed.append((ctx, rl_msg))
+                if rl_ok_n and not data_table_ready:
+                    succeeded += rl_ok_n
+
+            if removes:
+                rl_ok_r, rl_msg_r, rl_ok_n_r, rl_fail_n_r = push_contexts_to_reference_lists(
+                    removes, g, session, headers,
+                )
+                remove_needing_rl = [
+                    ctx for ctx in removes
+                    if reference_lists_for_ioc_type(g, (str(ctx.get('type') or '')).strip())
+                ]
+                if rl_ok_r:
+                    if remove_needing_rl:
+                        _mark_gs_distribution_removed(remove_needing_rl, g)
+                    if not data_table_ready and rl_ok_n_r:
+                        succeeded += rl_ok_n_r
+                elif remove_needing_rl:
+                    for ctx in remove_needing_rl:
+                        if id(ctx) not in remove_dt_succeeded:
+                            failed += 1
+                            all_failed.append((ctx, rl_msg_r))
         except Exception:
             logger.exception('Google SecOps reference lists batch failed')
-            failed += len(contexts)
+            failed += len(creates) + len(removes)
             for ctx in contexts:
                 if isinstance(ctx, dict):
                     all_failed.append((ctx, 'reference_lists_batch_failed'))
@@ -557,15 +600,20 @@ def google_secops_push_ioc_from_context(
         try:
             g = google_secops_settings_dict()
             from utils.downstream import mark_api_distribution_removed, record_api_distribution_events
-            gs_name = (g.get('google_secops_display_name') or '').strip() or 'Google SecOps'
             action = (str(ioc.get('action') or 'create')).strip().lower()
             if action in ('remove', 'delete', 'revoke', 'expire_remove', 'delete_remove'):
                 mark_api_distribution_removed(
-                    [ioc], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
+                    [ioc],
+                    vendor_id='google_secops',
+                    display_name=google_secops_display_name(g),
+                    api_source='google_secops',
                 )
             else:
                 record_api_distribution_events(
-                    [ioc], vendor_id='google_secops', display_name=gs_name, api_source='google_secops',
+                    [ioc],
+                    vendor_id='google_secops',
+                    display_name=google_secops_display_name(g),
+                    api_source='google_secops',
                 )
         except Exception:
             pass
@@ -614,7 +662,7 @@ def _google_secops_push_ioc_from_context_inner(ioc: dict[str, Any]) -> tuple[boo
 
     if data_table_ready and parent and base:
         attempted = True
-        if action == 'remove':
+        if action in ('remove', 'delete', 'revoke', 'expire_remove', 'delete_remove'):
             dt_ok, dt_msg = _delete_ioc_rows(session, base, parent, headers, slug, value)
         else:
             dt_ok, dt_msg = _create_ioc_row(session, base, parent, headers, slug, value)

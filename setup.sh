@@ -23,6 +23,7 @@
 #  Updated: 2026-06 — post-upgrade feature checks (Admin Distribution, Feed Pulse, YARA_rejected, data/dxl).
 #  Updated: 2026-06 — unified Inbox (utils/user_notifications.py, static/js/app.js, i18n).
 #  Updated: 2026-06 — PostgreSQL-only fresh install; SQLite→PG migration on --upgrade.
+#  Updated: 2026-07 — post-upgrade checks: ssl_certificate.py, certificate wizard, champs Auto Pull.
 # ============================================================================
 set -euo pipefail
 
@@ -699,6 +700,9 @@ FEATURE_CHECK_FAILED=false
 _verify_installed_file "templates/admin/downstream.html" "Admin → Distribution" || FEATURE_CHECK_FAILED=true
 _verify_installed_file "templates/admin/base.html" "Admin navigation" || FEATURE_CHECK_FAILED=true
 _verify_installed_file "utils/downstream.py" "Distribution / vendor icons" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "utils/ssl_certificate.py" "Admin → Certificate wizard (CSR + chain install)" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "templates/admin/certificate.html" "Admin → Certificate UI" || FEATURE_CHECK_FAILED=true
+_verify_installed_file "static/js/champs.js" "Champs Analysis (Auto Pull overlay)" || FEATURE_CHECK_FAILED=true
 _verify_installed_file "static/js/feed-pulse.js" "Feed Pulse (Connections / Push / Pull state)" || FEATURE_CHECK_FAILED=true
 _verify_installed_file "utils/user_notifications.py" "Unified Inbox (YARA/tag approval notifications)" || FEATURE_CHECK_FAILED=true
 _verify_installed_file "utils/audit_events.py" "CEF audit catalog and helpers" || FEATURE_CHECK_FAILED=true
@@ -816,7 +820,7 @@ if [[ ${#MISSING_MODULES[@]} -gt 0 ]]; then
 fi
 
 # Verify utils submodules (Reports, Admin Settings, CEF logging, etc.)
-REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "offline_domain_checks" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "audit_events" "mentorship" "ambition" "jinja_datetime" "downstream" "integration_telemetry" "user_notifications" "tags" "db_config" "schema_migrations")
+REQUIRED_UTILS=("validation" "refanger" "allowlist" "feed_helpers" "yara_utils" "offline_domain_checks" "validation_warnings" "validation_messages" "sanity_checks" "auth" "decorators" "ldap_auth" "champs" "ioc_decode" "upload_text_encoding" "misp_sync" "cef_logger" "audit_events" "mentorship" "ambition" "jinja_datetime" "downstream" "ssl_certificate" "integration_telemetry" "user_notifications" "tags" "db_config" "schema_migrations")
 MISSING_UTILS=()
 
 for util in "${REQUIRED_UTILS[@]}"; do

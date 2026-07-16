@@ -1594,11 +1594,40 @@ def _compute_team_daily_counts(db, IOC, YaraRule, today, days_back=30):
     return dict(team_daily)
 
 
-def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user_id, analyst_username, scoring_method='1', misp_sync_username=None):
+def _sync_user_ioc_per_day(db, IOC, sync_username, start_dt, today, days_back):
+    """IOC submission counts per calendar day for an inbound sync user (MISP/TAXII/AdversaryGraph pull)."""
+    if not sync_username:
+        return None
+    sync_lower = sync_username.strip().lower()
+    if not sync_lower:
+        return None
+    daily = defaultdict(int)
+    rows = db.session.query(func.date(IOC.created_at), func.count()).filter(
+        func.lower(IOC.analyst) == sync_lower,
+        IOC.created_at >= start_dt,
+    ).group_by(func.date(IOC.created_at)).all()
+    for (d, cnt) in rows:
+        day = _ensure_date(d)
+        if day:
+            daily[day] = daily.get(day, 0) + (cnt or 0)
+    series = []
+    for i in range(days_back - 1, -1, -1):
+        d = today - timedelta(days=i)
+        series.append({'date': d.strftime('%Y-%m-%d'), 'count': daily.get(d, 0)})
+    return series
+
+
+def get_analyst_detail(
+    db, IOC, YaraRule, User, UserProfile, ActivityEvent, user_id, analyst_username,
+    scoring_method='1',
+    misp_sync_username=None,
+    taxii_sync_username=None,
+    adversarygraph_sync_username=None,
+):
     """
     Return full analyst detail for Spotlight: nickname, level, XP, activity_per_day, badges, team_avg_per_day.
     analyst_username is fallback when user_id maps to user.
-    misp_sync_username: if provided, include misp_per_day (IOC count per day for the MISP sync user).
+    *_sync_username: include auto-pull IOC counts per day for inbound sync users (overlay on activity chart).
     """
     rows = compute_analyst_scores(db, IOC, YaraRule, User, ActivityEvent, scoring_method=scoring_method)
     analyst_lower = (analyst_username or '').lower()
@@ -1755,22 +1784,17 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
         except Exception:
             campaign_create_count = 0
 
-    misp_per_day = None
-    if misp_sync_username:
-        misp_lower = misp_sync_username.lower()
-        misp_daily = defaultdict(int)
-        misp_rows = db.session.query(func.date(IOC.created_at), func.count()).filter(
-            func.lower(IOC.analyst) == misp_lower,
-            IOC.created_at >= start_dt,
-        ).group_by(func.date(IOC.created_at)).all()
-        for (d, cnt) in misp_rows:
-            day = _ensure_date(d)
-            if day:
-                misp_daily[day] = misp_daily.get(day, 0) + (cnt or 0)
-        misp_per_day = []
-        for i in range(days_back - 1, -1, -1):
-            d = today - timedelta(days=i)
-            misp_per_day.append({'date': d.strftime('%Y-%m-%d'), 'count': misp_daily.get(d, 0)})
+    misp_per_day = _sync_user_ioc_per_day(db, IOC, misp_sync_username, start_dt, today, days_back)
+    taxii_per_day = _sync_user_ioc_per_day(db, IOC, taxii_sync_username, start_dt, today, days_back)
+    adversarygraph_per_day = _sync_user_ioc_per_day(db, IOC, adversarygraph_sync_username, start_dt, today, days_back)
+
+    auto_pull_per_day = {}
+    if misp_per_day is not None:
+        auto_pull_per_day['misp'] = misp_per_day
+    if taxii_per_day is not None:
+        auto_pull_per_day['taxii'] = taxii_per_day
+    if adversarygraph_per_day is not None:
+        auto_pull_per_day['adversarygraph'] = adversarygraph_per_day
 
     result = {
         'analyst': analyst_lower,
@@ -1793,6 +1817,8 @@ def get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user
     }
     if misp_per_day is not None:
         result['misp_per_day'] = misp_per_day
+    if auto_pull_per_day:
+        result['auto_pull_per_day'] = auto_pull_per_day
     return result
 
 

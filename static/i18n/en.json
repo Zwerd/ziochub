@@ -302,6 +302,11 @@
     "msg_dir_rtl": "RTL",
     "ticker_label": "MSG",
     "stat_campaigns": "Campaigns created",
+    "auto_pull": "Auto Pull",
+    "auto_pull_title": "Show inbound auto-pull volume (MISP, TAXII, AdversaryGraph) vs this analyst",
+    "auto_pull_misp": "MISP pull",
+    "auto_pull_taxii": "TAXII pull",
+    "auto_pull_adversarygraph": "AdversaryGraph pull",
     "sessions_title": "Login & Session Activity",
     "col": {
       "rank": "Rank",

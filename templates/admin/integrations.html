@@ -2492,6 +2492,40 @@ function esaToggleDeploymentFields() {
             } else {
                 lines.push(JSON.stringify(data, null, 2));
             }
+            if (data.debug) {
+                lines.push('');
+                lines.push('--- DEBUG (always on test) ---');
+                if (data.debug.auth_note) {
+                    lines.push(data.debug.auth_note);
+                }
+                if (data.debug.settings) {
+                    lines.push('settings: ' + JSON.stringify(data.debug.settings));
+                }
+                if (data.debug.ziochub_push) {
+                    lines.push('ziochub_push: ' + JSON.stringify(data.debug.ziochub_push, null, 2));
+                }
+                if (data.debug.dictionaries_on_appliance) {
+                    lines.push('dictionaries_on_appliance: ' + JSON.stringify(data.debug.dictionaries_on_appliance));
+                }
+                if (data.debug.dictionary_e2e && data.debug.dictionary_e2e.length) {
+                    lines.push('dictionary_e2e:');
+                    data.debug.dictionary_e2e.forEach(function(d) {
+                        lines.push('  ' + (d.dictionary_name || '') + ' (' + (d.ioc_type || '') + ') test=' + (d.test_ioc_normalized || d.test_ioc || ''));
+                        (d.operations || []).forEach(function(op) {
+                            lines.push('    ' + (op.ok ? '✓' : '✗') + ' ' + (op.operation || '') + ': ' + (op.message || ''));
+                        });
+                    });
+                }
+                if (data.debug.http_trace && data.debug.http_trace.length) {
+                    lines.push('http_trace:');
+                    data.debug.http_trace.forEach(function(t) {
+                        lines.push('  [' + (t.label || '') + '] ' + (t.method || '') + ' ' + (t.url || ''));
+                        lines.push('    auth: ' + (t.auth || '') + ' | HTTP ' + (t.http_code != null ? t.http_code : '?') + (t.ok ? ' ok' : ' FAIL'));
+                        if (t.error_detail) lines.push('    error: ' + t.error_detail);
+                        if (t.response_preview) lines.push('    body: ' + t.response_preview);
+                    });
+                }
+            }
             logEl.textContent = lines.join('\n');
             logEl.classList.toggle('text-green-300', !!data.success);
             logEl.classList.toggle('text-red-300', !data.success);

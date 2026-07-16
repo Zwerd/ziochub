@@ -14,8 +14,13 @@
     let champsTickerPollInterval = null;
     let champsLeaderboardPollInterval = null;
     let champsPresencePollInterval = null;
-    let champsMispVisible = false;
-    let champsMispData = null;
+    let champsAutoPullVisible = false;
+    let champsAutoPullData = null;
+    const CHAMPS_AUTO_PULL_SERIES = [
+        { key: 'misp', labelKey: 'champs.auto_pull_misp', fallback: 'MISP pull', color: '#eab308', bg: 'rgba(234,179,8,0.08)' },
+        { key: 'taxii', labelKey: 'champs.auto_pull_taxii', fallback: 'TAXII pull', color: '#a855f7', bg: 'rgba(168,85,247,0.08)' },
+        { key: 'adversarygraph', labelKey: 'champs.auto_pull_adversarygraph', fallback: 'AdversaryGraph pull', color: '#f97316', bg: 'rgba(249,115,22,0.08)' },
+    ];
     let champsParticlesCanvas = null;
     let champsParticlesCtx = null;
     let champsParticlesAnimationId = null;
@@ -1530,25 +1535,25 @@
         const scoreValue = a.score != null ? a.score : 0;
         const lblCamp = (typeof t === 'function' && t('champs.stat_campaigns')) ? t('champs.stat_campaigns') : 'Campaigns';
         let chartHtml = '';
-        champsMispData = (a.misp_per_day && a.misp_per_day.length > 0) ? a.misp_per_day : null;
-        champsMispVisible = false;
+        champsAutoPullData = a.auto_pull_per_day && typeof a.auto_pull_per_day === 'object'
+            ? a.auto_pull_per_day
+            : ((a.misp_per_day && a.misp_per_day.length > 0) ? { misp: a.misp_per_day } : null);
+        champsAutoPullVisible = false;
+        const hasAutoPull = champsAutoPullData && CHAMPS_AUTO_PULL_SERIES.some(function(s) {
+            return champsAutoPullData[s.key] && champsAutoPullData[s.key].length > 0;
+        });
         if (a.activity_per_day && a.activity_per_day.length > 0 && typeof Chart !== 'undefined') {
-            const mispBtnHtml = champsMispData
-                ? ' <button type="button" id="champsMispToggle" class="champs-misp-toggle" title="Toggle MISP sync overlay">'
-                  + '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" xmlns="http://www.w3.org/2000/svg">'
-                  + '<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="1.5"/>'
-                  + '<circle cx="12" cy="8" r="2" fill="currentColor"/>'
-                  + '<circle cx="7" cy="15" r="2" fill="currentColor"/>'
-                  + '<circle cx="17" cy="15" r="2" fill="currentColor"/>'
-                  + '<line x1="12" y1="10" x2="7" y2="13" stroke="currentColor" stroke-width="1.2"/>'
-                  + '<line x1="12" y1="10" x2="17" y2="13" stroke="currentColor" stroke-width="1.2"/>'
-                  + '<line x1="7" y1="15" x2="17" y2="15" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 2"/>'
-                  + '</svg></button>'
+            const autoPullLabel = (typeof t === 'function' && t('champs.auto_pull')) ? t('champs.auto_pull') : 'Auto Pull';
+            const autoPullTitle = (typeof t === 'function' && t('champs.auto_pull_title')) ? t('champs.auto_pull_title') : 'Toggle inbound auto-pull overlays (MISP, TAXII, AdversaryGraph)';
+            const autoPullBtnHtml = hasAutoPull
+                ? ' <button type="button" id="champsAutoPullToggle" class="champs-autopull-toggle" title="' + escapeAttr(autoPullTitle) + '">'
+                  + escapeHtml(autoPullLabel)
+                  + '</button>'
                 : '';
             chartHtml = '<div class="champs-activity-block flex-1 min-h-0 flex flex-col mt-4 p-4 rounded-xl bg-black/20 border border-white/5">'
                 + '<div class="flex items-center justify-between mb-3 flex-shrink-0">'
                 + '<h4 class="text-xs font-bold text-secondary uppercase tracking-wider">Activity (30 days) - Submissions (IOC + YARA) - ' + escapeHtml(analystChartName) + ' vs team avg</h4>'
-                + mispBtnHtml
+                + autoPullBtnHtml
                 + '</div>'
                 + '<div class="champs-spotlight-chart-wrap flex-1 min-h-[260px]"><canvas id="champsSpotlightChart"></canvas></div></div>';
         }
@@ -1645,28 +1650,46 @@
                     });
                     global.champsSpotlightChart = champsSpotlightChart;
 
-                    const mispBtn = document.getElementById('champsMispToggle');
-                    if (mispBtn && champsMispData) {
-                        mispBtn.addEventListener('click', function() {
+                    function champsAutoPullDatasetLabels() {
+                        return CHAMPS_AUTO_PULL_SERIES.map(function(s) {
+                            return (typeof t === 'function' && t(s.labelKey)) ? t(s.labelKey) : s.fallback;
+                        });
+                    }
+                    function removeChampsAutoPullDatasets(chart) {
+                        const pullLabels = champsAutoPullDatasetLabels();
+                        chart.data.datasets = chart.data.datasets.filter(function(ds) {
+                            return pullLabels.indexOf(ds.label) === -1;
+                        });
+                    }
+                    function addChampsAutoPullDatasets(chart) {
+                        CHAMPS_AUTO_PULL_SERIES.forEach(function(s) {
+                            const series = champsAutoPullData && champsAutoPullData[s.key];
+                            if (!series || !series.length) return;
+                            const label = (typeof t === 'function' && t(s.labelKey)) ? t(s.labelKey) : s.fallback;
+                            chart.data.datasets.push({
+                                label: label,
+                                data: series.map(function(d) { return d.count; }),
+                                borderColor: s.color,
+                                backgroundColor: s.bg,
+                                fill: false,
+                                tension: 0.3,
+                                borderDash: [6, 3],
+                                borderWidth: 2,
+                                pointRadius: 2,
+                            });
+                        });
+                    }
+
+                    const autoPullBtn = document.getElementById('champsAutoPullToggle');
+                    if (autoPullBtn && hasAutoPull) {
+                        autoPullBtn.addEventListener('click', function() {
                             if (!champsSpotlightChart) return;
-                            champsMispVisible = !champsMispVisible;
-                            mispBtn.classList.toggle('champs-misp-active', champsMispVisible);
-                            if (champsMispVisible) {
-                                const mispCounts = champsMispData.map(d => d.count);
-                                champsSpotlightChart.data.datasets.push({
-                                    label: 'MISP sync',
-                                    data: mispCounts,
-                                    borderColor: '#eab308',
-                                    backgroundColor: 'rgba(234,179,8,0.08)',
-                                    fill: false,
-                                    tension: 0.3,
-                                    borderDash: [6, 3],
-                                    borderWidth: 2,
-                                    pointRadius: 2,
-                                });
+                            champsAutoPullVisible = !champsAutoPullVisible;
+                            autoPullBtn.classList.toggle('champs-autopull-active', champsAutoPullVisible);
+                            if (champsAutoPullVisible) {
+                                addChampsAutoPullDatasets(champsSpotlightChart);
                             } else {
-                                const idx = champsSpotlightChart.data.datasets.findIndex(ds => ds.label === 'MISP sync');
-                                if (idx !== -1) champsSpotlightChart.data.datasets.splice(idx, 1);
+                                removeChampsAutoPullDatasets(champsSpotlightChart);
                             }
                             champsSpotlightChart.update();
                         });

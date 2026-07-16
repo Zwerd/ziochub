@@ -481,45 +481,171 @@ def certificate_status():
     return jsonify({'success': True, 'certificate': _certificate_status()})
 
 
-@bp.route('/certificate', methods=['POST'])
+@bp.route('/certificate/generate-csr', methods=['POST'])
 @admin_required
-def certificate_save():
-    """Save SSL certificate and private key (PEM)."""
-    _api_error, _certificate_status, audit_log = _from_app('_api_error', '_certificate_status', 'audit_log')
+def certificate_generate_csr():
+    """Generate RSA key + CSR; save key and CSR under data/ssl/."""
+    _api_error, audit_log = _from_app('_api_error', 'audit_log')
     try:
         data = request.get_json() or {}
-        cert_pem = (data.get('cert_pem') or '').strip()
-        key_pem = (data.get('key_pem') or '').strip()
-        ca_pem = (data.get('ca_pem') or '').strip()
-        if not cert_pem or not key_pem:
-            return jsonify({'success': False, 'message': 'Certificate and private key are required.'}), 400
-        if '-----BEGIN' not in cert_pem or '-----END' not in cert_pem:
-            return jsonify({'success': False, 'message': 'Invalid certificate PEM (expect -----BEGIN CERTIFICATE----- / -----END CERTIFICATE-----).'}), 400
-        if '-----BEGIN' not in key_pem or '-----END' not in key_pem:
-            return jsonify({'success': False, 'message': 'Invalid private key PEM (expect -----BEGIN ... PRIVATE KEY----- / -----END ... PRIVATE KEY-----).'}), 400
-        SSL_DIR, SSL_CERT_FILE, SSL_KEY_FILE, SSL_CA_FILE = _from_app('SSL_DIR', 'SSL_CERT_FILE', 'SSL_KEY_FILE', 'SSL_CA_FILE')
+        common_name = (data.get('common_name') or data.get('cn') or '').strip()
+        sans = data.get('subject_alt_names') or data.get('sans') or ''
+        key_bits = data.get('key_bits') or 2048
+        from utils.ssl_certificate import generate_key_and_csr
+
+        key_pem, csr_pem, errors = generate_key_and_csr(
+            common_name,
+            subject_alt_names=sans,
+            key_bits=key_bits,
+        )
+        if errors or not key_pem or not csr_pem:
+            return jsonify({'success': False, 'message': '; '.join(errors) or 'CSR generation failed'}), 400
+
+        SSL_DIR, SSL_KEY_FILE = _from_app('SSL_DIR', 'SSL_KEY_FILE')
+        csr_file = os.path.join(SSL_DIR, 'ziochub.csr.pem')
         os.makedirs(SSL_DIR, exist_ok=True)
-        with open(SSL_CERT_FILE, 'w', encoding='utf-8', newline='\n') as f:
-            f.write(cert_pem)
         with open(SSL_KEY_FILE, 'w', encoding='utf-8', newline='\n') as f:
             f.write(key_pem)
         try:
             os.chmod(SSL_KEY_FILE, 0o600)
         except OSError:
             pass
-        if ca_pem and ('-----BEGIN' in ca_pem and '-----END' in ca_pem):
-            with open(SSL_CA_FILE, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(ca_pem)
-        elif os.path.isfile(SSL_CA_FILE):
-            try:
-                os.remove(SSL_CA_FILE)
-            except OSError:
-                pass
-        audit_log('admin_certificate_save', f'by={current_user.username}')
+        with open(csr_file, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(csr_pem)
+
+        audit_log('admin_certificate_csr', f'by={current_user.username} cn={common_name[:80]}')
         return jsonify({
             'success': True,
-            'message': 'Certificate saved. Restart the application (or reverse proxy) with HTTPS to use it.',
-            'certificate': _certificate_status()
+            'message': 'Private key saved on server. Copy or download the CSR and sign it with your CA.',
+            'csr_pem': csr_pem,
+            'key_saved': True,
+            'csr_filename': 'ziochub.csr.pem',
+        })
+    except Exception as e:
+        logging.exception('api_admin_certificate_generate_csr failed')
+        return _api_error(str(e), 500)
+
+
+@bp.route('/certificate/verify', methods=['POST'])
+@admin_required
+def certificate_verify():
+    """Verify server cert + key (+ optional intermediate/root) before install."""
+    _api_error, = _from_app('_api_error')
+    try:
+        data = request.get_json() or {}
+        server_pem = (data.get('server_cert_pem') or data.get('cert_pem') or '').strip()
+        key_pem = (data.get('key_pem') or '').strip()
+        intermediate_pem = (data.get('intermediate_pem') or '').strip()
+        root_pem = (data.get('root_ca_pem') or data.get('root_pem') or '').strip()
+
+        SSL_KEY_FILE, = _from_app('SSL_KEY_FILE')
+        if not key_pem and os.path.isfile(SSL_KEY_FILE):
+            with open(SSL_KEY_FILE, 'r', encoding='utf-8', errors='replace') as f:
+                key_pem = f.read().strip()
+
+        from utils.ssl_certificate import verify_installation
+
+        result = verify_installation(server_pem, key_pem, intermediate_pem, root_pem)
+        return jsonify({
+            'success': result.get('ok', False),
+            'message': 'Verification passed.' if result.get('ok') else '; '.join(result.get('errors') or ['Verification failed']),
+            'verification': result,
+        }), (200 if result.get('ok') else 400)
+    except Exception as e:
+        logging.exception('api_admin_certificate_verify failed')
+        return _api_error(str(e), 500)
+
+
+def _save_ssl_material(
+    *,
+    cert_chain_pem: str,
+    key_pem: str,
+    ca_bundle_pem: str = '',
+) -> None:
+    SSL_DIR, SSL_CERT_FILE, SSL_KEY_FILE, SSL_CA_FILE = _from_app(
+        'SSL_DIR', 'SSL_CERT_FILE', 'SSL_KEY_FILE', 'SSL_CA_FILE',
+    )
+    os.makedirs(SSL_DIR, exist_ok=True)
+    with open(SSL_CERT_FILE, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(cert_chain_pem)
+    with open(SSL_KEY_FILE, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(key_pem)
+    try:
+        os.chmod(SSL_KEY_FILE, 0o600)
+    except OSError:
+        pass
+    if ca_bundle_pem and '-----BEGIN' in ca_bundle_pem:
+        with open(SSL_CA_FILE, 'w', encoding='utf-8', newline='\n') as f:
+            f.write(ca_bundle_pem)
+    elif os.path.isfile(SSL_CA_FILE):
+        try:
+            os.remove(SSL_CA_FILE)
+        except OSError:
+            pass
+
+
+@bp.route('/certificate', methods=['POST'])
+@admin_required
+def certificate_save():
+    """Save SSL certificate chain and private key (PEM)."""
+    _api_error, _certificate_status, audit_log = _from_app('_api_error', '_certificate_status', 'audit_log')
+    try:
+        data = request.get_json() or {}
+        key_pem = (data.get('key_pem') or '').strip()
+        server_pem = (data.get('server_cert_pem') or '').strip()
+        intermediate_pem = (data.get('intermediate_pem') or '').strip()
+        root_pem = (data.get('root_ca_pem') or data.get('root_pem') or '').strip()
+        legacy_cert = (data.get('cert_pem') or '').strip()
+        legacy_ca = (data.get('ca_pem') or '').strip()
+
+        SSL_KEY_FILE, = _from_app('SSL_KEY_FILE')
+        if not key_pem and os.path.isfile(SSL_KEY_FILE):
+            with open(SSL_KEY_FILE, 'r', encoding='utf-8', errors='replace') as f:
+                key_pem = f.read().strip()
+
+        from utils.ssl_certificate import (
+            build_ca_bundle_pem,
+            build_certificate_chain_pem,
+            extract_certificate_blocks,
+            verify_installation,
+        )
+
+        if server_pem:
+            verification = verify_installation(server_pem, key_pem, intermediate_pem, root_pem)
+            if not verification.get('ok'):
+                msg = '; '.join(verification.get('errors') or ['Invalid certificate material'])
+                return jsonify({'success': False, 'message': msg}), 400
+            cert_chain_pem = verification['chain_pem']
+            ca_bundle_pem = build_ca_bundle_pem(intermediate_pem, root_pem)
+        elif legacy_cert:
+            if not key_pem:
+                return jsonify({'success': False, 'message': 'Certificate and private key are required.'}), 400
+            if '-----BEGIN' not in legacy_cert or '-----BEGIN' not in key_pem:
+                return jsonify({'success': False, 'message': 'Invalid certificate or private key PEM.'}), 400
+            cert_chain_pem = legacy_cert if legacy_cert.endswith('\n') else legacy_cert + '\n'
+            ca_bundle_pem = legacy_ca if legacy_ca else ''
+        else:
+            return jsonify({'success': False, 'message': 'Server certificate is required.'}), 400
+
+        if not key_pem or '-----BEGIN' not in key_pem:
+            return jsonify({'success': False, 'message': 'Private key is required.'}), 400
+
+        _save_ssl_material(
+            cert_chain_pem=cert_chain_pem,
+            key_pem=key_pem if key_pem.endswith('\n') else key_pem + '\n',
+            ca_bundle_pem=ca_bundle_pem,
+        )
+
+        chain_count = len(extract_certificate_blocks(cert_chain_pem))
+        audit_log('admin_certificate_save', f'by={current_user.username} chain_certs={chain_count}')
+        return jsonify({
+            'success': True,
+            'message': (
+                f'Certificate saved ({chain_count} certificate(s) in chain). '
+                'Restart the application (or reverse proxy) with HTTPS to use it.'
+            ),
+            'certificate': _certificate_status(),
+            'chain_cert_count': chain_count,
         })
     except Exception as e:
         logging.exception('api_admin_certificate_save failed')

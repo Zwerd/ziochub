@@ -2,101 +2,306 @@
 {% block title %}Certificate (SSL/TLS){% endblock %}
 
 {% block admin_content %}
-<div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-3xl">
+<div class="bg-tertiary rounded-xl border border-white/10 p-6 max-w-4xl">
     <h3 class="text-lg font-semibold accent-blue mb-2">SSL / TLS Certificate</h3>
-    <p class="text-secondary text-sm mb-4">Use a certificate signed by your local CA so users can browse over HTTPS and avoid MITM. Paste or upload the server certificate and private key (PEM). Optional: CA certificate for chain.</p>
+    <p class="text-secondary text-sm mb-4">
+        Generate a CSR, sign it with your local CA, then install the server certificate together with intermediate and root CA
+        so <code class="px-1 rounded bg-white/10">data/ssl/cert.pem</code> contains the full chain for network clients.
+    </p>
 
     <div id="certStatus" class="mb-6 p-4 rounded-lg border border-white/10 bg-black/20 text-sm">
         <span class="font-semibold text-secondary">Current status:</span>
         {% if cert_status.cert_present and cert_status.key_present %}
         <span class="text-green-400">Certificate and key are configured.</span>
+        {% if cert_status.chain_cert_count and cert_status.chain_cert_count > 1 %}
+        <span class="text-secondary">Chain: {{ cert_status.chain_cert_count }} certificates in cert.pem.</span>
+        {% endif %}
         {% if cert_status.expiry_message %}
         <span class="text-secondary">Expires: {{ cert_status.expiry_message }}</span>
         {% endif %}
         {% if cert_status.ca_present %}
-        <span class="text-secondary">CA bundle present.</span>
+        <span class="text-secondary">CA bundle (ca.pem) present.</span>
         {% endif %}
         {% elif cert_status.error %}
         <span class="text-amber-400">Certificate present; could not read expiry ({{ cert_status.error }}).</span>
         {% else %}
-        <span class="text-amber-400">No certificate configured. Add one below to enable HTTPS.</span>
+        <span class="text-amber-400">No certificate configured. Complete the wizard below to enable HTTPS.</span>
         {% endif %}
     </div>
 
-    <form id="certForm" class="space-y-4">
-        <div>
-            <label for="cert_pem" class="block text-sm font-semibold text-secondary mb-1">Server certificate (PEM)</label>
-            <textarea id="cert_pem" name="cert_pem" rows="8" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
-                      class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green"></textarea>
-            <p class="text-xs text-secondary mt-1">Paste the certificate issued by your local CA (e.g. after signing a CSR with your CA).</p>
+    <nav class="flex flex-wrap gap-2 mb-6" id="certWizardNav" aria-label="Certificate wizard steps">
+        <button type="button" class="cert-wizard-tab active px-4 py-2 rounded-lg text-sm font-semibold bg-cyan-600/30 border border-cyan-500/40" data-step="1">1. Generate key &amp; CSR</button>
+        <button type="button" class="cert-wizard-tab px-4 py-2 rounded-lg text-sm font-semibold bg-black/20 border border-white/10 text-secondary" data-step="2">2. Sign with your CA</button>
+        <button type="button" class="cert-wizard-tab px-4 py-2 rounded-lg text-sm font-semibold bg-black/20 border border-white/10 text-secondary" data-step="3">3. Install certificate chain</button>
+    </nav>
+
+    <!-- Step 1 -->
+    <section id="certStep1" class="cert-wizard-panel space-y-4">
+        <p class="text-sm text-secondary">Creates a private key on this server and a CSR you submit to your CA. The key stays in <code class="px-1 rounded bg-white/10">data/ssl/key.pem</code>.</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+                <label for="cn" class="block text-sm font-semibold text-secondary mb-1">Common Name (CN) *</label>
+                <input type="text" id="cn" name="cn" placeholder="ziochub.example.com"
+                       class="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-primary text-sm focus:border-accent-green">
+            </div>
+            <div>
+                <label for="key_bits" class="block text-sm font-semibold text-secondary mb-1">Key size</label>
+                <select id="key_bits" class="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-primary text-sm">
+                    <option value="2048" selected>RSA 2048</option>
+                    <option value="4096">RSA 4096</option>
+                </select>
+            </div>
         </div>
         <div>
-            <label for="key_pem" class="block text-sm font-semibold text-secondary mb-1">Private key (PEM)</label>
-            <textarea id="key_pem" name="key_pem" rows="6" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"
-                      class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green"></textarea>
-            <p class="text-xs text-secondary mt-1">The private key that matches the certificate. Stored with restricted permissions.</p>
+            <label for="sans" class="block text-sm font-semibold text-secondary mb-1">Subject Alternative Names (optional)</label>
+            <input type="text" id="sans" name="sans" placeholder="ziochub.example.com, localhost, 192.168.1.10"
+                   class="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-primary text-sm focus:border-accent-green">
+            <p class="text-xs text-secondary mt-1">Comma-separated hostnames or IPs. CN is included automatically.</p>
         </div>
-        <div>
-            <label for="ca_pem" class="block text-sm font-semibold text-secondary mb-1">CA certificate (PEM) - optional</label>
-            <textarea id="ca_pem" name="ca_pem" rows="4" placeholder="-----BEGIN CERTIFICATE-----&#10;... (optional) &#10;-----END CERTIFICATE-----"
-                      class="w-full px-3 py-2 rounded-lg bg-tertiary border border-white/10 text-primary font-mono text-sm focus:border-accent-green"></textarea>
-            <p class="text-xs text-secondary mt-1">Optional: your local CA certificate or chain for clients that do not trust it yet.</p>
+        <button type="button" id="btnGenerateCsr" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Generate key &amp; CSR</button>
+        <div id="csrResult" class="hidden space-y-2">
+            <label class="block text-sm font-semibold text-secondary">Certificate Signing Request (CSR)</label>
+            <textarea id="csr_pem" readonly rows="8" class="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-primary font-mono text-xs"></textarea>
+            <div class="flex flex-wrap gap-2">
+                <button type="button" id="btnCopyCsr" class="btn-cmd-neutral text-sm">Copy CSR</button>
+                <button type="button" id="btnDownloadCsr" class="btn-cmd-neutral text-sm">Download ziochub.csr.pem</button>
+                <button type="button" id="btnGoStep2" class="btn-cmd-primary text-sm">Continue to step 2 →</button>
+            </div>
+            <p class="text-xs text-green-400">Private key saved on server. You do not need to paste it again unless you replace it manually.</p>
         </div>
-        <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save Certificate</button>
-    </form>
+    </section>
+
+    <!-- Step 2 -->
+    <section id="certStep2" class="cert-wizard-panel hidden space-y-4">
+        <div class="p-4 rounded-lg border border-white/10 bg-black/20 text-sm text-secondary space-y-2">
+            <p class="font-semibold text-primary">Sign the CSR with your CA (outside ZIoCHub)</p>
+            <ol class="list-decimal list-inside space-y-1">
+                <li>Copy or download the CSR from step 1.</li>
+                <li>Sign it with your internal CA (same process you used with OpenSSL before).</li>
+                <li>Obtain three PEM files: <strong class="text-primary">server certificate</strong>, <strong class="text-primary">intermediate CA</strong>, and <strong class="text-primary">root CA</strong>.</li>
+                <li>In step 3, paste each into its own field — ZIoCHub will build <code class="px-1 rounded bg-white/10">cert.pem</code> as server → intermediate → root.</li>
+            </ol>
+        </div>
+        <textarea id="csr_pem_step2" readonly rows="6" class="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-primary font-mono text-xs" placeholder="Generate a CSR in step 1 first…"></textarea>
+        <button type="button" id="btnGoStep3" class="btn-cmd-primary text-sm">Continue to step 3 →</button>
+    </section>
+
+    <!-- Step 3 -->
+    <section id="certStep3" class="cert-wizard-panel hidden space-y-4">
+        <p class="text-sm text-secondary">Paste the signed server certificate and CA chain. On save, all parts are combined into <code class="px-1 rounded bg-white/10">data/ssl/cert.pem</code>.</p>
+        <form id="certInstallForm" class="space-y-4">
+            <div>
+                <label for="server_cert_pem" class="block text-sm font-semibold text-secondary mb-1">Server certificate (leaf) *</label>
+                <textarea id="server_cert_pem" name="server_cert_pem" rows="6" placeholder="-----BEGIN CERTIFICATE-----&#10;... signed server cert only ...&#10;-----END CERTIFICATE-----"
+                          class="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-primary font-mono text-sm focus:border-accent-green"></textarea>
+            </div>
+            <div>
+                <label for="intermediate_pem" class="block text-sm font-semibold text-secondary mb-1">Intermediate CA (optional)</label>
+                <textarea id="intermediate_pem" name="intermediate_pem" rows="5" placeholder="-----BEGIN CERTIFICATE-----&#10;... intermediate CA ...&#10;-----END CERTIFICATE-----"
+                          class="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-primary font-mono text-sm focus:border-accent-green"></textarea>
+                <p class="text-xs text-secondary mt-1">Paste one or more intermediate certificates (PEM). Multiple blocks in one field are supported.</p>
+            </div>
+            <div>
+                <label for="root_ca_pem" class="block text-sm font-semibold text-secondary mb-1">Root CA (optional)</label>
+                <textarea id="root_ca_pem" name="root_ca_pem" rows="4" placeholder="-----BEGIN CERTIFICATE-----&#10;... root CA ...&#10;-----END CERTIFICATE-----"
+                          class="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-primary font-mono text-sm focus:border-accent-green"></textarea>
+                <p class="text-xs text-secondary mt-1">Including root in cert.pem helps appliances that do not have your CA pre-trusted.</p>
+            </div>
+            <div>
+                <label for="key_pem" class="block text-sm font-semibold text-secondary mb-1">Private key (PEM)</label>
+                <textarea id="key_pem" name="key_pem" rows="5" placeholder="Leave empty if you generated the key in step 1 (already saved on server)."
+                          class="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-primary font-mono text-sm focus:border-accent-green"></textarea>
+            </div>
+            <div id="verifyResult" class="hidden p-3 rounded-lg border text-sm"></div>
+            <div class="flex flex-wrap gap-2">
+                <button type="button" id="btnVerifyCert" class="btn-cmd-neutral">Verify</button>
+                <button type="submit" class="px-4 py-2 rounded-lg font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition">Save certificate chain</button>
+            </div>
+        </form>
+    </section>
+
     <div id="certMessage" class="mt-4 hidden text-sm"></div>
+
+    <details class="mt-8 p-4 rounded-lg border border-white/10 bg-black/20 text-sm text-secondary">
+        <summary class="font-semibold text-primary cursor-pointer">Advanced: paste full chain manually</summary>
+        <p class="mt-2 mb-3">If you already have a single PEM with server + intermediate + root, paste it here (legacy mode).</p>
+        <form id="certLegacyForm" class="space-y-3">
+            <textarea id="legacy_cert_pem" rows="6" placeholder="Full cert.pem contents"
+                      class="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-primary font-mono text-sm"></textarea>
+            <textarea id="legacy_key_pem" rows="4" placeholder="Private key PEM"
+                      class="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/10 text-primary font-mono text-sm"></textarea>
+            <button type="submit" class="btn-cmd-neutral text-sm">Save (legacy)</button>
+        </form>
+    </details>
 
     <div class="mt-6 p-4 rounded-lg border border-white/10 bg-black/20 text-sm text-secondary">
         <p class="font-semibold text-primary mb-2">After saving</p>
         <ul class="list-disc list-inside space-y-1">
-            <li>Restart the application so it (or your reverse proxy) uses the certificate for HTTPS.</li>
-            <li>If using a reverse proxy (e.g. nginx), point its <code class="px-1 rounded bg-white/10">ssl_certificate</code> and <code class="px-1 rounded bg-white/10">ssl_certificate_key</code> to <code class="px-1 rounded bg-white/10">data/ssl/cert.pem</code> and <code class="px-1 rounded bg-white/10">data/ssl/key.pem</code>.</li>
-            <li>Distribute your CA certificate to clients (or add it to the system trust store) so browsers do not show certificate warnings.</li>
+            <li>Restart ZIoCHub (or your reverse proxy) so HTTPS uses the new files.</li>
+            <li>Files: <code class="px-1 rounded bg-white/10">data/ssl/cert.pem</code> (full chain), <code class="px-1 rounded bg-white/10">data/ssl/key.pem</code>, optional <code class="px-1 rounded bg-white/10">data/ssl/ca.pem</code> (intermediate + root for client distribution).</li>
         </ul>
     </div>
 </div>
 <script>
 (function() {
-    var form = document.getElementById('certForm');
+    var csrText = '';
+    var tabs = document.querySelectorAll('.cert-wizard-tab');
+    var panels = {
+        1: document.getElementById('certStep1'),
+        2: document.getElementById('certStep2'),
+        3: document.getElementById('certStep3')
+    };
     var msgEl = document.getElementById('certMessage');
-    form.addEventListener('submit', async function(e) {
+
+    function showStep(n) {
+        tabs.forEach(function(t) {
+            var on = t.getAttribute('data-step') === String(n);
+            t.classList.toggle('active', on);
+            t.classList.toggle('bg-cyan-600/30', on);
+            t.classList.toggle('border-cyan-500/40', on);
+            t.classList.toggle('text-primary', on);
+            t.classList.toggle('bg-black/20', !on);
+            t.classList.toggle('border-white/10', !on);
+            t.classList.toggle('text-secondary', !on);
+        });
+        Object.keys(panels).forEach(function(k) {
+            panels[k].classList.toggle('hidden', Number(k) !== n);
+        });
+    }
+    tabs.forEach(function(t) {
+        t.addEventListener('click', function() { showStep(Number(t.getAttribute('data-step'))); });
+    });
+
+    function showMsg(text, ok) {
+        msgEl.classList.remove('hidden', 'text-green-400', 'text-red-400');
+        msgEl.classList.add(ok ? 'text-green-400' : 'text-red-400');
+        msgEl.textContent = text;
+    }
+
+    function installPayload() {
+        return {
+            server_cert_pem: document.getElementById('server_cert_pem').value.trim(),
+            intermediate_pem: document.getElementById('intermediate_pem').value.trim(),
+            root_ca_pem: document.getElementById('root_ca_pem').value.trim(),
+            key_pem: document.getElementById('key_pem').value.trim()
+        };
+    }
+
+    document.getElementById('btnGenerateCsr').addEventListener('click', async function() {
+        msgEl.classList.add('hidden');
+        var cn = document.getElementById('cn').value.trim();
+        if (!cn) { showMsg('Common Name is required.', false); return; }
+        try {
+            var res = await fetch('/api/admin/certificate/generate-csr', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    common_name: cn,
+                    subject_alt_names: document.getElementById('sans').value.trim(),
+                    key_bits: Number(document.getElementById('key_bits').value) || 2048
+                })
+            });
+            var data = await res.json();
+            if (!data.success) { showMsg(data.message || 'CSR generation failed.', false); return; }
+            csrText = data.csr_pem || '';
+            document.getElementById('csr_pem').value = csrText;
+            document.getElementById('csr_pem_step2').value = csrText;
+            document.getElementById('csrResult').classList.remove('hidden');
+            showMsg(data.message || 'CSR generated.', true);
+        } catch (e) {
+            showMsg('Network error.', false);
+        }
+    });
+
+    document.getElementById('btnCopyCsr').addEventListener('click', function() {
+        if (!csrText) return;
+        navigator.clipboard.writeText(csrText).then(function() { showMsg('CSR copied to clipboard.', true); });
+    });
+
+    document.getElementById('btnDownloadCsr').addEventListener('click', function() {
+        if (!csrText) return;
+        var blob = new Blob([csrText], { type: 'application/x-pem-file' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'ziochub.csr.pem';
+        a.click();
+        URL.revokeObjectURL(a.href);
+    });
+
+    document.getElementById('btnGoStep2').addEventListener('click', function() { showStep(2); });
+    document.getElementById('btnGoStep3').addEventListener('click', function() { showStep(3); });
+
+    document.getElementById('btnVerifyCert').addEventListener('click', async function() {
+        var box = document.getElementById('verifyResult');
+        box.classList.add('hidden');
+        try {
+            var res = await fetch('/api/admin/certificate/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(installPayload())
+            });
+            var data = await res.json();
+            box.classList.remove('hidden');
+            if (data.success && data.verification) {
+                var v = data.verification;
+                var lines = ['Verification passed.', 'Chain certificates: ' + (v.chain_cert_count || '?')];
+                if (v.server && v.server.subject) lines.push('Subject: ' + v.server.subject);
+                if (v.server && v.server.not_after) lines.push('Expires: ' + v.server.not_after);
+                box.className = 'p-3 rounded-lg border border-green-500/40 bg-green-900/20 text-sm text-green-300';
+                box.textContent = lines.join('\n');
+            } else {
+                box.className = 'p-3 rounded-lg border border-red-500/40 bg-red-900/20 text-sm text-red-300';
+                box.textContent = data.message || 'Verification failed.';
+            }
+        } catch (e) {
+            showMsg('Network error.', false);
+        }
+    });
+
+    document.getElementById('certInstallForm').addEventListener('submit', async function(e) {
         e.preventDefault();
         msgEl.classList.add('hidden');
-        var cert = document.getElementById('cert_pem').value.trim();
-        var key = document.getElementById('key_pem').value.trim();
-        var ca = document.getElementById('ca_pem').value.trim();
-        if (!cert || !key) {
-            msgEl.classList.remove('hidden');
-            msgEl.classList.add('text-red-400');
-            msgEl.textContent = 'Certificate and private key are required.';
-            return;
-        }
         try {
             var res = await fetch('/api/admin/certificate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ cert_pem: cert, key_pem: key, ca_pem: ca || '' })
+                body: JSON.stringify(installPayload())
             });
             var data = await res.json();
-            msgEl.classList.remove('hidden');
             if (data.success) {
-                msgEl.classList.add('text-green-400');
-                msgEl.classList.remove('text-red-400');
-                msgEl.textContent = data.message || 'Certificate saved.';
+                showMsg(data.message || 'Certificate saved.', true);
                 var statusEl = document.getElementById('certStatus');
-                if (data.certificate && data.certificate.cert_present && data.certificate.key_present) {
-                    statusEl.innerHTML = '<span class="font-semibold text-secondary">Current status:</span> <span class="text-green-400">Certificate and key are configured.</span>' +
-                        (data.certificate.expiry_message ? ' <span class="text-secondary">Expires: ' + data.certificate.expiry_message + '</span>' : '');
+                var c = data.certificate || {};
+                if (c.cert_present && c.key_present) {
+                    var html = '<span class="font-semibold text-secondary">Current status:</span> <span class="text-green-400">Certificate and key are configured.</span>';
+                    if (c.chain_cert_count > 1) html += ' <span class="text-secondary">Chain: ' + c.chain_cert_count + ' certificates in cert.pem.</span>';
+                    if (c.expiry_message) html += ' <span class="text-secondary">Expires: ' + c.expiry_message + '</span>';
+                    statusEl.innerHTML = html;
                 }
             } else {
-                msgEl.classList.add('text-red-400');
-                msgEl.classList.remove('text-green-400');
-                msgEl.textContent = data.message || 'Failed to save.';
+                showMsg(data.message || 'Failed to save.', false);
             }
         } catch (err) {
-            msgEl.classList.remove('hidden');
-            msgEl.classList.add('text-red-400');
-            msgEl.textContent = 'Network error.';
+            showMsg('Network error.', false);
+        }
+    });
+
+    document.getElementById('certLegacyForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        msgEl.classList.add('hidden');
+        var cert = document.getElementById('legacy_cert_pem').value.trim();
+        var key = document.getElementById('legacy_key_pem').value.trim();
+        if (!cert || !key) { showMsg('Certificate and key are required.', false); return; }
+        try {
+            var res = await fetch('/api/admin/certificate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cert_pem: cert, key_pem: key })
+            });
+            var data = await res.json();
+            showMsg(data.message || (data.success ? 'Saved.' : 'Failed.'), !!data.success);
+        } catch (err) {
+            showMsg('Network error.', false);
         }
     });
 })();

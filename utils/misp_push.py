@@ -46,6 +46,20 @@ def _misp_type_for_ioc(ioc_type: str, value: str) -> Optional[str]:
     return ZIOCHUB_TO_MISP_TYPE.get(ioc_type)
 
 
+def _record_misp_distribution_success(ioc_type: str, value: str) -> None:
+    try:
+        from utils.downstream import record_api_distribution_events
+
+        record_api_distribution_events(
+            [{'action': 'create', 'type': ioc_type, 'value': value}],
+            vendor_id='misp',
+            display_name='MISP',
+            api_source='misp_push',
+        )
+    except Exception:
+        _log.debug('MISP downstream distribution record failed', exc_info=True)
+
+
 def _audit_misp_push(
     ok: bool,
     ioc_type: str,
@@ -147,6 +161,7 @@ def push_ioc_to_misp(
             return False, msg
         ok_msg = f'Pushed to MISP event {resolved_event_id}'
         _audit_misp_push(True, ioc_type, value, ok_msg, from_retry=from_retry, event_id=resolved_event_id)
+        _record_misp_distribution_success(ioc_type, value)
         return True, ok_msg
     except Exception as e:
         msg = str(e)[:300]

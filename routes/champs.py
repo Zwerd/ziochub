@@ -704,7 +704,15 @@ def get_champs_analyst(user_id):
             return jsonify({'success': False, 'message': 'Analyst is deactivated'}), 404
     profile = UserProfile.query.filter_by(user_id=user_id).first()
     misp_user = (_get_setting('misp_sync_user', 'misp_sync') or 'misp_sync').strip() or None
-    detail = get_analyst_detail(db, IOC, YaraRule, User, UserProfile, ActivityEvent, user_id, user.username, scoring_method=method, misp_sync_username=misp_user)
+    taxii_user = (_get_setting('taxii_sync_user', 'taxii_sync') or 'taxii_sync').strip() or None
+    ag_user = (_get_setting('adversarygraph_sync_user', 'adversarygraph_sync') or 'adversarygraph_sync').strip() or None
+    detail = get_analyst_detail(
+        db, IOC, YaraRule, User, UserProfile, ActivityEvent, user_id, user.username,
+        scoring_method=method,
+        misp_sync_username=misp_user,
+        taxii_sync_username=taxii_user,
+        adversarygraph_sync_username=ag_user,
+    )
     if not detail:
         today = datetime.now(timezone.utc).replace(tzinfo=None).date()
         activity_per_day = [{'date': (today - timedelta(days=(29 - i))).strftime('%Y-%m-%d'), 'points': 0} for i in range(30)]

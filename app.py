@@ -1015,13 +1015,19 @@ def refresh_champ_score_for_user(user_id):
 
 
 def _certificate_status():
-    """Return dict: cert_present, key_present, ca_present, expiry_iso, expiry_message, error."""
-    out = {'cert_present': False, 'key_present': False, 'ca_present': False, 'expiry_iso': None, 'expiry_message': None, 'error': None}
+    """Return dict: cert_present, key_present, ca_present, expiry_iso, expiry_message, error, chain_cert_count."""
+    out = {'cert_present': False, 'key_present': False, 'ca_present': False, 'expiry_iso': None, 'expiry_message': None, 'error': None, 'chain_cert_count': 0}
     out['cert_present'] = os.path.isfile(SSL_CERT_FILE)
     out['key_present'] = os.path.isfile(SSL_KEY_FILE)
     out['ca_present'] = os.path.isfile(SSL_CA_FILE)
     if not out['cert_present']:
         return out
+    try:
+        from utils.ssl_certificate import extract_certificate_blocks
+        with open(SSL_CERT_FILE, 'r', encoding='utf-8', errors='replace') as fh:
+            out['chain_cert_count'] = len(extract_certificate_blocks(fh.read()))
+    except Exception:
+        pass
     try:
         import subprocess
         r = subprocess.run(

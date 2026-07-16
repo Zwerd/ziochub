@@ -102,6 +102,20 @@ def test_dxl_connection_steps(config_path):
     return steps
 
 
+def _record_dxl_distribution_success(hash_value: str) -> None:
+    try:
+        from utils.downstream import record_api_distribution_events
+
+        record_api_distribution_events(
+            [{'action': 'create', 'type': 'Hash', 'value': hash_value}],
+            vendor_id='mcafee',
+            display_name='OpenDXL / Trellix TIE',
+            api_source='opendxl',
+        )
+    except Exception:
+        logging.debug('DXL downstream distribution record failed', exc_info=True)
+
+
 def push_hash_to_tie(config_path, hash_value, audit_log_fn=None):
     """
     Set file reputation in TIE to Known Malicious for the given hash.
@@ -148,6 +162,7 @@ def push_hash_to_tie(config_path, hash_value, audit_log_fn=None):
             record_dxl_tie_push()
         except Exception:
             pass
+        _record_dxl_distribution_success(hash_value)
         return True
     except Exception as e:
         logging.exception('DXL TIE push failed for hash %s: %s', hash_value[:16] + '...', e)

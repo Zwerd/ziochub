@@ -295,7 +295,6 @@ def _schedule_yara_outbound_push(rule, content: str, _get_setting, audit_log) ->
                     except Exception as e:
                         logging.exception('YARA outbound push failed for %s', rule_filename)
                         try:
-                            from utils.yara_http_push import set_fireeye_status
                             set_fireeye_status(rule_filename, 'error', str(e))
                         except Exception:
                             pass

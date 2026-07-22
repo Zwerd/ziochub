@@ -190,7 +190,7 @@ def apply_fixes(conn, *, username: str | None, target_env: str, drop_legacy_inde
     )
     if drop_legacy_index:
         if has_legacy_index:
-            conn.execute(text('DROP INDEX IF EXISTS users_username_key'))
+            conn.execute(text('ALTER TABLE users DROP CONSTRAINT IF EXISTS users_username_key'))
             report['changes'].append('Dropped index users_username_key')
         else:
             report['skipped'].append('Index users_username_key not present')
@@ -243,8 +243,8 @@ def apply_fixes(conn, *, username: str | None, target_env: str, drop_legacy_inde
                 WHERE id = :uid AND source = 'ldap' AND ldap_environment = 'Default'
                 """
             ),
-            target_env=target_env,
-            uid=uid,
+            {"target_env": target_env, "uid": uid}
+            
         )
         report['changes'].append(f"Updated user id={uid} ({uname}): Default -> {target_env}")
 
@@ -290,7 +290,8 @@ def main() -> int:
             print()
             print('Dry-run only — no changes written. Re-run with --apply to execute.')
             return 0
-
+        
+        conn.commit()
         trans = conn.begin()
         try:
             report = apply_fixes(

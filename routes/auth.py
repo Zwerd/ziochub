@@ -12,7 +12,20 @@ from extensions import db
 from models import User, UserProfile, UserSession, UserNotification, _utcnow
 from utils.auth import hash_password, verify_password
 from utils.decorators import login_required
-from utils.ldap_auth import try_ldap_bind_servers, try_ldap_bind, try_ldap_mock_dev, check_ldap_reachable, is_dev_mode
+from utils.ldap_auth import (
+    try_ldap_bind_environment,
+    try_ldap_mock_dev,
+    check_ldap_reachable,
+    check_environment_reachable,
+    is_dev_mode,
+)
+from utils.ldap_environments import (
+    load_ldap_environments,
+    public_login_environments,
+    resolve_login_environment,
+    ldap_auth_allowed,
+    should_show_login_environment_picker,
+)
 
 try:
     import config as _config
@@ -73,15 +86,59 @@ def _avatar_url(profile):
 
 # --- Routes ---
 
+def _ldap_env_for_local_user() -> str:
+    return ''
+
+
+def _find_local_user(username: str):
+    return User.query.filter(
+        func.lower(User.username) == username,
+        User.source == 'local',
+        User.ldap_environment == _ldap_env_for_local_user(),
+        User.is_active == True,  # noqa: E712
+    ).first()
+
+
+def _find_ldap_user(username: str, ldap_environment: str):
+    env = (ldap_environment or '').strip()
+    return User.query.filter(
+        func.lower(User.username) == username,
+        User.source == 'ldap',
+        User.ldap_environment == env,
+        User.is_active == True,  # noqa: E712
+    ).first()
+
+
+def _login_page_context(_get_setting, *, error: str | None = None, status: int = 200):
+    auth_mode = (_config and getattr(_config, 'AUTH_MODE', None)) or _get_setting('auth_mode', 'local_only') or 'local_only'
+    ldap_enabled = _get_setting('ldap_enabled', 'false').lower() == 'true'
+    envs = load_ldap_environments(_get_setting) if ldap_auth_allowed(auth_mode, ldap_enabled) else []
+    show_env_picker = should_show_login_environment_picker(auth_mode, ldap_enabled, envs)
+    public_envs = public_login_environments(envs) if show_env_picker else []
+    ctx = {
+        'dev_mode': is_dev_mode(),
+        'show_ldap_environments': show_env_picker and len(public_envs) > 0,
+        'ldap_environments': public_envs,
+        'ldap_environment_single': public_envs[0]['name'] if len(public_envs) == 1 else None,
+    }
+    if error:
+        ctx['error'] = error
+    return render_template('login.html', **ctx), status
+
+
 @bp.route('/login', methods=['GET', 'POST'])
 def login():
     """Login page. POST: authenticate (LDAP or local) and redirect to index."""
+    _get_setting, _commit_with_retry, audit_log = _from_app('_get_setting', '_commit_with_retry', 'audit_log')
+
     if request.method == 'GET':
         if current_user.is_authenticated:
             return redirect(url_for('index'))
-        return render_template('login.html', dev_mode=is_dev_mode())
+        return _login_page_context(_get_setting)
+
     username = (request.form.get('username') or '').strip().lower()
     password = request.form.get('password') or ''
+    ldap_environment_input = (request.form.get('ldap_environment') or '').strip()
     if not username or not password:
         from utils.audit_events import audit_log_event
         audit_log_event(
@@ -90,13 +147,13 @@ def login():
             username=username or None,
             reason='missing_credentials',
         )
-        return render_template('login.html', error='Username and password are required'), 400
-
-    _get_setting, _commit_with_retry, audit_log = _from_app('_get_setting', '_commit_with_retry', 'audit_log')
+        return _login_page_context(_get_setting, error='Username and password are required', status=400)
 
     auth_mode = (_config and getattr(_config, 'AUTH_MODE', None)) or _get_setting('auth_mode', 'local_only') or 'local_only'
     ldap_enabled = _get_setting('ldap_enabled', 'false').lower() == 'true'
     user = None
+    ldap_env_name = ''
+    selected_ldap_env = None
 
     # Phase 6.2: Dev mode - devuser/dev auto-login as admin
     if is_dev_mode() and username == 'devuser' and password in ('dev', 'devuser'):
@@ -106,59 +163,60 @@ def login():
             logging.info('Dev mode: auto-login as %s', admin_user.username)
 
     # Phase 2: Try local first when auth_mode is local_only or local_with_ldap_fallback
-    # Username lookup is case-insensitive so "Admin" and "admin" both work
     if auth_mode in ('local_only', 'local_with_ldap_fallback'):
-        local_user = User.query.filter(func.lower(User.username) == username, User.source == 'local', User.is_active == True).first()
+        local_user = _find_local_user(username)
         if local_user and verify_password(local_user.password_hash, password):
             user = local_user
-        # Fallback: user may have source='ldap' after a prior LDAP login; if they have a stored hash and it matches, allow local login
         if user is None:
-            any_user = User.query.filter(func.lower(User.username) == username, User.is_active == True).first()
+            any_user = User.query.filter(
+                func.lower(User.username) == username,
+                User.is_active == True,  # noqa: E712
+                User.ldap_environment == _ldap_env_for_local_user(),
+            ).first()
             if any_user and any_user.password_hash and verify_password(any_user.password_hash, password):
                 user = any_user
                 if user.source != 'local':
                     user.source = 'local'
+                    user.ldap_environment = _ldap_env_for_local_user()
                     _commit_with_retry()
                     logging.info('Login: user %s source reset to local (password matched)', username)
 
-    # Phase 3: Try LDAP if enabled and (user not found yet) and auth_mode allows LDAP
-    if user is None and ldap_enabled and auth_mode in ('ldap', 'ldap_with_local_fallback', 'local_with_ldap_fallback'):
+    # Phase 3: LDAP against selected named environment
+    if user is None and ldap_auth_allowed(auth_mode, ldap_enabled):
         try:
-            import json as _json
-            ldap_user_filter = _get_setting('ldap_user_filter', '(sAMAccountName=%(user)s)').strip()
-            servers = []
-            raw_servers = (_get_setting('ldap_servers', '') or '').strip()
-            if raw_servers and raw_servers != '[]':
-                try:
-                    servers = _json.loads(raw_servers)
-                except Exception:
-                    pass
-            if not servers and _get_setting('ldap_url', '').strip():
-                servers = [{
-                    'url': _get_setting('ldap_url', ''),
-                    'base_dn': _get_setting('ldap_base_dn', ''),
-                    'bind_dn': _get_setting('ldap_bind_dn', ''),
-                    'bind_password': _get_setting('ldap_bind_password', ''),
-                }]
+            envs = load_ldap_environments(_get_setting)
+            selected_ldap_env = resolve_login_environment(envs, ldap_environment_input or None)
+            if not selected_ldap_env and envs:
+                return _login_page_context(_get_setting, error='Select an LDAP environment', status=400)
+            ldap_env_name = (selected_ldap_env.get('name') or '').strip() if selected_ldap_env else ''
             ldap_ok = False
             display_name = None
-            if servers:
-                ldap_ok, display_name = try_ldap_bind_servers(servers, ldap_user_filter, username, password)
+            if selected_ldap_env:
+                ldap_ok, display_name = try_ldap_bind_environment(selected_ldap_env, username, password)
             if not ldap_ok:
                 ldap_ok, display_name = try_ldap_mock_dev(username, password)
-            if not ldap_ok and servers:
-                logging.warning('Phase 6.3: LDAP unreachable for %s (tried %d server(s)); falling back to local if auth_mode allows', username, len(servers))
+                if ldap_ok:
+                    ldap_env_name = ldap_env_name or 'Default'
+            if not ldap_ok and selected_ldap_env:
+                logging.warning(
+                    'LDAP auth failed for %s in environment %s (tried %d DC(s))',
+                    username,
+                    ldap_env_name,
+                    len(selected_ldap_env.get('dcs') or []),
+                )
             if ldap_ok:
-                user = User.query.filter(func.lower(User.username) == username).first()
+                user = _find_ldap_user(username, ldap_env_name)
                 if user:
                     user.source = 'ldap'
                     user.password_hash = None
                     user.is_active = True
+                    user.ldap_environment = ldap_env_name
                 else:
                     user = User(
                         username=username,
                         password_hash=None,
                         source='ldap',
+                        ldap_environment=ldap_env_name,
                         is_admin=False,
                         is_active=True,
                     )
@@ -166,7 +224,6 @@ def login():
                     _commit_with_retry()
                 profile = UserProfile.query.filter_by(user_id=user.id).first()
                 if profile:
-                    # Do not overwrite display_name if user already set a custom one in profile
                     if not (profile.display_name or '').strip():
                         profile.display_name = display_name or username
                 else:
@@ -174,11 +231,10 @@ def login():
                 _commit_with_retry()
         except Exception as e:
             logging.exception('LDAP login phase failed for %s: %s', username, e)
-            # Do not raise: continue so fallback to local can run or we return 401
 
-    # Fallback to local auth only for ldap_with_local_fallback (LDAP was tried first and failed)
+    # Fallback to local auth only for ldap_with_local_fallback
     if user is None and auth_mode == 'ldap_with_local_fallback':
-        local_user = User.query.filter(func.lower(User.username) == username, User.source == 'local', User.is_active == True).first()
+        local_user = _find_local_user(username)
         if local_user and verify_password(local_user.password_hash, password):
             user = local_user
         elif ldap_enabled:
@@ -187,14 +243,20 @@ def login():
     if user is None:
         logging.warning('Login failed for username=%s (auth_mode=%s)', username, auth_mode)
         from utils.audit_events import audit_log_event
+        fail_detail = {'auth_mode': auth_mode}
+        if ldap_env_name:
+            fail_detail['ldap_environment'] = ldap_env_name
         audit_log_event(
             'login_fail',
             'fail',
             username=username,
             reason='invalid_credentials',
-            auth_mode=auth_mode,
+            **fail_detail,
         )
-        return render_template('login.html', error='Invalid username or password'), 401
+        err = 'Invalid username or password'
+        if ldap_env_name and ldap_auth_allowed(auth_mode, ldap_enabled):
+            err = f'Invalid username or password for environment {ldap_env_name}'
+        return _login_page_context(_get_setting, error=err, status=401)
 
     login_user(user)
     for persist_attempt in range(2):
@@ -216,7 +278,10 @@ def login():
             db.session.rollback()
             logging.exception('Login persist failed for %s (check PostgreSQL sequences)', username)
             break
-    audit_log('login', f'user={username} source={user.source}')
+    audit_detail = f'user={username} source={user.source}'
+    if user.source == 'ldap' and (user.ldap_environment or ldap_env_name):
+        audit_detail += f' ldap_environment={user.ldap_environment or ldap_env_name}'
+    audit_log('login', audit_detail)
     if user.must_change_password:
         return redirect(url_for('auth.change_password'))
     next_url = request.args.get('next') or url_for('index')
@@ -398,38 +463,49 @@ def api_profile_avatar_delete():
         return _api_error(str(e), 500)
 
 
+@bp.route('/api/auth/ldap-environments')
+def api_ldap_environments():
+    """Public list of LDAP environment names for the login page (no secrets)."""
+    _api_ok, _get_setting = _from_app('_api_ok', '_get_setting')
+    auth_mode = (_config and getattr(_config, 'AUTH_MODE', None)) or _get_setting('auth_mode', 'local_only') or 'local_only'
+    ldap_enabled = _get_setting('ldap_enabled', 'false').lower() == 'true'
+    if not ldap_auth_allowed(auth_mode, ldap_enabled):
+        return _api_ok(data={'environments': [], 'show_picker': False})
+    envs = load_ldap_environments(_get_setting)
+    public = public_login_environments(envs)
+    return _api_ok(data={
+        'environments': public,
+        'show_picker': len(public) > 0,
+    })
+
+
 @bp.route('/api/ldap/health')
 def api_ldap_health():
-    """Phase 3.7: LDAP health check - reachable or not (uses first configured server)."""
+    """LDAP health check per configured environment (first reachable DC each)."""
     _api_ok, _get_setting = _from_app('_api_ok', '_get_setting')
-    import json as _json
     ldap_enabled = _get_setting('ldap_enabled', 'false').lower() == 'true'
     if not ldap_enabled:
-        return _api_ok(data={'ldap_enabled': False, 'reachable': None, 'message': 'LDAP disabled'})
-    servers = []
-    raw_servers = (_get_setting('ldap_servers', '') or '').strip()
-    if raw_servers and raw_servers != '[]':
-        try:
-            servers = _json.loads(raw_servers)
-        except Exception:
-            pass
-    if not servers and _get_setting('ldap_url', '').strip():
-        servers = [{
-            'url': _get_setting('ldap_url', ''),
-            'base_dn': _get_setting('ldap_base_dn', ''),
-            'bind_dn': _get_setting('ldap_bind_dn', ''),
-            'bind_password': _get_setting('ldap_bind_password', ''),
-        }]
-    if not servers:
-        return _api_ok(data={'ldap_enabled': True, 'reachable': False, 'message': 'No LDAP servers configured'})
-    s = servers[0]
-    reachable, msg = check_ldap_reachable(
-        (s.get('url') or '').strip(),
-        (s.get('base_dn') or '').strip(),
-        (s.get('bind_dn') or '').strip(),
-        s.get('bind_password') or '',
-    )
-    return _api_ok(data={'ldap_enabled': True, 'reachable': reachable, 'message': msg})
+        return _api_ok(data={'ldap_enabled': False, 'environments': [], 'message': 'LDAP disabled'})
+    envs = load_ldap_environments(_get_setting)
+    if not envs:
+        return _api_ok(data={'ldap_enabled': True, 'environments': [], 'reachable': False, 'message': 'No LDAP environments configured'})
+    results = []
+    any_ok = False
+    for env in envs:
+        ok, msg = check_environment_reachable(env)
+        if ok:
+            any_ok = True
+        results.append({
+            'name': env.get('name'),
+            'reachable': ok,
+            'message': msg,
+        })
+    return _api_ok(data={
+        'ldap_enabled': True,
+        'reachable': any_ok,
+        'environments': results,
+        'message': 'ok' if any_ok else 'All environments unreachable',
+    })
 
 
 @bp.route('/api/users', methods=['GET'])

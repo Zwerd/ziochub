@@ -120,6 +120,9 @@ async function loadUsers() {
     for (const u of data.users) {
         const tr = document.createElement('tr');
         const sourceClass = u.source === 'system' ? 'bg-orange-500/20 text-orange-300' : u.source === 'ldap' ? 'bg-purple-500/20 text-purple-300' : 'bg-green-500/20 text-green-400';
+        const sourceLabel = u.source === 'ldap' && u.ldap_environment
+            ? `ldap (${escapeHtml(u.ldap_environment)})`
+            : escapeHtml(u.source);
         const statusClass = u.is_active ? 'bg-green-500/20 text-green-400' : 'bg-slate-500/30 text-slate-400';
         const lastLogin = u.last_login_at && typeof formatUtcToLocal === 'function'
             ? formatUtcToLocal(u.last_login_at)
@@ -128,7 +131,7 @@ async function loadUsers() {
         tr.innerHTML = `
             <td class="border border-white/10 px-4 py-2">${avatarHtml}</td>
             <td class="border border-white/10 px-4 py-2"><strong class="text-primary">${escapeHtml(u.username)}</strong><br><small class="text-secondary">${escapeHtml(u.display_name)}</small></td>
-            <td class="border border-white/10 px-4 py-2"><span class="px-2 py-0.5 rounded text-xs ${sourceClass}">${escapeHtml(u.source)}</span></td>
+            <td class="border border-white/10 px-4 py-2"><span class="px-2 py-0.5 rounded text-xs ${sourceClass}">${sourceLabel}</span></td>
             <td class="border border-white/10 px-4 py-2">${u.is_admin ? '<span class="px-2 py-0.5 rounded text-xs bg-cyan-500/20 text-cyan-400">Admin</span>' : '-'}</td>
             <td class="border border-white/10 px-4 py-2 text-secondary text-xs">${escapeHtml(lastLogin)}</td>
             <td class="border border-white/10 px-4 py-2"><span class="px-2 py-0.5 rounded text-xs ${statusClass}">${u.is_active ? 'Active' : 'Inactive'}</span></td>

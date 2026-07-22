@@ -25,6 +25,18 @@
             {% endif %}
 
             <form method="POST" action="{{ url_for('auth.login') }}" class="login-form">
+                {% if show_ldap_environments and ldap_environments %}
+                    {% if ldap_environments|length > 1 %}
+                    <label for="ldap_environment">Environment</label>
+                    <select id="ldap_environment" name="ldap_environment" required class="login-select">
+                        {% for env in ldap_environments %}
+                        <option value="{{ env.name }}" {% if env.is_default %}selected{% endif %}>{{ env.name }}</option>
+                        {% endfor %}
+                    </select>
+                    {% else %}
+                    <input type="hidden" name="ldap_environment" value="{{ ldap_environment_single or ldap_environments[0].name }}">
+                    {% endif %}
+                {% endif %}
                 <label for="username">Username</label>
                 <input type="text" id="username" name="username" required
                        placeholder="username" autocomplete="username" autofocus>

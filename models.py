@@ -54,15 +54,20 @@ class User(UserMixin, db.Model):
     """Authentication: local or LDAP users."""
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(255), unique=True, nullable=False)
+    username = db.Column(db.String(255), nullable=False)
     password_hash = db.Column(db.String(255), nullable=True)  # NULL for LDAP
     source = db.Column(db.String(50), nullable=False, default='local')  # local | ldap
+    # LDAP environment name (DOM1, DOM2). Empty string for local users.
+    ldap_environment = db.Column(db.String(128), nullable=False, default='')
     is_admin = db.Column(db.Boolean, default=False, nullable=False)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     must_change_password = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow)
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow)
     last_login_at = db.Column(db.DateTime, nullable=True)
+    __table_args__ = (
+        UniqueConstraint('username', 'ldap_environment', name='u_users_username_ldap_env'),
+    )
 
 
 class SystemSetting(db.Model):

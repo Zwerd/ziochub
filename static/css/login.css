@@ -145,6 +145,24 @@ body {
     box-shadow: 0 0 0 2px var(--login-input-focus);
 }
 
+.login-form select,
+.login-select {
+    width: 100%;
+    padding: 0.625rem 1rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--login-input-border);
+    background: var(--login-input-bg);
+    color: var(--login-text);
+    font-size: 1rem;
+    margin-bottom: 1.25rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.login-form select:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--login-input-focus);
+}
+
 .login-form button {
     width: 100%;
     padding: 0.625rem 1rem;

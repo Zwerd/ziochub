@@ -1212,40 +1212,34 @@ def health_check():
             'note': 'GeoIP is optional'
         }
 
-    # LDAP health (Phase 3.7) – uses first server from ldap_servers or legacy single server
+    # LDAP health – per named environment (first reachable DC)
     try:
+        from utils.ldap_environments import load_ldap_environments
+        from utils.ldap_auth import check_environment_reachable
+
         ldap_enabled = _get_setting('ldap_enabled', 'false').lower() == 'true'
         if ldap_enabled:
-            servers = []
-            raw_servers = (_get_setting('ldap_servers', '') or '').strip()
-            if raw_servers and raw_servers != '[]':
-                try:
-                    servers = json.loads(raw_servers)
-                except Exception:
-                    pass
-            if not servers and _get_setting('ldap_url', '').strip():
-                servers = [{
-                    'url': _get_setting('ldap_url', ''),
-                    'base_dn': _get_setting('ldap_base_dn', ''),
-                    'bind_dn': _get_setting('ldap_bind_dn', ''),
-                    'bind_password': _get_setting('ldap_bind_password', ''),
-                }]
-            if servers:
-                s = servers[0]
-                reachable, msg = check_ldap_reachable(
-                    (s.get('url') or '').strip(),
-                    (s.get('base_dn') or '').strip(),
-                    (s.get('bind_dn') or '').strip(),
-                    s.get('bind_password') or '',
-                )
+            envs = load_ldap_environments(_get_setting)
+            if envs:
+                env_status = []
+                any_ok = False
+                for env in envs:
+                    ok, msg = check_environment_reachable(env)
+                    if ok:
+                        any_ok = True
+                    env_status.append({
+                        'name': env.get('name'),
+                        'status': 'reachable' if ok else 'unreachable',
+                        'message': msg,
+                    })
                 health_status['checks']['ldap'] = {
-                    'status': 'reachable' if reachable else 'unreachable',
-                    'message': msg,
+                    'status': 'reachable' if any_ok else 'unreachable',
+                    'environments': env_status,
                 }
             else:
                 health_status['checks']['ldap'] = {
                     'status': 'unreachable',
-                    'message': 'No LDAP servers configured',
+                    'message': 'No LDAP environments configured',
                 }
         else:
             health_status['checks']['ldap'] = {

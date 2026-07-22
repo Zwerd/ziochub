@@ -38,6 +38,52 @@ def is_production_env() -> bool:
     return env == 'production'
 
 
+def try_ldap_bind_dcs(
+    dcs: list[dict],
+    base_dn: str,
+    user_filter: str,
+    username: str,
+    password: str,
+) -> tuple[bool, str | None]:
+    """
+    Try LDAP bind against DCs in order (fallback within one environment).
+    Each DC dict: {"url", "bind_dn", "bind_password"}.
+    """
+    base_dn = (base_dn or "").strip()
+    if not dcs or not base_dn:
+        return False, None
+    for dc in dcs:
+        url = (dc.get("url") or "").strip()
+        if not url:
+            continue
+        ok, display_name = try_ldap_bind(
+            url,
+            base_dn,
+            (dc.get("bind_dn") or "").strip(),
+            dc.get("bind_password") or "",
+            user_filter,
+            username,
+            password,
+        )
+        if ok:
+            return True, display_name
+    return False, None
+
+
+def try_ldap_bind_environment(
+    environment: dict,
+    username: str,
+    password: str,
+) -> tuple[bool, str | None]:
+    """Authenticate against a named LDAP environment (DC fallback inside env)."""
+    if not environment:
+        return False, None
+    base_dn = (environment.get("base_dn") or "").strip()
+    user_filter = (environment.get("user_filter") or "(sAMAccountName=%(user)s)").strip()
+    dcs = environment.get("dcs") if isinstance(environment.get("dcs"), list) else []
+    return try_ldap_bind_dcs(dcs, base_dn, user_filter, username, password)
+
+
 def try_ldap_bind_servers(
     servers: list[dict],
     user_filter: str,
@@ -45,9 +91,8 @@ def try_ldap_bind_servers(
     password: str,
 ) -> tuple[bool, str | None]:
     """
-    Try LDAP bind against a list of servers in order.
+    Legacy: try flat server list (each entry carries its own base_dn).
     Stops at the first successful bind. Returns (success, display_name or None).
-    Each server dict: {"url": str, "base_dn": str, "bind_dn": str, "bind_password": str}.
     """
     if not servers:
         return False, None
@@ -229,6 +274,30 @@ def test_ldap_connection_steps(
         add("Bind (service account)", "fail", str(e)[:200])
 
     return steps
+
+
+def check_environment_reachable(environment: dict, use_mock_in_dev: bool = True) -> tuple[bool, str]:
+    """Health check: first reachable DC in the environment."""
+    if not environment:
+        return False, 'No environment'
+    name = (environment.get('name') or '').strip() or '(unnamed)'
+    dcs = environment.get('dcs') if isinstance(environment.get('dcs'), list) else []
+    if not dcs:
+        return False, f'{name}: no DCs configured'
+    for dc in dcs:
+        url = (dc.get('url') or '').strip()
+        if not url:
+            continue
+        ok, msg = check_ldap_reachable(
+            url,
+            (environment.get('base_dn') or '').strip(),
+            (dc.get('bind_dn') or '').strip(),
+            dc.get('bind_password') or '',
+            use_mock_in_dev=use_mock_in_dev,
+        )
+        if ok:
+            return True, f'{name}: {msg} ({url})'
+    return False, f'{name}: all DCs unreachable'
 
 
 def check_ldap_reachable(

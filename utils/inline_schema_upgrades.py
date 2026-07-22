@@ -109,6 +109,18 @@ def run_inline_schema_upgrades(session, engine, commit: Callable[[], None]) -> N
     if table_exists(engine, 'users'):
         _add('users', 'last_login_at', _dt())
         _add('users', 'must_change_password', f'BOOLEAN NOT NULL DEFAULT {_bool()}')
+        _add('users', 'ldap_environment', "VARCHAR(128) NOT NULL DEFAULT ''")
+        try:
+            if 'ldap_environment' in _cols('users'):
+                _exec("UPDATE users SET ldap_environment = '' WHERE ldap_environment IS NULL")
+                _exec(
+                    "UPDATE users SET ldap_environment = 'Default' "
+                    "WHERE source = 'ldap' AND (ldap_environment IS NULL OR ldap_environment = '')"
+                )
+        except Exception:
+            session.rollback()
+        # Composite unique (username, ldap_environment) for multi-domain LDAP
+        _exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_username_ldap_env ON users (username, ldap_environment)')
 
     if table_exists(engine, 'user_profiles'):
         for col in ('mute_sound', 'ambition_popup_disabled', 'achievement_popup_disabled'):

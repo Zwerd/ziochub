@@ -694,7 +694,8 @@ _SETTINGS_DEFAULTS = {
     'ldap_base_dn': '',
     'ldap_bind_dn': '',
     'ldap_bind_password': '',
-    'ldap_servers': '[]',  # JSON array of {url, base_dn, bind_dn, bind_password}; auth tries in order
+    'ldap_servers': '[]',  # legacy; migrated to ldap_environments
+    'ldap_environments': '[]',  # JSON: named AD environments with DC fallback
     'ldap_user_filter': '(sAMAccountName=%(user)s)',
     'misp_enabled': 'false',
     'misp_url': '',
@@ -1220,11 +1221,25 @@ def get_settings():
     for k, v in _SETTINGS_DEFAULTS.items():
         if k not in settings:
             settings[k] = v
-    # Backward compat: if ldap_servers empty but single ldap_url set, expose as one server in list
+    # Backward compat: expose ldap_environments; migrate legacy ldap_servers in API response
     import json as _json
     try:
+        from utils.ldap_environments import load_ldap_environments, environments_to_json
+        envs = load_ldap_environments(lambda k, d='': settings.get(k, d))
+        settings['ldap_environments'] = _json.loads(environments_to_json(envs)) if envs else []
         raw_servers = (settings.get('ldap_servers') or '').strip()
-        if (not raw_servers or raw_servers == '[]') and (settings.get('ldap_url') or '').strip():
+        if (not raw_servers or raw_servers == '[]') and envs:
+            flat = []
+            for env in envs:
+                for dc in env.get('dcs') or []:
+                    flat.append({
+                        'url': dc.get('url') or '',
+                        'base_dn': env.get('base_dn') or '',
+                        'bind_dn': dc.get('bind_dn') or '',
+                        'bind_password': dc.get('bind_password') or '',
+                    })
+            settings['ldap_servers'] = _json.dumps(flat)
+        elif (not raw_servers or raw_servers == '[]') and (settings.get('ldap_url') or '').strip():
             settings['ldap_servers'] = _json.dumps([{
                 'url': settings.get('ldap_url', ''),
                 'base_dn': settings.get('ldap_base_dn', ''),
@@ -1304,7 +1319,7 @@ def save_settings():
         except ImportError:
             adversarygraph_keys = _ADVERSARYGRAPH_SAVE_KEYS_FALLBACK
         syslog_keys = ('syslog_udp_enabled', 'syslog_udp_host', 'syslog_udp_port')
-        ldap_keys = ('auth_mode', 'ldap_enabled', 'ldap_url', 'ldap_base_dn', 'ldap_bind_dn', 'ldap_bind_password', 'ldap_servers', 'ldap_user_filter')
+        ldap_keys = ('auth_mode', 'ldap_enabled', 'ldap_url', 'ldap_base_dn', 'ldap_bind_dn', 'ldap_bind_password', 'ldap_servers', 'ldap_environments', 'ldap_user_filter')
         session_keys = ('session_inactivity_timeout_minutes',)
         dxl_keys = ('dxl_enabled', 'dxl_config_path')
         automation_keys = (
@@ -1444,6 +1459,18 @@ def save_settings():
                 elif key == 'ldap_servers':
                     import json
                     _set_setting(key, json.dumps(val) if isinstance(val, (list, dict)) else str(val).strip())
+                elif key == 'ldap_environments':
+                    from utils.ldap_environments import (
+                        load_ldap_environments,
+                        normalize_ldap_environments_for_storage,
+                        environments_to_json,
+                    )
+                    existing = load_ldap_environments(_get_setting)
+                    try:
+                        normalized = normalize_ldap_environments_for_storage(val, existing=existing)
+                    except ValueError as verr:
+                        return jsonify({'success': False, 'message': str(verr)}), 400
+                    _set_setting(key, environments_to_json(normalized))
                 elif key == 'feed_cache_ttl_seconds':
                     from utils.feed_cache import FEED_CACHE_TTL_DEFAULT, FEED_CACHE_TTL_PRESETS
                     try:
@@ -2537,12 +2564,69 @@ def dxl_test():
 @bp.route('/ldap/test', methods=['POST'])
 @admin_required
 def ldap_test():
-    """Run LDAP connection test for one or multiple servers; return steps per server for Admin UI."""
-    _api_ok, _api_error = _from_app('_api_ok', '_api_error')
+    """Run LDAP connection test per environment and DC; return steps for Admin UI."""
+    _api_ok, _api_error, _get_setting = _from_app('_api_ok', '_api_error', '_get_setting')
     try:
         from utils.ldap_auth import test_ldap_connection_steps
-        import json as _json
+        from utils.ldap_environments import load_ldap_environments, find_environment_by_name
         data = request.get_json() or {}
+
+        # New: named environments from form or saved settings
+        form_envs = data.get('ldap_environments')
+        if isinstance(form_envs, list) and form_envs:
+            from utils.ldap_environments import normalize_ldap_environments_for_storage
+            try:
+                envs = normalize_ldap_environments_for_storage(
+                    form_envs,
+                    existing=load_ldap_environments(_get_setting),
+                )
+            except ValueError as verr:
+                return jsonify({'success': False, 'message': str(verr)}), 400
+        else:
+            envs = load_ldap_environments(_get_setting)
+
+        test_name = (data.get('environment') or data.get('name') or '').strip()
+        if test_name:
+            env = find_environment_by_name(envs, test_name)
+            envs = [env] if env else []
+
+        if envs:
+            results = []
+            all_ok = True
+            for env in envs:
+                env_name = (env.get('name') or '').strip() or '(unnamed)'
+                base_dn = (env.get('base_dn') or '').strip()
+                dcs = env.get('dcs') if isinstance(env.get('dcs'), list) else []
+                dc_results = []
+                env_ok = True
+                for i, dc in enumerate(dcs):
+                    url = (dc.get('url') or '').strip()
+                    bind_dn = (dc.get('bind_dn') or '').strip()
+                    bind_password = dc.get('bind_password') or ''
+                    steps = test_ldap_connection_steps(url, base_dn, bind_dn, bind_password)
+                    ok = all(st.get('status') == 'ok' for st in steps)
+                    if not ok:
+                        env_ok = False
+                        all_ok = False
+                    dc_results.append({
+                        'url': url or '(empty)',
+                        'label': f'DC {i + 1}',
+                        'steps': steps,
+                        'success': ok,
+                    })
+                if not dc_results:
+                    env_ok = False
+                    all_ok = False
+                    dc_results.append({
+                        'url': '(empty)',
+                        'label': 'DC 1',
+                        'steps': [{'step': 'DC list', 'status': 'fail', 'message': 'No DC configured'}],
+                        'success': False,
+                    })
+                results.append({'name': env_name, 'dcs': dc_results, 'success': env_ok})
+            return _api_ok(data={'success': all_ok, 'environments': results})
+
+        # Legacy single-server / flat ldap_servers
         servers = data.get('ldap_servers')
         if isinstance(servers, list) and len(servers) > 0:
             results = []
@@ -2558,7 +2642,6 @@ def ldap_test():
                     all_ok = False
                 results.append({'url': url or '(empty)', 'steps': steps, 'success': ok})
             return _api_ok(data={'success': all_ok, 'servers': results})
-        # Single server (legacy)
         ldap_url = (data.get('ldap_url') or '').strip()
         base_dn = (data.get('ldap_base_dn') or '').strip()
         bind_dn = (data.get('ldap_bind_dn') or '').strip()
@@ -2651,7 +2734,7 @@ def list_users():
         result.append({
             'id': u.id,
             'username': u.username,
-            'source': u.source,
+            'ldap_environment': getattr(u, 'ldap_environment', '') or '',
             'is_admin': u.is_admin,
             'is_active': u.is_active,
             'must_change_password': getattr(u, 'must_change_password', False),
@@ -2680,13 +2763,14 @@ def create_user():
             return jsonify({'success': False, 'message': 'Username must be at least 2 characters'}), 400
         if not password or len(password) < 4:
             return jsonify({'success': False, 'message': 'Password must be at least 4 characters'}), 400
-        if User.query.filter_by(username=username).first():
+        if User.query.filter_by(username=username, ldap_environment='').first():
             return jsonify({'success': False, 'message': 'Username already exists'}), 409
         must_change = bool(data.get('must_change_password', False))
         user = User(
             username=username,
             password_hash=hash_password(password),
             source='local',
+            ldap_environment='',
             is_admin=is_admin,
             is_active=True,
             must_change_password=must_change,
@@ -3296,9 +3380,28 @@ def _misp_settings_fallback(get_setting_fn):
     return {k: str((get_setting_fn(k, v) if callable(get_setting_fn) else get_setting_fn.get(k, v)) or v).strip() or v for k, v in defaults.items()}
 
 
+def _get_ldap_environments_for_form(get_setting_fn):
+    """Return normalized LDAP environments for admin settings form."""
+    from utils.ldap_environments import load_ldap_environments
+    return load_ldap_environments(get_setting_fn)
+
+
 def _get_ldap_servers_for_form(get_setting_fn):
-    """Return list of LDAP server dicts for settings form; migrate from single server if needed."""
+    """Legacy flat server list (backward compat for old templates/API)."""
     import json as _json
+    envs = _get_ldap_environments_for_form(get_setting_fn)
+    if envs:
+        out = []
+        for env in envs:
+            base_dn = env.get('base_dn') or ''
+            for dc in env.get('dcs') or []:
+                out.append({
+                    'url': dc.get('url') or '',
+                    'base_dn': base_dn,
+                    'bind_dn': dc.get('bind_dn') or '',
+                    'bind_password': dc.get('bind_password') or '',
+                })
+        return out
     try:
         raw = (get_setting_fn('ldap_servers', '') or '').strip()
         if raw and raw != '[]':
@@ -3360,6 +3463,7 @@ def _build_admin_settings_form_context():
         adversarygraph_settings_dict = adversarygraph_settings_for_form(_get_setting)
     except ImportError:
         adversarygraph_settings_dict = {}
+    ldap_environments = _get_ldap_environments_for_form(_get_setting)
     ldap_servers = _get_ldap_servers_for_form(_get_setting)
     try:
         from utils.feed_cache import FEED_CACHE_TTL_DEFAULT, normalize_feed_cache_ttl_seconds
@@ -3382,6 +3486,7 @@ def _build_admin_settings_form_context():
         'ldap_bind_dn': _get_setting('ldap_bind_dn', ''),
         'ldap_bind_password': _get_setting('ldap_bind_password', ''),
         'ldap_servers': ldap_servers,
+        'ldap_environments': ldap_environments,
         'ldap_user_filter': _get_setting('ldap_user_filter', '(sAMAccountName=%(user)s)'),
         **misp_settings_dict,
         **taxii_settings_dict,
